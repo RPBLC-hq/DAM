@@ -26,6 +26,8 @@ Supported provider IDs are:
 
 The first implementation intentionally selects the first configured target to preserve existing `dam-proxy` semantics. Multi-target routing, host/path/profile matching, model discovery, and integration profile selection are future expansions on this boundary.
 
+Transparent host classification for future system-proxy/TUN routing lives in `dam-net`, not in `dam-router`. `dam-router` still owns app-layer target/auth/failure decisions after traffic has entered the DAM proxy path.
+
 ## Auth Decisions
 
 `dam-router` returns one of three auth modes for a request:

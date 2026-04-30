@@ -409,7 +409,9 @@ dependencies = [
  "dam-config",
  "dam-daemon",
  "dam-integrations",
+ "dam-net",
  "dam-proxy",
+ "dam-trust",
  "reqwest",
  "serde",
  "serde_json",
@@ -464,7 +466,9 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "dam-config",
+ "dam-net",
  "dam-proxy",
+ "dam-trust",
  "serde",
  "serde_json",
  "tempfile",
@@ -557,6 +561,13 @@ dependencies = [
  "dam-vault",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "dam-net"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -664,6 +675,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dam-trust"
+version = "0.1.0"
+dependencies = [
+ "dam-net",
+ "serde",
+]
+
+[[package]]
 name = "dam-vault"
 version = "0.1.0"
 dependencies = [
@@ -701,6 +720,8 @@ dependencies = [
  "dam-daemon",
  "dam-diagnostics",
  "dam-integrations",
+ "dam-net",
+ "dam-trust",
  "reqwest",
  "serde",
  "serde_json",

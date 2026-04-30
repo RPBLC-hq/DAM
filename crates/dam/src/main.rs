@@ -458,7 +458,7 @@ async fn integrations(args: IntegrationArgs) -> Result<i32, String> {
 
 async fn daemon_run(args: dam_daemon::ProxyOptions) -> Result<i32, String> {
     let config = dam_daemon::proxy_config(&args)?;
-    dam_daemon::serve(config, args.config_path)
+    dam_daemon::serve_with_modes(config, args.config_path, args.network_mode, args.trust_mode)
         .await
         .map_err(|error| error.to_string())?;
     Ok(0)
@@ -1160,6 +1160,8 @@ fn render_status_view(view: &StatusView) -> String {
     if let Some(state) = &view.daemon {
         output.push_str(&format!("pid: {}\n", state.pid));
         output.push_str(&format!("proxy: {}\n", state.proxy_url));
+        output.push_str(&format!("network_mode: {}\n", state.network_mode));
+        output.push_str(&format!("trust_mode: {}\n", state.trust.mode));
         if let Some(target) = &state.target_name {
             output.push_str(&format!("target: {target}\n"));
         }
@@ -1674,7 +1676,7 @@ fn usage() -> &'static str {
 }
 
 fn usage_connect() -> &'static str {
-    "Usage: dam connect [--profile PROFILE [--apply]|--apply|--openai|--anthropic] [DAM_OPTIONS]\n\nStarts a background DAM proxy daemon. By default this exposes an OpenAI-compatible local endpoint at http://127.0.0.1:7828/v1 and forwards caller-owned provider auth headers. If --apply is used without --profile, DAM uses the active profile selected by `dam profile set <id>`.\n\nDAM options:\n  --profile <id>          Apply integration profile daemon defaults\n  --apply                 Apply the selected or active profile before connecting, with rollback support\n  --openai                Use the OpenAI-compatible preset (default)\n  --anthropic             Use the Anthropic preset\n  --config <path>         Load DAM config file before daemon overrides\n  --listen <addr>         Local proxy listen address (default: 127.0.0.1:7828)\n  --target-name <name>    Proxy target name (default: openai)\n  --provider <provider>   Provider adapter: openai-compatible or anthropic\n  --upstream <url>        Provider upstream URL\n  --db <path>             Vault SQLite path (default: vault.db)\n  --log <path>            Log SQLite path (default: log.db)\n  --consent-db <path>     Consent SQLite path (default: consent.db)\n  --no-log                Disable DAM log writes\n  --no-resolve-inbound    Leave DAM references unresolved in inbound responses (default)\n  --resolve-inbound       Restore DAM references in inbound responses\n\nKnown profiles: openai-compatible, anthropic, claude-code, codex-api, xai-compatible"
+    "Usage: dam connect [--profile PROFILE [--apply]|--apply|--openai|--anthropic] [DAM_OPTIONS]\n\nStarts a background DAM proxy daemon. By default this exposes an OpenAI-compatible local endpoint at http://127.0.0.1:7828/v1 and forwards caller-owned provider auth headers. If --apply is used without --profile, DAM uses the active profile selected by `dam profile set <id>`.\n\nDAM options:\n  --profile <id>          Apply integration profile daemon defaults\n  --apply                 Apply the selected or active profile before connecting, with rollback support\n  --openai                Use the OpenAI-compatible preset (default)\n  --anthropic             Use the Anthropic preset\n  --config <path>         Load DAM config file before daemon overrides\n  --listen <addr>         Local proxy listen address (default: 127.0.0.1:7828)\n  --network-mode <mode>   Control-plane network mode: explicit_proxy, system_proxy, or tun\n  --trust-mode <mode>     Control-plane trust mode: disabled or local_ca\n  --target-name <name>    Proxy target name (default: openai)\n  --provider <provider>   Provider adapter: openai-compatible or anthropic\n  --upstream <url>        Provider upstream URL\n  --db <path>             Vault SQLite path (default: vault.db)\n  --log <path>            Log SQLite path (default: log.db)\n  --consent-db <path>     Consent SQLite path (default: consent.db)\n  --no-log                Disable DAM log writes\n  --no-resolve-inbound    Leave DAM references unresolved in inbound responses (default)\n  --resolve-inbound       Restore DAM references in inbound responses\n\nKnown profiles: openai-compatible, anthropic, claude-code, codex-api, xai-compatible"
 }
 
 fn usage_status() -> &'static str {

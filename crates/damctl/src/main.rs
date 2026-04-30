@@ -8,6 +8,7 @@ enum Command {
     Doctor(DoctorArgs),
     Bypass(BypassArgs),
     Daemon(DaemonArgs),
+    Trust(TrustArgs),
     Integrations(IntegrationsArgs),
     ConfigCheck(ConfigCheckArgs),
     McpConfig(McpConfigArgs),
@@ -80,6 +81,28 @@ struct DaemonInspectArgs {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TrustArgs {
+    command: TrustCommand,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum TrustCommand {
+    Inspect(TrustInspectArgs),
+}
+
+impl Default for TrustCommand {
+    fn default() -> Self {
+        Self::Inspect(TrustInspectArgs::default())
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TrustInspectArgs {
+    json: bool,
+    state_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct IntegrationsArgs {
     command: IntegrationsCommand,
 }
@@ -123,6 +146,17 @@ struct DaemonInspectReport {
     state_file: PathBuf,
     process_running: Option<bool>,
     daemon: Option<dam_daemon::DaemonState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct TrustInspectReport {
+    state: &'static str,
+    message: String,
+    source: &'static str,
+    state_dir: PathBuf,
+    state_file: PathBuf,
+    trust: dam_trust::TrustState,
+    actions: Vec<dam_trust::TrustActionPlan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -183,6 +217,7 @@ async fn run(command: Command) -> CommandOutput {
         Command::Doctor(args) => doctor(args).await,
         Command::Bypass(args) => bypass(args),
         Command::Daemon(args) => daemon(args),
+        Command::Trust(args) => trust(args),
         Command::Integrations(args) => integrations(args),
         Command::ConfigCheck(args) => config_check(args),
         Command::McpConfig(args) => mcp_config(args),
@@ -366,6 +401,30 @@ fn daemon_inspect(args: DaemonInspectArgs) -> CommandOutput {
         json(&report)
     } else {
         render_daemon_inspect_report(&report)
+    };
+
+    CommandOutput {
+        code: 0,
+        stdout,
+        stderr: String::new(),
+    }
+}
+
+fn trust(args: TrustArgs) -> CommandOutput {
+    match args.command {
+        TrustCommand::Inspect(args) => trust_inspect(args),
+    }
+}
+
+fn trust_inspect(args: TrustInspectArgs) -> CommandOutput {
+    let report = match trust_inspect_report(&args) {
+        Ok(report) => report,
+        Err(error) => return CommandOutput::fail(2, format!("{error}\n")),
+    };
+    let stdout = if args.json {
+        json(&report)
+    } else {
+        render_trust_inspect_report(&report)
     };
 
     CommandOutput {
@@ -577,6 +636,37 @@ fn daemon_status_from_file(path: &std::path::Path) -> Result<dam_daemon::DaemonS
     } else {
         Ok(dam_daemon::DaemonStatus::Stale(state))
     }
+}
+
+fn trust_inspect_report(args: &TrustInspectArgs) -> Result<TrustInspectReport, String> {
+    let paths = daemon_state_paths(args.state_dir.clone())?;
+    let status = match args.state_dir.as_ref() {
+        Some(_) => daemon_status_from_file(&paths.state_file)?,
+        None => dam_daemon::daemon_status().map_err(|error| error.to_string())?,
+    };
+    let (source, trust) = match status {
+        dam_daemon::DaemonStatus::Connected(state) => ("daemon", state.trust),
+        dam_daemon::DaemonStatus::Stale(state) => ("stale_daemon", state.trust),
+        dam_daemon::DaemonStatus::Disconnected => ("default", dam_trust::TrustState::default()),
+    };
+    let actions = [
+        dam_trust::TrustAction::Inspect,
+        dam_trust::TrustAction::InstallLocalCa,
+        dam_trust::TrustAction::RemoveLocalCa,
+    ]
+    .into_iter()
+    .map(|action| dam_trust::TrustActionPlan::for_action(action, trust.platform_store))
+    .collect();
+
+    Ok(TrustInspectReport {
+        state: "inspectable",
+        message: "trust inspection is read-only; local CA install/remove are planned".to_string(),
+        source,
+        state_dir: paths.state_dir,
+        state_file: paths.state_file,
+        trust,
+        actions,
+    })
 }
 
 fn integrations_check_report(
@@ -876,6 +966,21 @@ fn render_daemon_inspect_report(report: &DaemonInspectReport) -> String {
         output.push_str(&format!("pid: {}\n", state.pid));
         output.push_str(&format!("listen: {}\n", state.listen));
         output.push_str(&format!("proxy: {}\n", state.proxy_url));
+        output.push_str(&format!("network_mode: {}\n", state.network_mode));
+        output.push_str(&format!(
+            "transparent_ai_routes: {}\n",
+            state.transparent_ai_routes.len()
+        ));
+        output.push_str(&format!("trust_mode: {}\n", state.trust.mode));
+        output.push_str(&format!("trust_store: {}\n", state.trust.platform_store));
+        output.push_str(&format!(
+            "local_ca_installed: {}\n",
+            state.trust.local_ca_installed()
+        ));
+        output.push_str(&format!(
+            "trusted_ai_hosts: {}\n",
+            state.trust.allowed_hosts.len()
+        ));
         if let Some(target) = &state.target_name {
             output.push_str(&format!("target: {target}\n"));
         }
@@ -900,6 +1005,52 @@ fn render_daemon_inspect_report(report: &DaemonInspectReport) -> String {
         output.push_str(&format!("started_at_unix: {}\n", state.started_at_unix));
     }
     output
+}
+
+fn render_trust_inspect_report(report: &TrustInspectReport) -> String {
+    let mut output = String::new();
+    output.push_str(&format!("state: {}\n", report.state));
+    output.push_str(&format!("message: {}\n", report.message));
+    output.push_str(&format!("source: {}\n", report.source));
+    output.push_str(&format!("state_dir: {}\n", report.state_dir.display()));
+    output.push_str(&format!("state_file: {}\n", report.state_file.display()));
+    output.push_str(&format!("trust_mode: {}\n", report.trust.mode));
+    output.push_str(&format!("trust_store: {}\n", report.trust.platform_store));
+    output.push_str(&format!(
+        "local_ca_installed: {}\n",
+        report.trust.local_ca_installed()
+    ));
+    output.push_str(&format!(
+        "trusted_ai_hosts: {}\n",
+        report.trust.allowed_hosts.len()
+    ));
+    for action in &report.actions {
+        output.push_str(&format!(
+            "action {}: {} admin={} system_trust={} user_consent={} rollback={}\n",
+            trust_action_tag(action.action),
+            trust_support_tag(action.support),
+            action.requires_admin,
+            action.changes_system_trust,
+            action.requires_user_consent,
+            action.rollback_required
+        ));
+    }
+    output
+}
+
+fn trust_action_tag(action: dam_trust::TrustAction) -> &'static str {
+    match action {
+        dam_trust::TrustAction::Inspect => "inspect",
+        dam_trust::TrustAction::InstallLocalCa => "install_local_ca",
+        dam_trust::TrustAction::RemoveLocalCa => "remove_local_ca",
+    }
+}
+
+fn trust_support_tag(support: dam_trust::TrustSupport) -> &'static str {
+    match support {
+        dam_trust::TrustSupport::Implemented => "implemented",
+        dam_trust::TrustSupport::Planned => "planned",
+    }
 }
 
 fn integration_apply_status_tag(status: dam_integrations::IntegrationApplyStatus) -> &'static str {
@@ -1055,6 +1206,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Command, String>
         "doctor" => parse_doctor_args(&args[1..]),
         "bypass" => parse_bypass_args(&args[1..]),
         "daemon" => parse_daemon_args(&args[1..]),
+        "trust" => parse_trust_args(&args[1..]),
         "integrations" => parse_integrations_args(&args[1..]),
         "config" => parse_config_args(&args[1..]),
         "mcp" => parse_mcp_args(&args[1..]),
@@ -1125,6 +1277,37 @@ fn parse_daemon_args(args: &[String]) -> Result<Command, String> {
 
     Ok(Command::Daemon(DaemonArgs {
         command: DaemonCommand::Inspect(parsed),
+    }))
+}
+
+fn parse_trust_args(args: &[String]) -> Result<Command, String> {
+    if args.first().map(String::as_str) != Some("inspect") {
+        return Err("expected trust inspect".to_string());
+    }
+
+    let mut parsed = TrustInspectArgs::default();
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--state-dir" => {
+                i += 1;
+                parsed.state_dir = Some(PathBuf::from(
+                    args.get(i)
+                        .ok_or_else(|| "--state-dir requires a path".to_string())?,
+                ));
+            }
+            "--json" => parsed.json = true,
+            "-h" | "--help" => {
+                println!("{}", usage_trust_inspect());
+                std::process::exit(0);
+            }
+            arg => return Err(format!("unknown trust inspect argument: {arg}")),
+        }
+        i += 1;
+    }
+
+    Ok(Command::Trust(TrustArgs {
+        command: TrustCommand::Inspect(parsed),
     }))
 }
 
@@ -1294,7 +1477,7 @@ fn parse_config_args(args: &[String]) -> Result<Command, String> {
 }
 
 fn usage() -> &'static str {
-    "Usage: damctl <command>\n\nCommands:\n  status              Check the local DAM proxy health endpoint\n  doctor              Run local readiness checks for the protected UX\n  bypass status       Show reduced-protection/bypass failure modes\n  daemon inspect      Inspect local daemon state without changing it\n  integrations check  Inspect integration profile apply state\n  config check        Validate local DAM config for the current implementation\n  mcp config          Print MCP server config for DAM"
+    "Usage: damctl <command>\n\nCommands:\n  status              Check the local DAM proxy health endpoint\n  doctor              Run local readiness checks for the protected UX\n  bypass status       Show reduced-protection/bypass failure modes\n  daemon inspect      Inspect local daemon state without changing it\n  trust inspect       Inspect local TLS trust readiness without changing system trust\n  integrations check  Inspect integration profile apply state\n  config check        Validate local DAM config for the current implementation\n  mcp config          Print MCP server config for DAM"
 }
 
 fn usage_status() -> &'static str {
@@ -1315,6 +1498,10 @@ fn usage_config_check() -> &'static str {
 
 fn usage_daemon_inspect() -> &'static str {
     "Usage: damctl daemon inspect [--state-dir PATH] [--json]"
+}
+
+fn usage_trust_inspect() -> &'static str {
+    "Usage: damctl trust inspect [--state-dir PATH] [--json]"
 }
 
 fn usage_integrations_check() -> &'static str {
@@ -1446,6 +1633,28 @@ mod tests {
             command,
             Command::Daemon(DaemonArgs {
                 command: DaemonCommand::Inspect(DaemonInspectArgs {
+                    json: true,
+                    state_dir: Some(PathBuf::from("/tmp/dam-state")),
+                })
+            })
+        );
+    }
+
+    #[test]
+    fn parse_trust_inspect_accepts_state_dir_and_json() {
+        let command = parse_args([
+            "trust".to_string(),
+            "inspect".to_string(),
+            "--state-dir".to_string(),
+            "/tmp/dam-state".to_string(),
+            "--json".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            command,
+            Command::Trust(TrustArgs {
+                command: TrustCommand::Inspect(TrustInspectArgs {
                     json: true,
                     state_dir: Some(PathBuf::from("/tmp/dam-state")),
                 })
@@ -1706,10 +1915,55 @@ mod tests {
         assert!(output.stdout.contains("state: connected"));
         assert!(output.stdout.contains("process: running"));
         assert!(output.stdout.contains("target: openai"));
+        assert!(output.stdout.contains("network_mode: explicit_proxy"));
+        assert!(output.stdout.contains("transparent_ai_routes: 4"));
+        assert!(output.stdout.contains("trust_mode: disabled"));
+        assert!(output.stdout.contains("local_ca_installed: false"));
+        assert!(output.stdout.contains("trusted_ai_hosts: 4"));
         assert!(output.stdout.contains("provider: openai-compatible"));
         assert!(output.stdout.contains("upstream: https://api.openai.com"));
         assert!(output.stdout.contains("log: disabled"));
         assert!(output.stdout.contains("resolve_inbound: false"));
+    }
+
+    #[test]
+    fn trust_inspect_reports_default_read_only_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("state");
+
+        let output = trust_inspect(TrustInspectArgs {
+            json: false,
+            state_dir: Some(state_dir),
+        });
+
+        assert_eq!(output.code, 0);
+        assert!(output.stdout.contains("state: inspectable"));
+        assert!(output.stdout.contains("source: default"));
+        assert!(output.stdout.contains("trust_mode: disabled"));
+        assert!(output.stdout.contains("local_ca_installed: false"));
+        assert!(output.stdout.contains("action inspect: implemented"));
+        assert!(output.stdout.contains("action install_local_ca: planned"));
+    }
+
+    #[test]
+    fn trust_inspect_uses_daemon_trust_state_when_present() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("state");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let mut state = test_daemon_state(std::process::id());
+        state.trust.mode = dam_trust::TrustMode::LocalCa;
+        dam_daemon::write_state_to(&state_dir.join("daemon.json"), &state).unwrap();
+
+        let output = trust_inspect(TrustInspectArgs {
+            json: true,
+            state_dir: Some(state_dir),
+        });
+
+        assert_eq!(output.code, 0);
+        let report: serde_json::Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(report["source"], "daemon");
+        assert_eq!(report["trust"]["mode"], "local_ca");
+        assert_eq!(report["actions"].as_array().unwrap().len(), 3);
     }
 
     #[test]
@@ -1995,6 +2249,9 @@ mod tests {
             target_provider: Some("openai-compatible".to_string()),
             upstream: Some("https://api.openai.com".to_string()),
             started_at_unix: 1_700_000_000,
+            network_mode: dam_net::CaptureMode::ExplicitProxy,
+            transparent_ai_routes: dam_net::known_ai_routes(),
+            trust: dam_trust::TrustState::default(),
         }
     }
 }

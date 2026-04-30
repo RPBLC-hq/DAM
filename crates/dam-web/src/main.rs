@@ -1,7 +1,7 @@
 use axum::Router;
 use axum::body::Bytes;
 use axum::extract::Request;
-use axum::extract::{Query, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Redirect, Response};
@@ -88,7 +88,6 @@ enum DashboardState {
     Disconnected,
     Degraded,
     NeedsSetup,
-    NeedsProfile,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,9 +232,14 @@ fn router(state: AppState) -> Router {
     Router::new()
         .route("/connect", get(connect_dashboard))
         .route("/connect/action", post(connect_action))
-        .route("/", get(index))
+        .route("/", get(home))
+        .route("/vault", get(vault))
+        .route("/vault/detail/:key", get(vault_detail))
         .route("/logs", get(logs))
+        .route("/allowed", get(consents))
         .route("/consents", get(consents))
+        .route("/allowed/grant", post(grant_consent))
+        .route("/allowed/revoke", post(revoke_consent))
         .route("/consents/grant", post(grant_consent))
         .route("/consents/revoke", post(revoke_consent))
         .route("/doctor", get(doctor))
@@ -303,7 +307,14 @@ fn strip_host_port(value: &str) -> &str {
     value.split_once(':').map(|(host, _)| host).unwrap_or(value)
 }
 
-async fn index(
+async fn home() -> Response {
+    match dam_daemon::daemon_status() {
+        Ok(dam_daemon::DaemonStatus::Connected(_)) => Redirect::to("/vault").into_response(),
+        _ => Redirect::to("/connect").into_response(),
+    }
+}
+
+async fn vault(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
@@ -319,6 +330,35 @@ async fn index(
                 &consents,
             ))
             .into_response()
+        }
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Html(render_error("Vault error", &error.to_string())),
+        )
+            .into_response(),
+    }
+}
+
+async fn vault_detail(State(state): State<AppState>, AxumPath(key): AxumPath<String>) -> Response {
+    match state.vault.list() {
+        Ok(entries) => {
+            let consents = list_consents(&state);
+            match entries.iter().find(|entry| entry.key == key) {
+                Some(entry) => {
+                    let logs = state.logs.list().unwrap_or_default();
+                    Html(render_vault_detail(
+                        entry,
+                        active_consent_for_vault_entry(&consents, entry),
+                        &logs,
+                    ))
+                    .into_response()
+                }
+                None => (
+                    StatusCode::NOT_FOUND,
+                    Html(render_error("Vault value not found", &key)),
+                )
+                    .into_response(),
+            }
         }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -414,7 +454,7 @@ async fn grant_consent(State(state): State<AppState>, body: Bytes) -> Response {
         "dam-web",
         reason,
     ) {
-        Ok(_) => Redirect::to("/").into_response(),
+        Ok(_) => Redirect::to("/vault").into_response(),
         Err(error) => (
             StatusCode::BAD_REQUEST,
             Html(render_error("Consent grant failed", &error.to_string())),
@@ -580,8 +620,8 @@ fn usage() -> &'static str {
 impl Default for VaultOrder {
     fn default() -> Self {
         Self {
-            field: VaultSortField::Key,
-            direction: SortDirection::Asc,
+            field: VaultSortField::Updated,
+            direction: SortDirection::Desc,
         }
     }
 }
@@ -752,7 +792,7 @@ fn optional_str(value: &Option<String>) -> &str {
 fn render_vault_sort_header(label: &str, field: VaultSortField, order: VaultOrder) -> String {
     render_sort_header(
         label,
-        "/",
+        "/vault",
         field.param(),
         field == order.field,
         order.direction,
@@ -840,7 +880,7 @@ fn render_vault_with_order(
     consents: &[dam_consent::ConsentEntry],
 ) -> String {
     let rows = if entries.is_empty() {
-        "<tr><td class=\"empty\" colspan=\"5\">No vault entries found.</td></tr>".to_string()
+        "<tr><td class=\"empty\" colspan=\"4\">No protected values yet.</td></tr>".to_string()
     } else {
         entries
             .iter()
@@ -852,28 +892,25 @@ fn render_vault_with_order(
     render_shell(
         "DAM Vault",
         "Vault",
-        &format!("Database: {}", escape_html(&db_path.display().to_string())),
+        &format!("Vault: {}", escape_html(&db_path.display().to_string())),
         entries.len(),
-        "entries",
+        "values",
         &format!(
             r#"<table class="data-table vault-table">
       <thead>
         <tr>
-          {key_header}
           {value_header}
-          {created_header}
+          <th>Kind</th>
           {updated_header}
-          <th>Consent</th>
+          <th>Allowed</th>
         </tr>
       </thead>
       <tbody>
         {rows}
       </tbody>
     </table>"#,
-            key_header = render_vault_sort_header("Key", VaultSortField::Key, order),
             value_header = render_vault_sort_header("Value", VaultSortField::Value, order),
-            created_header = render_vault_sort_header("Created", VaultSortField::Created, order),
-            updated_header = render_vault_sort_header("Updated", VaultSortField::Updated, order),
+            updated_header = render_vault_sort_header("Seen", VaultSortField::Updated, order),
         ),
     )
 }
@@ -906,8 +943,8 @@ fn active_consent_for_vault_entry<'a>(
 
 fn revoke_return_to(form: &HashMap<String, String>) -> &'static str {
     match form.get("return_to").map(String::as_str) {
-        Some("/") => "/",
-        _ => "/consents",
+        Some("/vault") | Some("/") => "/vault",
+        _ => "/allowed",
     }
 }
 
@@ -1034,19 +1071,20 @@ fn dashboard_state(
     active_profile: Option<&dam_integrations::ActiveProfileState>,
     active_profile_apply: Option<&dam_integrations::IntegrationApplyInspection>,
 ) -> DashboardState {
-    if active_profile.is_none() {
-        return DashboardState::NeedsProfile;
-    }
-    if matches!(
-        active_profile_apply.map(|apply| apply.status),
-        Some(dam_integrations::IntegrationApplyStatus::NeedsApply)
-    ) {
+    if active_profile.is_some()
+        && matches!(
+            active_profile_apply.map(|apply| apply.status),
+            Some(dam_integrations::IntegrationApplyStatus::NeedsApply)
+        )
+    {
         return DashboardState::NeedsSetup;
     }
-    if matches!(
-        active_profile_apply.map(|apply| apply.status),
-        Some(dam_integrations::IntegrationApplyStatus::Modified)
-    ) {
+    if active_profile.is_some()
+        && matches!(
+            active_profile_apply.map(|apply| apply.status),
+            Some(dam_integrations::IntegrationApplyStatus::Modified)
+        )
+    {
         return DashboardState::Degraded;
     }
     match (daemon, proxy) {
@@ -1064,7 +1102,6 @@ fn dashboard_message(state: DashboardState) -> &'static str {
         DashboardState::Disconnected => "Ready to connect",
         DashboardState::Degraded => "Attention needed before one-click protection",
         DashboardState::NeedsSetup => "Setup is needed before traffic can be protected",
-        DashboardState::NeedsProfile => "Choose what DAM should protect",
     }
 }
 
@@ -1141,10 +1178,11 @@ fn rollback_active_profile() -> Result<(), String> {
 }
 
 async fn run_dam_connect(state: &AppState) -> Result<(), String> {
-    if read_active_profile_for_web().0.is_none() {
-        return Err("select a profile before connecting".to_string());
+    let has_active_profile = read_active_profile_for_web().0.is_some();
+    let mut args = vec!["connect".to_string()];
+    if has_active_profile {
+        args.push("--apply".to_string());
     }
-    let mut args = vec!["connect".to_string(), "--apply".to_string()];
     if let Some(config_path) = &state.config_path {
         args.extend(["--config".to_string(), config_path.display().to_string()]);
     }
@@ -1303,13 +1341,18 @@ fn render_connect_dashboard(view: &ConnectDashboard) -> String {
     let active_profile_id = view
         .active_profile
         .as_ref()
-        .map(|profile| profile.profile_id.as_str())
-        .unwrap_or("none");
+        .and_then(|active| {
+            view.profiles
+                .iter()
+                .find(|card| card.profile.id == active.profile_id)
+                .map(|card| profile_display_name(&card.profile))
+        })
+        .unwrap_or("Protect Everything");
     let apply_state = view
         .active_profile_apply
         .as_ref()
         .map(|apply| integration_apply_status_tag(apply.status))
-        .unwrap_or("not_applied");
+        .unwrap_or("automatic");
     let target_provider = view
         .daemon
         .as_ref()
@@ -1322,17 +1365,17 @@ fn render_connect_dashboard(view: &ConnectDashboard) -> String {
                     .map(|card| card.profile.provider.as_str())
             })
         })
-        .unwrap_or("not selected");
+        .unwrap_or("automatic");
     let upstream = view
         .daemon
         .as_ref()
         .and_then(|daemon| daemon.upstream.as_deref())
-        .unwrap_or("selected by profile");
+        .unwrap_or("automatic");
     let primary_action = render_primary_connect_action(view);
-    let profile_cards = view
+    let profile_options = view
         .profiles
         .iter()
-        .map(render_profile_card)
+        .map(render_profile_option)
         .collect::<Vec<_>>()
         .join("\n");
     let setup_actions = render_setup_actions(view);
@@ -1356,8 +1399,8 @@ fn render_connect_dashboard(view: &ConnectDashboard) -> String {
     render_shell(
         "DAM Connect",
         "Connect",
-        "One-click local protection for supported AI harnesses.",
-        if view.active_profile.is_some() { 1 } else { 0 },
+        "One-click protection.",
+        1,
         "profile",
         &format!(
             r#"<section class="connect-hero status-{state_class}">
@@ -1373,29 +1416,37 @@ fn render_connect_dashboard(view: &ConnectDashboard) -> String {
         {primary_action}
       </div>
       <dl class="connect-facts">
+        <dt>Mode</dt><dd>Protect Everything</dd>
         <dt>Profile</dt><dd>{active_profile}</dd>
-        <dt>Endpoint</dt><dd>{proxy_url}</dd>
-        <dt>Provider</dt><dd>{provider}</dd>
-        <dt>Upstream</dt><dd>{upstream}</dd>
-        <dt>Setup</dt><dd>{apply_state}</dd>
       </dl>
       {setup_actions}
     </section>
     <section class="connect-grid">
-      <div class="connect-section">
-        <div class="section-title">Profiles</div>
-        <div class="profile-grid">{profile_cards}</div>
-      </div>
-      <div class="connect-section">
-        <div class="section-title">Settings</div>
+      <details class="connect-section profile-panel">
+        <summary>
+          <span class="toggle-title">Profiles</span>
+          <span class="toggle-value">{active_profile}</span>
+          <span class="toggle-chevron" aria-hidden="true"></span>
+        </summary>
+        <div class="profile-list">{profile_options}</div>
+      </details>
+      <details class="connect-section">
+        <summary>
+          <span class="toggle-title">Details</span>
+          <span class="toggle-chevron" aria-hidden="true"></span>
+        </summary>
         <div class="settings-list">
+          <div><span>Endpoint</span><strong>{proxy_url}</strong></div>
+          <div><span>Provider</span><strong>{provider}</strong></div>
+          <div><span>Upstream</span><strong>{upstream}</strong></div>
+          <div><span>Setup</span><strong>{apply_state}</strong></div>
           <div><span>Vault</span><strong>{vault_path}</strong></div>
           <div><span>Log</span><strong>{log_path}</strong></div>
           <div><span>Inbound References</span><strong>{resolve_inbound}</strong></div>
           <div><span>DAM Binary</span><strong>{dam_bin}</strong></div>
         </div>
         {diagnostics}
-      </div>
+      </details>
     </section>"#,
             state_class = escape_html(dashboard_state_class(view.state)),
             notice = notice,
@@ -1410,7 +1461,7 @@ fn render_connect_dashboard(view: &ConnectDashboard) -> String {
             upstream = escape_html(upstream),
             apply_state = escape_html(apply_state),
             setup_actions = setup_actions,
-            profile_cards = profile_cards,
+            profile_options = profile_options,
             vault_path = escape_html(&view_profile_vault_path(view)),
             log_path = escape_html(&view_profile_log_path(view)),
             resolve_inbound = escape_html(&view_profile_resolve_inbound(view)),
@@ -1429,11 +1480,7 @@ fn render_primary_connect_action(view: &ConnectDashboard) -> String {
         )
         .to_string();
     }
-    if view.active_profile.is_none() {
-        return r#"<button class="connect-button" type="button" disabled>Choose Profile</button>"#
-            .to_string();
-    }
-    if view.active_profile_apply.is_none() {
+    if view.active_profile.is_some() && view.active_profile_apply.is_none() {
         return r#"<button class="connect-button" type="button" disabled>Review Setup</button>"#
             .to_string();
     }
@@ -1486,7 +1533,7 @@ fn render_setup_actions(view: &ConnectDashboard) -> String {
     )
 }
 
-fn render_profile_card(card: &ProfileCard) -> String {
+fn render_profile_option(card: &ProfileCard) -> String {
     let apply_status = card
         .apply
         .as_ref()
@@ -1498,52 +1545,74 @@ fn render_profile_card(card: &ProfileCard) -> String {
         .map(|apply| apply.message.as_str())
         .or(card.inspection_error.as_deref())
         .unwrap_or("profile target has not been inspected");
-    let active_badge = if card.active {
-        r#"<span class="badge active-profile">active</span>"#
-    } else {
-        ""
-    };
-    let select_button = if card.active {
-        r#"<button class="action-button" type="button" disabled>Selected</button>"#.to_string()
+    let row_state = if card.active { " selected" } else { "" };
+    let select_control = if card.active {
+        format!(
+            concat!(
+                r#"<button class="profile-select-row" type="button" disabled>"#,
+                r#"<span class="profile-name">{name}</span>"#,
+                r#"<span class="profile-summary">{summary}</span>"#,
+                r#"<span class="profile-state">active</span></button>"#
+            ),
+            name = escape_html(profile_display_name(&card.profile)),
+            summary = escape_html(profile_display_summary(&card.profile)),
+        )
     } else {
         format!(
             concat!(
-                r#"<form method="post" action="/connect/action">"#,
+                r#"<form class="profile-select-form" method="post" action="/connect/action">"#,
                 r#"<input type="hidden" name="action" value="select_profile">"#,
                 r#"<input type="hidden" name="profile_id" value="{profile_id}">"#,
-                r#"<button class="action-button" type="submit">Select</button></form>"#
+                r#"<button class="profile-select-row" type="submit">"#,
+                r#"<span class="profile-name">{name}</span>"#,
+                r#"<span class="profile-summary">{summary}</span>"#,
+                r#"<span class="profile-state">{apply_status}</span></button></form>"#
             ),
             profile_id = escape_html(&card.profile.id),
+            name = escape_html(profile_display_name(&card.profile)),
+            summary = escape_html(profile_display_summary(&card.profile)),
+            apply_status = escape_html(apply_status),
         )
     };
 
     format!(
-        r#"<article class="profile-card {active_class}">
-      <div class="profile-top">
-        <div>
-          <h2>{name}</h2>
-          <p>{summary}</p>
-        </div>
-        {active_badge}
+        r#"<div class="profile-option{row_state}">
+      {select_control}
+      <details class="profile-more">
+        <summary aria-label="Profile details" title="Profile details">...</summary>
+      </details>
+      <div class="profile-more-panel">
+        <dl>
+          <dt>ID</dt><dd>{id}</dd>
+          <dt>Provider</dt><dd>{provider}</dd>
+          <dt>Setup</dt><dd>{apply_status}</dd>
+        </dl>
+        <p class="profile-note">{apply_message}</p>
       </div>
-      <dl>
-        <dt>ID</dt><dd>{id}</dd>
-        <dt>Provider</dt><dd>{provider}</dd>
-        <dt>Setup</dt><dd>{apply_status}</dd>
-      </dl>
-      <p class="profile-note">{apply_message}</p>
-      {select_button}
-    </article>"#,
-        active_class = if card.active { "selected" } else { "" },
-        name = escape_html(&card.profile.name),
-        summary = escape_html(&card.profile.summary),
-        active_badge = active_badge,
+    </div>"#,
+        row_state = row_state,
+        select_control = select_control,
         id = escape_html(&card.profile.id),
         provider = escape_html(&card.profile.provider),
         apply_status = escape_html(apply_status),
         apply_message = escape_html(apply_message),
-        select_button = select_button,
     )
+}
+
+fn profile_display_name(profile: &dam_integrations::IntegrationProfile) -> &str {
+    if profile.id == "openai-compatible" {
+        "Protect Everything"
+    } else {
+        &profile.name
+    }
+}
+
+fn profile_display_summary(profile: &dam_integrations::IntegrationProfile) -> &str {
+    if profile.id == "openai-compatible" {
+        "Default protection"
+    } else {
+        &profile.summary
+    }
 }
 
 fn render_dashboard_diagnostics(view: &ConnectDashboard) -> String {
@@ -1593,7 +1662,6 @@ fn dashboard_state_label(state: DashboardState) -> &'static str {
         DashboardState::Disconnected => "Disconnected",
         DashboardState::Degraded => "Needs Review",
         DashboardState::NeedsSetup => "Needs Setup",
-        DashboardState::NeedsProfile => "Choose Profile",
     }
 }
 
@@ -1603,7 +1671,6 @@ fn dashboard_state_class(state: DashboardState) -> &'static str {
         DashboardState::Disconnected => "unknown",
         DashboardState::Degraded => "degraded",
         DashboardState::NeedsSetup => "config_required",
-        DashboardState::NeedsProfile => "unknown",
     }
 }
 
@@ -1766,7 +1833,7 @@ fn render_shell_with_mode(
         ""
     };
     let tray_quit = if shell_mode.is_tray() {
-        r#"<button class="tray-quit" type="button" data-tray-quit>Quit DAM</button>"#
+        r#"<button class="tray-quit" type="button" data-tray-quit aria-label="Quit DAM" title="Quit DAM">⏻</button>"#
     } else {
         ""
     };
@@ -1848,38 +1915,48 @@ fn render_shell_with_mode(
     }}
     main {{
       width: min(1240px, calc(100vw - 32px));
-      margin: 42px auto;
+      margin: 0 auto 42px;
+      padding: 0;
     }}
     .brand-bar {{
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 18px;
-      border: 1px solid var(--line);
-      background: rgba(18, 18, 15, .82);
-      padding: 14px 18px;
-      margin-bottom: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      border-bottom: 1px solid var(--line);
+      background: rgba(10, 10, 8, .92);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      padding: 6px 24px;
+      margin: 0 calc((100vw - min(1240px, calc(100vw - 32px))) / -2) 28px;
     }}
     .brand-home {{
       display: inline-flex;
-      align-items: baseline;
+      align-items: center;
       gap: 12px;
       color: inherit;
       text-decoration: none;
+      min-height: 36px;
     }}
     .brand-mark {{
       display: inline-flex;
       font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size: 26px;
+      line-height: 1;
       font-weight: 800;
       letter-spacing: 0;
     }}
+    .brand-mark .glyph {{ transition: color 120ms ease; }}
     .brand-mark .letter {{ color: var(--bright); }}
     .brand-mark .colon {{ color: var(--accent); }}
     .brand-mark .bracket {{ color: var(--soft); }}
     .brand-copy {{
       color: var(--muted);
       font-size: 13px;
+      line-height: 1;
     }}
     .brand-out {{
       color: var(--muted);
@@ -1889,26 +1966,79 @@ fn render_shell_with_mode(
       letter-spacing: 0;
       text-transform: uppercase;
     }}
-    .brand-home:hover .brand-mark .letter,
-    .brand-out:hover {{
-      color: var(--accent);
-    }}
+    .brand-home:hover .brand-mark .glyph {{ color: var(--bg); }}
+    .brand-home:hover .brand-mark .colon {{ color: var(--bg); }}
+    .brand-mark .glyph:hover {{ color: var(--bright) !important; }}
+    .brand-mark .colon:hover {{ color: var(--accent) !important; }}
+    .brand-out:hover {{ color: var(--bright); }}
     .brand-actions {{
       display: inline-flex;
       align-items: center;
       gap: 12px;
       flex-shrink: 0;
+      min-height: 36px;
+    }}
+    .nav-more {{
+      position: relative;
+      flex: 0 0 auto;
+    }}
+    .nav-more summary {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      list-style: none;
+      cursor: pointer;
+      color: var(--muted);
+      min-width: 40px;
+      min-height: 36px;
+      padding: 0 10px;
+    }}
+    .chevron-mark {{
+      width: 9px;
+      height: 9px;
+      border-right: 2px solid currentColor;
+      border-bottom: 2px solid currentColor;
+      transform: rotate(45deg);
+      position: relative;
+      top: -2px;
+    }}
+    .nav-more summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .nav-more summary:hover,
+    .nav-more[open] summary {{
+      color: var(--bright);
+    }}
+    .nav-more-menu {{
+      position: absolute;
+      right: 0;
+      top: calc(100% + 10px);
+      min-width: 156px;
+      z-index: 120;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      box-shadow: 8px 8px 0 var(--line);
+      padding: 8px;
+    }}
+    .nav-more-menu a {{
+      display: block;
+      padding: 9px 10px;
+      white-space: nowrap;
     }}
     .tray-quit {{
+      display: none;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 999px;
       border: 1px solid var(--line-strong);
-      background: var(--panel-strong);
+      background: transparent;
       color: var(--muted);
-      padding: 8px 10px;
       font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 11px;
+      font-size: 15px;
       font-weight: 700;
       letter-spacing: 0;
-      text-transform: uppercase;
       cursor: pointer;
     }}
     .tray-quit:hover {{
@@ -1921,24 +2051,31 @@ fn render_shell_with_mode(
     }}
     nav {{
       display: flex;
-      gap: 10px;
-      margin-bottom: 28px;
+      align-items: center;
+      gap: 2px;
+      margin: 0;
+      min-width: 0;
+      overflow: visible;
     }}
     nav a {{
-      border: 1px solid var(--line);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 0;
       color: var(--muted);
-      background: rgba(18, 18, 15, .72);
-      padding: 9px 12px;
+      background: transparent;
+      min-height: 36px;
+      padding: 0 10px;
       text-decoration: none;
       font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size: 12px;
+      line-height: 1;
       letter-spacing: 0;
       text-transform: uppercase;
     }}
     nav a.active {{
-      background: var(--bg);
+      background: transparent;
       color: var(--accent);
-      border-color: var(--line-strong);
     }}
     nav a:hover {{ color: var(--bright); }}
     header {{
@@ -1981,6 +2118,11 @@ fn render_shell_with_mode(
       background: var(--panel);
     }}
     .connect-surface {{
+      overflow: visible;
+      border: 0;
+      background: transparent;
+    }}
+    .content-surface {{
       overflow: visible;
       border: 0;
       background: transparent;
@@ -2082,44 +2224,203 @@ fn render_shell_with_mode(
       letter-spacing: 0;
       text-transform: uppercase;
     }}
-    .profile-grid {{
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
+    details.connect-section {{
+      padding: 0;
+      overflow: visible;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
     }}
-    .profile-card {{
+    details.connect-section summary {{
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) 18px;
+      align-items: center;
+      gap: 12px;
+      list-style: none;
+      cursor: pointer;
+      min-height: 40px;
+      padding: 0 12px;
+      border: 1px solid var(--line-strong);
+      background: var(--panel-strong);
+      box-shadow: 3px 3px 0 var(--line);
+      color: var(--accent);
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }}
+    details.connect-section summary:hover {{
+      border-color: var(--accent);
+      background: rgba(184, 150, 90, .08);
+    }}
+    details.connect-section summary::-webkit-details-marker {{
+      display: none;
+    }}
+    details.connect-section[open] summary {{
+      border-color: var(--line-strong);
+    }}
+    .toggle-title {{
+      color: var(--accent);
+      white-space: nowrap;
+    }}
+    .toggle-value {{
+      min-width: 0;
+      color: var(--bright);
+      font-family: Manrope, ui-sans-serif, system-ui, sans-serif;
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: none;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .toggle-chevron {{
+      grid-column: 3;
+      justify-self: end;
+      width: 8px;
+      height: 8px;
+      border-right: 2px solid currentColor;
+      border-bottom: 2px solid currentColor;
+      transform: rotate(45deg);
+      position: relative;
+      top: -2px;
+    }}
+    details.connect-section[open] .toggle-chevron {{
+      transform: rotate(225deg);
+      top: 2px;
+    }}
+    details.connect-section > .profile-list,
+    details.connect-section > .settings-list,
+    details.connect-section > .diagnostics-list,
+    details.connect-section > .quiet {{
+      margin: 14px 0 0;
+    }}
+    .profile-list {{
+      display: grid;
+      gap: 8px;
+    }}
+    .profile-option {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 36px;
+      align-items: stretch;
       border: 1px solid var(--line);
       background: var(--panel-strong);
-      padding: 14px;
     }}
-    .profile-card.selected {{
+    .profile-option.selected {{
       border-color: var(--accent);
     }}
-    .profile-top {{
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      align-items: flex-start;
+    .profile-select-form {{
+      display: contents;
     }}
-    .profile-card h2 {{
-      margin: 0 0 6px;
+    .profile-select-row {{
+      appearance: none;
+      -webkit-appearance: none;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas:
+        "name state"
+        "summary summary";
+      align-items: center;
+      gap: 5px 12px;
+      width: 100%;
+      min-width: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      padding: 10px 12px;
+      text-align: left;
+      cursor: pointer;
+    }}
+    .profile-select-row:disabled {{
+      cursor: default;
+      opacity: 1;
+    }}
+    .profile-select-row:hover {{
+      background: rgba(184, 150, 90, .08);
+    }}
+    .profile-select-row:disabled:hover {{
+      background: transparent;
+    }}
+    .profile-name {{
+      grid-area: name;
+      min-width: 0;
       color: var(--bright);
-      font-size: 18px;
-      line-height: 1.15;
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: 0;
+      text-transform: uppercase;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .profile-summary {{
+      grid-area: summary;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .profile-state {{
+      grid-area: state;
+      justify-self: end;
+      color: var(--accent);
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      line-height: 1;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }}
+    .profile-more {{
+      border-left: 1px solid var(--line);
+      position: relative;
+    }}
+    .profile-more summary {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 36px;
+      min-height: 100%;
+      list-style: none;
+      cursor: pointer;
+      color: var(--muted);
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 15px;
+      font-weight: 800;
+      line-height: 1;
       letter-spacing: 0;
     }}
-    .profile-card p {{
-      margin: 0;
-      color: var(--muted);
-      font-size: 14px;
+    .profile-more summary::-webkit-details-marker {{
+      display: none;
     }}
-    .profile-card dl {{
+    .profile-more summary:hover,
+    .profile-more[open] summary {{
+      color: var(--bright);
+      background: rgba(184, 150, 90, .08);
+    }}
+    .profile-more-panel {{
+      grid-column: 1 / -1;
+      border-top: 1px solid var(--line);
+      padding: 12px;
+      background: rgba(18, 18, 15, .58);
+    }}
+    .profile-more:not([open]) + .profile-more-panel {{
+      display: none;
+    }}
+    .profile-more-panel dl {{
       grid-template-columns: 86px 1fr;
-      margin-bottom: 12px;
+      margin: 0 0 10px;
     }}
     .profile-note {{
-      min-height: 42px;
-      margin-bottom: 12px !important;
+      margin: 0 !important;
+      min-height: 0;
+      color: var(--muted);
+      font-size: 13px;
     }}
     .settings-list {{
       display: grid;
@@ -2225,6 +2526,41 @@ fn render_shell_with_mode(
     }}
     td.value, td.message {{
       white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }}
+    .primary-value a {{
+      color: var(--bright);
+      text-decoration: none;
+      font-weight: 700;
+    }}
+    .primary-value a:hover {{
+      color: var(--accent);
+    }}
+    time {{
+      color: var(--muted);
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      white-space: nowrap;
+    }}
+    .value-detail {{
+      border: 1px solid var(--line);
+      background: var(--panel);
+      padding: 18px;
+      margin-bottom: 18px;
+      box-shadow: 8px 8px 0 var(--line);
+    }}
+    .value-detail-head {{
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 16px;
+    }}
+    .value-detail h2 {{
+      margin: 6px 0 0;
+      color: var(--bright);
+      font-size: 28px;
+      line-height: 1.12;
       overflow-wrap: anywhere;
     }}
     .empty {{
@@ -2429,33 +2765,44 @@ fn render_shell_with_mode(
       color: var(--accent);
       border-color: var(--accent);
     }}
+    .badge.allowed {{
+      color: var(--ok);
+      border-color: var(--ok-line);
+    }}
     body.tray-shell {{
       overflow-x: hidden;
     }}
     body.tray-shell main {{
       width: 100%;
       margin: 0;
-      padding: 14px;
+      padding: 0 14px 14px;
+    }}
+    body.tray-shell .tray-quit {{
+      display: inline-flex;
     }}
     body.tray-shell .brand-bar {{
-      padding: 12px 14px;
-      margin-bottom: 10px;
+      padding: 8px 14px;
+      margin: 0 -14px 10px;
+      gap: 10px;
     }}
     body.tray-shell .brand-copy,
     body.tray-shell .brand-out {{
       display: none;
     }}
     body.tray-shell nav {{
-      gap: 6px;
-      margin-bottom: 12px;
-      overflow-x: auto;
-      padding-bottom: 4px;
-      -webkit-overflow-scrolling: touch;
+      gap: 2px;
+      margin-bottom: 0;
+      overflow: visible;
+      padding-bottom: 0;
     }}
     body.tray-shell nav a {{
       flex: 0 0 auto;
-      padding: 7px 9px;
+      padding: 0 9px;
       font-size: 11px;
+    }}
+    body.tray-shell .nav-more summary {{
+      min-width: 36px;
+      padding: 0 8px;
     }}
     body.tray-shell header {{
       display: none;
@@ -2498,10 +2845,13 @@ fn render_shell_with_mode(
       gap: 12px;
     }}
     body.tray-shell .connect-section {{
-      padding: 14px;
+      padding: 0;
     }}
-    body.tray-shell .profile-grid {{
-      grid-template-columns: 1fr;
+    body.tray-shell .profile-select-row {{
+      padding: 10px 12px;
+    }}
+    body.tray-shell .profile-state {{
+      display: none;
     }}
     body.tray-shell .settings-list strong {{
       font-size: 12px;
@@ -2513,8 +2863,8 @@ fn render_shell_with_mode(
       th, td {{ padding: 10px 8px; font-size: 13px; }}
       .diagnostics-grid,
       .component-grid,
-      .connect-grid,
-      .profile-grid {{ grid-template-columns: 1fr; }}
+      .connect-grid {{ grid-template-columns: 1fr; }}
+      .profile-state {{ display: none; }}
       .connect-status {{ display: grid; }}
       .connect-button {{ width: 132px; height: 132px; }}
     }}
@@ -2524,22 +2874,27 @@ fn render_shell_with_mode(
   <main>
     <div class="brand-bar">
       <a class="brand-home" href="{brand_url}" target="_blank" rel="noopener noreferrer" aria-label="RPBLC home"{brand_tray_attrs}>
-        <span class="brand-mark" aria-hidden="true"><span class="bracket">[</span><span class="letter">R</span><span class="colon">:</span><span class="bracket">]</span></span>
+        <span class="brand-mark" aria-hidden="true"><span class="glyph bracket">[</span><span class="glyph letter">R</span><span class="glyph colon">:</span><span class="glyph bracket">]</span></span>
         <span class="brand-copy">privacy infrastructure</span>
       </a>
+      <nav>
+        <a class="{connect_class}" href="/connect">Connect</a>
+        <a class="{vault_class}" href="/vault">Vault</a>
+        <a class="{allowed_class}" href="/allowed">Allowed</a>
+        <details class="nav-more">
+          <summary aria-label="More" title="More"><span class="chevron-mark" aria-hidden="true"></span></summary>
+          <div class="nav-more-menu">
+            <a class="{insights_class}" href="/logs">Insights</a>
+            <a class="{doctor_class}" href="/doctor">Doctor</a>
+            <a class="{diagnostics_class}" href="/diagnostics">Diagnostics</a>
+          </div>
+        </details>
+      </nav>
       <div class="brand-actions">
         {tray_quit}
         <a class="brand-out" href="{brand_url}" target="_blank" rel="noopener noreferrer"{brand_tray_attrs}>RPBLC.com</a>
       </div>
     </div>
-    <nav>
-      <a class="{connect_class}" href="/connect">Connect</a>
-      <a class="{vault_class}" href="/">Vault</a>
-      <a class="{logs_class}" href="/logs">Logs</a>
-      <a class="{consents_class}" href="/consents">Consents</a>
-      <a class="{doctor_class}" href="/doctor">Doctor</a>
-      <a class="{diagnostics_class}" href="/diagnostics">Diagnostics</a>
-    </nav>
     <header>
       <div>
         <h1>{title}</h1>
@@ -2566,13 +2921,15 @@ fn render_shell_with_mode(
         content = content,
         content_class = if active == "Connect" {
             "connect-surface"
+        } else if title == "Vault Value" {
+            "content-surface"
         } else {
             "table-wrap"
         },
         connect_class = if active == "Connect" { "active" } else { "" },
         vault_class = if active == "Vault" { "active" } else { "" },
-        logs_class = if active == "Logs" { "active" } else { "" },
-        consents_class = if active == "Consents" { "active" } else { "" },
+        insights_class = if active == "Logs" { "active" } else { "" },
+        allowed_class = if active == "Allowed" { "active" } else { "" },
         doctor_class = if active == "Doctor" { "active" } else { "" },
         diagnostics_class = if active == "Diagnostics" {
             "active"
@@ -2586,14 +2943,14 @@ fn render_vault_row(
     entry: &VaultEntry,
     active_consent: Option<&dam_consent::ConsentEntry>,
 ) -> String {
-    let consent_cell = match active_consent {
+    let allowed_cell = match active_consent {
         Some(consent) => format!(
             concat!(
-                "<span class=\"badge\">active</span>",
+                "<span class=\"badge allowed\">allowed</span>",
                 "<form class=\"inline-form\" method=\"post\" action=\"/consents/revoke\">",
                 "<input type=\"hidden\" name=\"id\" value=\"{}\">",
-                "<input type=\"hidden\" name=\"return_to\" value=\"/\">",
-                "<button class=\"action-button danger\" type=\"submit\">Revoke</button></form>"
+                "<input type=\"hidden\" name=\"return_to\" value=\"/vault\">",
+                "<button class=\"action-button danger\" type=\"submit\">Protect</button></form>"
             ),
             escape_html(&consent.id)
         ),
@@ -2601,26 +2958,134 @@ fn render_vault_row(
             concat!(
                 "<form class=\"inline-form\" method=\"post\" action=\"/consents/grant\">",
                 "<input type=\"hidden\" name=\"vault_key\" value=\"{}\">",
-                "<button class=\"action-button\" type=\"submit\">Grant</button></form>"
+                "<button class=\"action-button\" type=\"submit\">Allow</button></form>"
             ),
             escape_html(&entry.key)
         ),
     };
+    let (kind, _) = vault_entry_kind_token(entry);
+    let detail_url = format!("/vault/detail/{}", form_url_encode_component(&entry.key));
 
     format!(
-        "<tr><td class=\"key\">{}</td><td class=\"value\">{}</td><td>{}</td><td>{}</td><td class=\"action-cell\">{}</td></tr>",
+        concat!(
+            "<tr>",
+            "<td class=\"value primary-value\"><a href=\"{}\" title=\"{}\">{}</a></td>",
+            "<td>{}</td>",
+            "<td>{}</td>",
+            "<td class=\"action-cell\">{}</td>",
+            "</tr>"
+        ),
+        escape_html(&detail_url),
         escape_html(&entry.key),
         escape_html(&entry.value),
-        escape_html(&format_unix_secs(entry.created_at)),
-        escape_html(&format_unix_secs(entry.updated_at)),
-        consent_cell
+        escape_html(&kind),
+        render_time(entry.updated_at),
+        allowed_cell
+    )
+}
+
+fn vault_entry_kind_token(entry: &VaultEntry) -> (String, String) {
+    dam_core::Reference::parse_key(&entry.key)
+        .map(|reference| (reference.kind.tag().to_string(), reference.id))
+        .unwrap_or_else(|| ("value".to_string(), entry.key.clone()))
+}
+
+fn render_vault_detail(
+    entry: &VaultEntry,
+    active_consent: Option<&dam_consent::ConsentEntry>,
+    logs: &[LogEntry],
+) -> String {
+    let (kind, token) = vault_entry_kind_token(entry);
+    let allowed_action = match active_consent {
+        Some(consent) => format!(
+            concat!(
+                "<form method=\"post\" action=\"/consents/revoke\">",
+                "<input type=\"hidden\" name=\"id\" value=\"{}\">",
+                "<input type=\"hidden\" name=\"return_to\" value=\"/vault\">",
+                "<button class=\"action-button danger\" type=\"submit\">Protect</button></form>"
+            ),
+            escape_html(&consent.id)
+        ),
+        None => format!(
+            concat!(
+                "<form method=\"post\" action=\"/consents/grant\">",
+                "<input type=\"hidden\" name=\"vault_key\" value=\"{}\">",
+                "<button class=\"action-button\" type=\"submit\">Allow</button></form>"
+            ),
+            escape_html(&entry.key)
+        ),
+    };
+    let audit_rows = logs
+        .iter()
+        .filter(|log| log.reference.as_deref() == Some(entry.key.as_str()))
+        .map(render_value_audit_row)
+        .collect::<Vec<_>>();
+    let audit = if audit_rows.is_empty() {
+        "<tr><td class=\"empty\" colspan=\"4\">No audit events found for this token.</td></tr>"
+            .to_string()
+    } else {
+        audit_rows.join("\n")
+    };
+
+    render_shell(
+        "Vault Value",
+        "Vault",
+        "Value details",
+        1,
+        "value",
+        &format!(
+            r#"<section class="value-detail">
+      <div class="value-detail-head">
+        <div>
+          <div class="status-label">{kind}</div>
+          <h2>{value}</h2>
+        </div>
+        {allowed_action}
+      </div>
+      <dl>
+        <dt>Token</dt><dd class="reference">{token}</dd>
+        <dt>First Seen</dt><dd>{created}</dd>
+        <dt>Last Seen</dt><dd>{updated}</dd>
+        <dt>State</dt><dd>{allowed_state}</dd>
+      </dl>
+    </section>
+    <section class="value-detail">
+      <div class="section-title">Audit</div>
+      <table class="data-table logs-table">
+        <thead><tr><th>When</th><th>Event</th><th>Action</th><th>Message</th></tr></thead>
+        <tbody>{audit}</tbody>
+      </table>
+    </section>"#,
+            kind = escape_html(&kind),
+            value = escape_html(&entry.value),
+            allowed_action = allowed_action,
+            token = escape_html(&token),
+            created = render_time(entry.created_at),
+            updated = render_time(entry.updated_at),
+            allowed_state = if active_consent.is_some() {
+                "Allowed through DAM"
+            } else {
+                "Protected"
+            },
+            audit = audit,
+        ),
+    )
+}
+
+fn render_value_audit_row(entry: &LogEntry) -> String {
+    format!(
+        "<tr><td>{}</td><td>{}</td><td>{}</td><td class=\"message\">{}</td></tr>",
+        render_time(entry.timestamp),
+        escape_html(&entry.event_type),
+        escape_optional(&entry.action),
+        escape_html(&entry.message),
     )
 }
 
 fn render_consents(entries: &[dam_consent::ConsentEntry]) -> String {
     let now = unix_now_lossy();
     let rows = if entries.is_empty() {
-        "<tr><td class=\"empty\" colspan=\"8\">No consents found.</td></tr>".to_string()
+        "<tr><td class=\"empty\" colspan=\"8\">Nothing allowed through.</td></tr>".to_string()
     } else {
         entries
             .iter()
@@ -2630,11 +3095,11 @@ fn render_consents(entries: &[dam_consent::ConsentEntry]) -> String {
     };
 
     render_shell(
-        "DAM Consents",
-        "Consents",
-        "Exact-value passthrough grants",
+        "Allowed Values",
+        "Allowed",
+        "Values currently allowed through DAM",
         entries.len(),
-        "consents",
+        "allowed",
         &format!(
             r#"<table class="data-table consents-table">
       <thead>
@@ -2659,12 +3124,12 @@ fn render_consents(entries: &[dam_consent::ConsentEntry]) -> String {
 
 fn render_consents_disabled() -> String {
     render_shell(
-        "DAM Consents",
-        "Consents",
-        "Consent is disabled",
+        "Allowed Values",
+        "Allowed",
+        "Allowed values are disabled",
         0,
-        "consents",
-        "<p class=\"empty\">Consent storage is disabled in the current config.</p>",
+        "allowed",
+        "<p class=\"empty\">Allowed values are disabled in the current config.</p>",
     )
 }
 
@@ -2675,8 +3140,8 @@ fn render_consent_row(entry: &dam_consent::ConsentEntry, now: i64) -> String {
             concat!(
                 "<form class=\"inline-form\" method=\"post\" action=\"/consents/revoke\">",
                 "<input type=\"hidden\" name=\"id\" value=\"{}\">",
-                "<input type=\"hidden\" name=\"return_to\" value=\"/consents\">",
-                "<button class=\"action-button danger\" type=\"submit\">Revoke</button></form>"
+                "<input type=\"hidden\" name=\"return_to\" value=\"/allowed\">",
+                "<button class=\"action-button danger\" type=\"submit\">Protect</button></form>"
             ),
             escape_html(&entry.id)
         )
@@ -2694,8 +3159,8 @@ fn render_consent_row(entry: &dam_consent::ConsentEntry, now: i64) -> String {
         escape_html(status),
         escape_html(entry.kind.tag()),
         escape_optional(&entry.vault_key),
-        escape_html(&format_unix_secs(entry.created_at)),
-        escape_html(&format_unix_secs(entry.expires_at)),
+        render_time(entry.created_at),
+        render_time(entry.expires_at),
         escape_html(&entry.created_by),
         action
     )
@@ -3113,6 +3578,60 @@ fn format_unix_secs(timestamp: i64) -> String {
     format!("{year:04}-{month:02}-{day:02} {hour:02}:{minute:02}:{second:02} UTC")
 }
 
+fn render_time(timestamp: i64) -> String {
+    let absolute = format_unix_secs(timestamp);
+    let relative = format_relative_unix_secs(timestamp, unix_now_lossy());
+    format!(
+        r#"<time datetime="{absolute}" title="{absolute}">{relative}</time>"#,
+        absolute = escape_html(&absolute),
+        relative = escape_html(&relative),
+    )
+}
+
+fn format_relative_unix_secs(timestamp: i64, now: i64) -> String {
+    if timestamp > now {
+        let future = compact_duration(timestamp.saturating_sub(now));
+        return if future == "now" {
+            "now".to_string()
+        } else {
+            format!("in {future}")
+        };
+    }
+    let delta = now.saturating_sub(timestamp).max(0);
+    let past = compact_duration(delta);
+    if past == "now" {
+        past
+    } else {
+        format!("{past} ago")
+    }
+}
+
+fn compact_duration(delta: i64) -> String {
+    if delta < 5 {
+        return "now".to_string();
+    }
+    if delta < 60 {
+        return format!("{delta}s");
+    }
+    let minutes = delta / 60;
+    if minutes < 60 {
+        return format!("{minutes}m");
+    }
+    let hours = minutes / 60;
+    if hours < 24 {
+        return format!("{hours}h");
+    }
+    let days = hours / 24;
+    if days < 30 {
+        return format!("{days}d");
+    }
+    let months = days / 30;
+    if months < 12 {
+        return format!("{months}mo");
+    }
+    format!("{}y", days / 365)
+}
+
 fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
     let z = days_since_epoch + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -3218,6 +3737,14 @@ mod tests {
     }
 
     #[test]
+    fn relative_times_render_compact_labels() {
+        assert_eq!(format_relative_unix_secs(100, 102), "now");
+        assert_eq!(format_relative_unix_secs(40, 100), "1m ago");
+        assert_eq!(format_relative_unix_secs(100, 100 + 23 * 3_600), "23h ago");
+        assert_eq!(format_relative_unix_secs(200, 100), "in 1m");
+    }
+
+    #[test]
     fn render_vault_escapes_entry_content() {
         let html = render_vault(
             &PathBuf::from("vault.db"),
@@ -3229,10 +3756,9 @@ mod tests {
             }],
         );
 
-        assert!(html.contains("email:&lt;alice&gt;"));
         assert!(html.contains("&lt;alice@example.com&gt;"));
-        assert!(html.contains("1970-01-01 00:00:01 UTC"));
-        assert!(html.contains("1970-01-01 00:00:02 UTC"));
+        assert!(html.contains("title=\"1970-01-01 00:00:02 UTC\""));
+        assert!(html.contains("href=\"/vault/detail/email%3A%3Calice%3E\""));
         assert!(!html.contains("<alice@example.com>"));
     }
 
@@ -3240,13 +3766,13 @@ mod tests {
     fn render_vault_includes_column_order_buttons() {
         let html = render_vault(&PathBuf::from("vault.db"), &[]);
 
-        assert!(html.contains("aria-label=\"Sort Key ascending\""));
+        assert!(html.contains("aria-label=\"Sort Value ascending\""));
         assert!(html.contains("sortable-heading"));
         assert!(html.contains("order-label"));
-        assert!(html.contains("href=\"/?sort=key&amp;dir=asc\""));
-        assert!(html.contains("href=\"/?sort=updated&amp;dir=desc\""));
+        assert!(html.contains("href=\"/vault?sort=value&amp;dir=asc\""));
+        assert!(html.contains("href=\"/vault?sort=updated&amp;dir=desc\""));
         assert!(html.contains("class=\"order-button active\""));
-        assert!(html.contains("Consent"));
+        assert!(html.contains("Allowed"));
     }
 
     #[test]
@@ -3308,7 +3834,7 @@ mod tests {
         );
 
         assert_eq!(html.matches("action=\"/consents/revoke\"").count(), 2);
-        assert!(html.contains("name=\"return_to\" value=\"/\""));
+        assert!(html.contains("name=\"return_to\" value=\"/vault\""));
         assert!(!html.contains("action=\"/consents/grant\""));
     }
 
@@ -3330,7 +3856,8 @@ mod tests {
         assert!(html.contains("consent_123"));
         assert!(html.contains("action=\"/consents/revoke\""));
         assert!(html.contains("class=\"action-button danger\""));
-        assert!(html.contains("name=\"return_to\" value=\"/consents\""));
+        assert!(html.contains("name=\"return_to\" value=\"/allowed\""));
+        assert!(html.contains("Protect"));
     }
 
     #[test]
@@ -3370,6 +3897,9 @@ mod tests {
         assert!(html.contains("https://rpblc.com"));
         assert!(html.contains("RPBLC.com"));
         assert!(html.contains("privacy infrastructure"));
+        assert!(html.contains("margin: 0 auto 42px;"));
+        assert!(html.contains("padding: 0;\n    }\n    .brand-bar"));
+        assert!(html.contains("padding: 6px 24px;"));
     }
 
     #[test]
@@ -3482,7 +4012,7 @@ mod tests {
         assert!(html.contains("state-config_required"));
         assert!(html.contains("status-degraded"));
         assert!(html.contains("state-degraded"));
-        assert!(html.contains("href=\"/diagnostics\""));
+        assert!(html.contains("DAM Diagnostics"));
     }
 
     #[test]
@@ -3559,6 +4089,9 @@ mod tests {
         assert!(html.contains("class=\"connect-button\" type=\"submit\">Connect</button>"));
         assert!(html.contains("action=\"/connect/action\""));
         assert!(html.contains("Claude Code"));
+        assert!(html.contains("<span class=\"toggle-title\">Profiles</span>"));
+        assert!(html.contains("<span class=\"toggle-value\">Claude Code</span>"));
+        assert!(html.contains("<span class=\"toggle-chevron\" aria-hidden=\"true\"></span>"));
         assert!(html.contains("Apply Setup"));
         assert!(html.contains("href=\"/connect\""));
         assert!(html.contains("class=\"active\" href=\"/connect\""));
@@ -3589,7 +4122,7 @@ mod tests {
 
     #[test]
     fn render_connect_dashboard_escapes_profile_messages() {
-        let mut view = test_connect_dashboard(DashboardState::NeedsProfile, None, None);
+        let mut view = test_connect_dashboard(DashboardState::Disconnected, None, None);
         view.profiles[0].inspection_error = Some("<bad setup>".to_string());
         view.error = Some("<script>x</script>".to_string());
 
@@ -3617,6 +4150,15 @@ mod tests {
         assert!(html.contains("window.ipc.postMessage(message)"));
         assert!(html.contains("dam-tray:open-rpblc"));
         assert!(html.contains("class=\"tray-quit\""));
+        assert!(html.contains("aria-label=\"Quit DAM\""));
+        assert!(html.contains(">⏻</button>"));
+        assert!(html.contains(
+            "<summary aria-label=\"More\" title=\"More\"><span class=\"chevron-mark\" aria-hidden=\"true\"></span></summary>"
+        ));
+        assert!(!html.contains(">More</summary>"));
+        assert!(html.contains(
+            "body.tray-shell nav {\n      gap: 2px;\n      margin-bottom: 0;\n      overflow: visible;"
+        ));
         assert!(html.contains("dam-tray:quit"));
     }
 

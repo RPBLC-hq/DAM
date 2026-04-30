@@ -18,12 +18,14 @@ pub const ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
 pub const STATE_DIR_ENV: &str = "DAM_STATE_DIR";
 
 const STATE_FILE: &str = "daemon.json";
-const STATE_VERSION: u32 = 1;
+const STATE_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyOptions {
     pub config_path: Option<PathBuf>,
     pub listen: String,
+    pub network_mode: dam_net::CaptureMode,
+    pub trust_mode: dam_trust::TrustMode,
     pub target_name: String,
     pub provider: String,
     pub upstream: String,
@@ -38,6 +40,8 @@ impl Default for ProxyOptions {
         Self {
             config_path: None,
             listen: DEFAULT_LISTEN.to_string(),
+            network_mode: dam_net::CaptureMode::ExplicitProxy,
+            trust_mode: dam_trust::TrustMode::Disabled,
             target_name: "openai".to_string(),
             provider: "openai-compatible".to_string(),
             upstream: OPENAI_API_UPSTREAM.to_string(),
@@ -78,6 +82,12 @@ pub struct DaemonState {
     pub target_provider: Option<String>,
     pub upstream: Option<String>,
     pub started_at_unix: u64,
+    #[serde(default)]
+    pub network_mode: dam_net::CaptureMode,
+    #[serde(default)]
+    pub transparent_ai_routes: Vec<dam_net::AiRoute>,
+    #[serde(default)]
+    pub trust: dam_trust::TrustState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +192,14 @@ pub fn parse_proxy_options(args: impl IntoIterator<Item = String>) -> Result<Pro
                 i += 1;
                 options.listen = required_value(&args, i, "--listen")?.to_string();
             }
+            "--network-mode" => {
+                i += 1;
+                options.network_mode = required_value(&args, i, "--network-mode")?.parse()?;
+            }
+            "--trust-mode" => {
+                i += 1;
+                options.trust_mode = required_value(&args, i, "--trust-mode")?.parse()?;
+            }
             "--target-name" => {
                 i += 1;
                 options.target_name = required_value(&args, i, "--target-name")?.to_string();
@@ -248,6 +266,14 @@ pub fn proxy_options_to_args(options: &ProxyOptions) -> Vec<String> {
         args.extend(["--config".to_string(), config_path.display().to_string()]);
     }
     args.extend(["--listen".to_string(), options.listen.clone()]);
+    args.extend([
+        "--network-mode".to_string(),
+        options.network_mode.tag().to_string(),
+    ]);
+    args.extend([
+        "--trust-mode".to_string(),
+        options.trust_mode.tag().to_string(),
+    ]);
     args.extend(["--target-name".to_string(), options.target_name.clone()]);
     args.extend(["--provider".to_string(), options.provider.clone()]);
     args.extend(["--upstream".to_string(), options.upstream.clone()]);
@@ -291,6 +317,29 @@ pub async fn serve(
     config: dam_config::DamConfig,
     config_path: Option<PathBuf>,
 ) -> Result<(), DaemonError> {
+    serve_with_network_mode(config, config_path, dam_net::CaptureMode::ExplicitProxy).await
+}
+
+pub async fn serve_with_network_mode(
+    config: dam_config::DamConfig,
+    config_path: Option<PathBuf>,
+    network_mode: dam_net::CaptureMode,
+) -> Result<(), DaemonError> {
+    serve_with_modes(
+        config,
+        config_path,
+        network_mode,
+        dam_trust::TrustMode::Disabled,
+    )
+    .await
+}
+
+pub async fn serve_with_modes(
+    config: dam_config::DamConfig,
+    config_path: Option<PathBuf>,
+    network_mode: dam_net::CaptureMode,
+    trust_mode: dam_trust::TrustMode,
+) -> Result<(), DaemonError> {
     if let DaemonStatus::Connected(state) = daemon_status()?
         && state.pid != std::process::id()
     {
@@ -315,7 +364,7 @@ pub async fn serve(
     let local_addr = listener
         .local_addr()
         .map_err(|source| DaemonError::Bind { addr, source })?;
-    let state = state_from_config(&config, config_path, local_addr)?;
+    let state = state_from_config(&config, config_path, local_addr, network_mode, trust_mode)?;
 
     write_state(&state)?;
 
@@ -601,6 +650,8 @@ fn state_from_config(
     config: &dam_config::DamConfig,
     config_path: Option<PathBuf>,
     local_addr: SocketAddr,
+    network_mode: dam_net::CaptureMode,
+    trust_mode: dam_trust::TrustMode,
 ) -> Result<DaemonState, DaemonError> {
     let target = config.proxy.targets.first();
     Ok(DaemonState {
@@ -625,6 +676,12 @@ fn state_from_config(
         target_provider: target.map(|target| target.provider.clone()),
         upstream: target.map(|target| target.upstream.clone()),
         started_at_unix: unix_timestamp()?,
+        network_mode,
+        transparent_ai_routes: dam_net::known_ai_routes(),
+        trust: dam_trust::TrustState {
+            mode: trust_mode,
+            ..dam_trust::TrustState::default()
+        },
     })
 }
 
@@ -702,6 +759,8 @@ mod tests {
         let options = ProxyOptions {
             config_path: Some(PathBuf::from("dam.toml")),
             listen: "127.0.0.1:9000".to_string(),
+            network_mode: dam_net::CaptureMode::SystemProxy,
+            trust_mode: dam_trust::TrustMode::LocalCa,
             target_name: "xai".to_string(),
             provider: "openai-compatible".to_string(),
             upstream: "https://api.x.ai".to_string(),
@@ -715,6 +774,23 @@ mod tests {
             parse_proxy_options(proxy_options_to_args(&options)).unwrap(),
             options
         );
+    }
+
+    #[test]
+    fn parses_network_mode_option() {
+        let options =
+            parse_proxy_options(["--network-mode".to_string(), "system-proxy".to_string()])
+                .unwrap();
+
+        assert_eq!(options.network_mode, dam_net::CaptureMode::SystemProxy);
+    }
+
+    #[test]
+    fn parses_trust_mode_option() {
+        let options =
+            parse_proxy_options(["--trust-mode".to_string(), "local-ca".to_string()]).unwrap();
+
+        assert_eq!(options.trust_mode, dam_trust::TrustMode::LocalCa);
     }
 
     #[test]
@@ -771,6 +847,9 @@ mod tests {
             target_provider: Some("openai-compatible".to_string()),
             upstream: Some(OPENAI_API_UPSTREAM.to_string()),
             started_at_unix: 42,
+            network_mode: dam_net::CaptureMode::ExplicitProxy,
+            transparent_ai_routes: dam_net::known_ai_routes(),
+            trust: dam_trust::TrustState::default(),
         };
 
         write_state_to(&path, &state).unwrap();

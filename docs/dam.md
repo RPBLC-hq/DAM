@@ -62,6 +62,8 @@ DAM options:
 --api                Use Codex API-key mode through DAM (Codex only)
 --config <path>      Load DAM config file before launcher overrides
 --listen <addr>      Local proxy listen address (default: 127.0.0.1:7828)
+--network-mode <mode> Control-plane network mode: explicit_proxy, system_proxy, or tun
+--trust-mode <mode>  Control-plane trust mode: disabled or local_ca
 --target-name <name> Proxy target name (connect only)
 --provider <name>    Provider adapter: openai-compatible or anthropic (connect only)
 --upstream <url>     Provider upstream
@@ -113,7 +115,7 @@ When invoked from `npx`, `claude` and `codex` run in trial mode by default. Tria
 - Codex API-key mode is protected through the public Responses API. Codex ChatGPT-login model turns are not protected by the current launcher and are blocked.
 - Codex WebSockets are disabled in the injected provider config until DAM has a WebSocket adapter.
 - This is explicit base-URL routing, not transparent HTTPS interception.
-- TLS interception, VPN/TUN routing, and integration-profile auto-configuration are still parked.
+- TLS interception and VPN/TUN routing are still parked. `--network-mode` and `--trust-mode` are control-plane/status fields only.
 
 ## Tests
 

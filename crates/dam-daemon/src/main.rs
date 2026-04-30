@@ -29,9 +29,14 @@ async fn run() -> Result<(), String> {
 
     let options = dam_daemon::parse_proxy_options(args.into_iter().skip(1))?;
     let config = dam_daemon::proxy_config(&options)?;
-    dam_daemon::serve(config, options.config_path)
-        .await
-        .map_err(|error| format!("dam-daemon failed: {error}"))
+    dam_daemon::serve_with_modes(
+        config,
+        options.config_path,
+        options.network_mode,
+        options.trust_mode,
+    )
+    .await
+    .map_err(|error| format!("dam-daemon failed: {error}"))
 }
 
 fn usage() -> &'static str {
@@ -39,5 +44,5 @@ fn usage() -> &'static str {
 }
 
 fn usage_run() -> &'static str {
-    "Usage: dam-daemon run [--openai|--anthropic] [--config dam.toml] [--listen 127.0.0.1:7828] [--target-name NAME] [--provider openai-compatible|anthropic] [--upstream URL] [--db vault.db] [--log log.db|--no-log] [--consent-db consent.db] [--resolve-inbound|--no-resolve-inbound]"
+    "Usage: dam-daemon run [--openai|--anthropic] [--config dam.toml] [--listen 127.0.0.1:7828] [--network-mode explicit_proxy|system_proxy|tun] [--trust-mode disabled|local_ca] [--target-name NAME] [--provider openai-compatible|anthropic] [--upstream URL] [--db vault.db] [--log log.db|--no-log] [--consent-db consent.db] [--resolve-inbound|--no-resolve-inbound]"
 }

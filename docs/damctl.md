@@ -8,6 +8,7 @@ The current slice does not start or stop services. It answers these questions:
 - is this local install ready for the protected agent UX?
 - can configured failure modes reduce protection guarantees?
 - what daemon state file and process does the local lifecycle layer see?
+- what local TLS trust readiness state is visible without changing system trust?
 - are known integration profiles applied, unapplied, or modified?
 - is the local config valid for the current implementation?
 - what MCP config should an agent use for DAM?
@@ -19,6 +20,7 @@ cargo run -p damctl -- status
 cargo run -p damctl -- doctor
 cargo run -p damctl -- bypass status
 cargo run -p damctl -- daemon inspect
+cargo run -p damctl -- trust inspect
 cargo run -p damctl -- integrations check
 cargo run -p damctl -- config check
 cargo run -p damctl -- mcp config
@@ -48,6 +50,7 @@ cargo run -p damctl -- status --json
 cargo run -p damctl -- doctor --json
 cargo run -p damctl -- bypass status --json
 cargo run -p damctl -- daemon inspect --json
+cargo run -p damctl -- trust inspect --json
 cargo run -p damctl -- integrations check --json
 cargo run -p damctl -- config check --json
 ```
@@ -130,7 +133,7 @@ It reports:
 - lifecycle state: `connected`, `stale`, or `disconnected`;
 - state directory and state file path;
 - whether the recorded PID is running when a state file exists;
-- proxy URL, target, provider, upstream, local database paths, and inbound resolution setting from the state file.
+- proxy URL, target, provider, upstream, network mode, transparent AI route count, trust mode, local CA installed state, local database paths, and inbound resolution setting from the state file.
 
 Use `--state-dir PATH` to inspect a non-default state directory, for example in tests or support sessions.
 
@@ -138,6 +141,31 @@ Exit codes:
 
 - `0`: daemon state inspection completed, including disconnected and stale states.
 - `2`: command arguments failed, state path resolution failed, or the daemon state file was unreadable.
+
+## `trust inspect`
+
+`trust inspect` reports local TLS trust readiness metadata without installing certificates or changing system trust.
+
+```bash
+cargo run -p damctl -- trust inspect
+cargo run -p damctl -- trust inspect --json
+```
+
+It reports:
+
+- source: connected daemon state, stale daemon state, or default trust state;
+- trust mode;
+- platform trust-store tag;
+- whether a local CA record is installed;
+- trusted AI host count;
+- trust actions and whether each is implemented or planned.
+
+Use `--state-dir PATH` to inspect a non-default daemon state directory.
+
+Exit codes:
+
+- `0`: trust inspection completed.
+- `2`: state path resolution failed or the daemon state file was unreadable.
 
 ## `integrations check`
 

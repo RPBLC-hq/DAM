@@ -26,11 +26,13 @@ Deferred security and product-design work is tracked in [parking-lot.md](parking
 - [dam-router](dam-router.md): proxy target selection, provider classification, auth mode, and failure-mode decisions.
 - [dam-vault](dam-vault.md): local SQLite `VaultWriter` and `VaultReader` implementation.
 - [dam-log](dam-log.md): local SQLite `EventSink` implementation.
+- [dam-net](dam-net.md): network capture-mode vocabulary and transparent AI host classification for future system routing.
+- [dam-trust](dam-trust.md): TLS trust-mode vocabulary, local CA readiness contracts, and trusted AI host scope for future transparent protection.
 - [dam-redact](dam-redact.md): pure replacement application.
 - [dam-filter](dam-filter.md): CLI pipeline wiring detection, policy, vault, logs, and redaction.
 - [dam-resolve](dam-resolve.md): CLI pipeline for resolving `[kind:id]` references through `VaultReader`.
 - [dam-proxy](dam-proxy.md): first app-layer LLM proxy slice with OpenAI-compatible and Anthropic reverse proxy behavior.
-- [dam-web](dam-web.md): local web UI for Connect/profile controls, vault entries, consent grants, log events, and diagnostics.
+- [dam-web](dam-web.md): local web UI for Connect/profile controls, protected values, Allowed values, log events, and diagnostics.
 - [dam-tray](dam-tray.md): native desktop shell that hosts the Connect surface from the local web UI.
 - [dam-mcp](dam-mcp.md): MCP tools for agent-managed consent operations.
 
@@ -153,6 +155,9 @@ damctl bypass status
 
 damctl daemon inspect
   -> dam-daemon state file
+
+damctl trust inspect
+  -> dam-trust readiness and action plans
 
 damctl integrations check
   -> dam-integrations apply-state inspection

@@ -1,7 +1,7 @@
 <div align="center">
   <h1>DAM</h1>
   <h3>Data Access Mediator</h3>
-  <p><strong>A local privacy firewall for coding agents.</strong></p>
+  <p><strong>A local privacy firewall for AI agents.</strong></p>
 </div>
 
 <p align="center">
@@ -25,9 +25,9 @@
 
 ---
 
-DAM runs on your machine between a coding agent and its model provider. It detects sensitive values in outbound prompts, applies local policy and consent, replaces protected values with stable references, and stores originals in a local vault so the provider only sees what you meant to share.
+DAM is a safety layer for people using AI agents, assistants, and harnesses. It runs on your machine between AI traffic and model providers, detects sensitive values before they leave, applies local policy and consent, replaces protected values with stable references, and stores originals in a local vault so the provider only sees what you meant to share.
 
-V1 is focused on the local AI paths that matter most right now:
+V1 starts with local agent and harness paths because they are the most practical traffic to protect first:
 
 - **Harnesses and agents** through `dam connect`, which starts a local protected endpoint.
 - **Claude Code** through `ANTHROPIC_BASE_URL`.
@@ -187,7 +187,7 @@ Revoking a consent revokes every active grant for the same exact value and scope
 
 ## Web UI
 
-`dam-web` is the local admin UI for development and operator inspection:
+`dam-web` is the local control UI for connecting protection, inspecting protected values, and managing what is allowed through:
 
 ```bash
 dam web --config dam.example.toml
@@ -197,15 +197,18 @@ cargo run -p dam-web -- --config dam.example.toml
 It provides:
 
 - `/connect` for the local protection surface: select a profile, apply setup, connect, disconnect, and inspect the active endpoint.
-- `/` for vault rows, cleartext values, and row-level grant/revoke actions.
-- `/consents` for active and historical consent records.
+- `/` as the smart landing route: Connect when disconnected, Vault when connected.
+- `/vault` for protected values, relative seen times, and row-level allow/protect actions.
+- `/vault/detail/:key` for value metadata and audit history.
+- `/allowed` for values allowed through DAM protection.
+- `/consents` as a compatibility alias for `/allowed`.
 - `/logs` for non-sensitive detection, redaction, consent, and resolve events.
 - `/doctor` for local readiness checks shared with `damctl doctor`.
 - `/diagnostics` for config and proxy health checks.
 
-`/connect` uses the same active profile state as `dam profile set`. The Connect action shells out to the local `dam` binary from `PATH`; set `DAM_BIN=/path/to/dam` when running from a source tree or custom install.
+`/connect` uses the same active profile state as `dam profile set`. Without an active profile, the visible default is Protect Everything and the Connect action runs the default `dam connect` path. With an active profile, Connect runs `dam connect --apply`. The Connect action shells out to the local `dam` binary from `PATH`; set `DAM_BIN=/path/to/dam` when running from a source tree or custom install.
 
-The web UI displays vault values in clear text. Treat it as a local admin surface, not a public web app.
+The web UI displays vault values in clear text. Treat it as a local control surface, not a public web app.
 
 ## Tray App
 
@@ -271,6 +274,8 @@ DAM options:
 --api                 Use Codex API-key mode through DAM
 --config <path>       Load DAM config before launcher overrides
 --listen <addr>       Local proxy listen address, default 127.0.0.1:7828
+--network-mode <mode> Control-plane network mode: explicit_proxy, system_proxy, or tun
+--trust-mode <mode>   Control-plane trust mode: disabled or local_ca
 --target-name <name>  Proxy target name for daemon mode
 --provider <name>     Provider adapter for daemon mode
 --upstream <url>      Provider upstream
@@ -295,6 +300,7 @@ Control and diagnostics:
 cargo run -p damctl -- status
 cargo run -p damctl -- doctor --config dam.example.toml
 cargo run -p damctl -- daemon inspect
+cargo run -p damctl -- trust inspect
 cargo run -p damctl -- integrations check
 cargo run -p damctl -- config check --config dam.example.toml
 cargo run -p damctl -- mcp config --config dam.example.toml
@@ -348,6 +354,8 @@ Implemented extraction modules:
 - `dam-daemon`: background local proxy lifecycle and state file for `dam connect/status/disconnect`.
 - `dam-integrations`: known local harness profiles for `dam integrations`, `dam profile`, and `dam connect --profile`.
 - `dam-tray`: first native desktop shell hosting the Connect surface.
+- `dam-net`: network capture-mode vocabulary and transparent AI host classification for future system routing.
+- `dam-trust`: TLS trust-mode vocabulary and local CA readiness contracts for future transparent protection.
 
 Near-term product slices still to build:
 
@@ -365,8 +373,8 @@ Parked modules:
 - `dam-outbox`: durable queue for failed async remote vault/log writes.
 - `dam-detect-pipeline`: orchestration for multiple detectors, including sequential, parallel, and nested detector suites.
 - `dam-auth`: auth/token handling for remote vault/log/proxy deployments.
-- `dam-net`: future VPN/TUN/network-extension layer for selected or full-device routing.
-- `dam-trust`: future TLS interception/local CA management, if validated later.
+- `dam-net`: platform OS proxy/VPN/TUN/network-extension implementations for selected or full-device routing.
+- `dam-trust`: local CA installation/removal, certificate generation, and TLS interception implementation after the readiness contracts are proven.
 - `dam-websocket`: future WebSocket adapter after HTTP and SSE paths are stable. Needed before `dam codex` can protect Codex's ChatGPT-login `backend-api/codex/responses` transport.
 - `dam-notify`: notification module for user-visible attention events, for example consent requests or critical errors.
 

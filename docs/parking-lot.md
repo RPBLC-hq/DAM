@@ -6,6 +6,18 @@ Parking-lot items are not current product guarantees. Move an item out of this f
 
 ## Security And Privacy Design Work
 
+### Full-Device Routing And TLS Trust
+
+Current state: local protection is app-layer routing for supported AI harnesses and explicit proxy paths. `dam-net` defines capture-mode vocabulary and host-only AI traffic classification. `dam-trust` defines trust-mode and TLS readiness vocabulary. DAM does not install OS routes, create a TUN device, install a local CA, or decrypt TLS.
+
+Parked work:
+
+- Implement platform routing modules for system proxy, VPN/TUN, or network-extension routing.
+- Generate, install, remove, and rotate a local DAM CA with explicit user consent and rollback.
+- Build TLS interception for known AI hosts after trust and routing prerequisites exist.
+- Define degraded, bypass, and blocked states for transparent protection.
+- Add platform tests proving sensitive values do not leave before transparent protection is ready.
+
 ### Encrypted Vault And Key Management
 
 Current state: `dam-vault` stores tokenized originals in local SQLite as plaintext values.

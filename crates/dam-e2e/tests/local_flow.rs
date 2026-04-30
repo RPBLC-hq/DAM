@@ -756,7 +756,26 @@ async fn web_reads_vault_and_logs_populated_by_filter() {
     let base = format!("http://{addr}");
     wait_for_ok(&format!("{base}/health")).await;
 
-    let vault_html = reqwest::get(&base).await.unwrap().text().await.unwrap();
+    let no_redirect = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let home_response = no_redirect.get(&base).send().await.unwrap();
+    assert_eq!(home_response.status(), reqwest::StatusCode::SEE_OTHER);
+    assert_eq!(
+        home_response
+            .headers()
+            .get(reqwest::header::LOCATION)
+            .and_then(|value| value.to_str().ok()),
+        Some("/connect")
+    );
+
+    let vault_html = reqwest::get(format!("{base}/vault"))
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
     assert!(vault_html.contains("DAM Vault"));
     assert!(vault_html.contains("alice@example.com"));
     assert!(vault_html.contains("123-45-6789"));
