@@ -2,7 +2,7 @@
 
 Status: implemented first slice.
 
-`dam-proxy` is the first hot-path proxy module. It is an application-layer LLM endpoint / reverse proxy for selected OpenAI-compatible and Anthropic traffic. In daemon transparent mode, it also owns the first guarded HTTP/1.1 `CONNECT` TLS interception runtime for AI hosts from the merged default/config route registry when routing, trust, and consent are all ready. It does not install local CAs, install routes, create TUN devices, handle WebSockets, or rewrite arbitrary web traffic.
+`dam-proxy` is the first hot-path proxy module. It is an application-layer LLM endpoint / reverse proxy for selected OpenAI-compatible and Anthropic traffic. In daemon transparent mode, it also owns the guarded HTTP/1.1 `CONNECT` TLS interception runtime for AI hosts from the merged default/config route registry when routing, trust, and consent are all ready. It includes the MVP WebSocket adapter for Codex ChatGPT-login traffic on `chatgpt.com`. It does not install local CAs, install routes, create TUN devices, or rewrite arbitrary web traffic.
 
 ## Architecture
 
@@ -33,11 +33,11 @@ client or harness
   -> client or harness
 ```
 
-Outbound requests are the only direction that gets detection, policy, tokenization, and redaction by default. Inbound provider responses are not scanned or redacted. When `proxy.resolve_inbound` is enabled, which is opt-in, non-streaming UTF-8 responses only resolve known `[kind:id]` references that were created by outbound tokenization. Missing or unreadable references pass through unchanged.
+Outbound requests are the only direction that gets detection, policy, tokenization, and redaction by default. Inbound provider responses are not scanned or redacted. When `proxy.resolve_inbound` is enabled, which is the default, UTF-8 responses resolve known `[kind:id]` references that were created by outbound tokenization. Missing or unreadable references pass through unchanged.
 
-Provider responses with `Content-Type: text/event-stream` are streamed through without inbound reference resolution. That keeps Codex Responses API and Anthropic HTTP streaming usable before provider adapters own SSE event parsing.
+Provider responses with `Content-Type: text/event-stream` are transformed chunk by chunk when inbound reference resolution is enabled so streaming transport stays intact. With `--no-resolve-inbound`, event-stream responses pass through as streams without local restoration. Provider-aware SSE parsing and references split across stream chunks remain parked.
 
-Repeated equal outbound values reuse one tokenized reference by default within a single request. Disable that with `policy.deduplicate_replacements = false` or `DAM_POLICY_DEDUPLICATE_REPLACEMENTS=false` when preserving equality across repeated values is too revealing.
+Repeated equal outbound values reuse one tokenized reference by default, and compatible vault writers reuse an existing canonical reference for the same stored value. Disable that with `policy.deduplicate_replacements = false` or `DAM_POLICY_DEDUPLICATE_REPLACEMENTS=false` when preserving equality across repeated values is too revealing.
 
 Active consent grants let exact detected values pass through unredacted until expiry or revocation. Consent overrides `tokenize` and `redact`; it does not override `block`.
 
@@ -45,7 +45,7 @@ The current implementation keeps HTTP serving, backend opening, provider adapter
 
 Transparent system-proxy traffic reaches DAM as HTTP `CONNECT`. The standalone app-layer `dam-proxy` path still fails closed for `CONNECT`. When `dam-daemon` starts `dam-proxy` in transparent mode, `dam-proxy` uses a raw TCP CONNECT loop instead of the Axum app-layer server. That loop activates only when `dam-net` routing readiness, `dam-trust` local CA readiness, explicit consent, and `dam-intercept` adapter readiness are all `ready`.
 
-The first transparent runtime slice is intentionally narrow: one HTTP/1.1 request per CONNECT tunnel, AI hosts from the merged default/config route registry only, configured OpenAI-compatible and Anthropic targets only, no chunked request bodies, no WebSockets, and no HTTP/2. Intercepted `text/event-stream` responses pass through as HTTP/1.1 chunked responses without inbound reference resolution. Unsupported or not-ready traffic fails closed rather than becoming an opaque tunnel.
+The first transparent runtime slice is intentionally narrow: HTTP/1.1 requests over CONNECT, AI hosts from the merged default/config route registry only, configured OpenAI-compatible and Anthropic targets only, no chunked request bodies, and no HTTP/2. Intercepted `text/event-stream` responses are transformed chunk by chunk for inbound reference resolution when restoration is enabled. WebSocket upgrade traffic is supported for the Codex ChatGPT-login path: extension negotiation is stripped, unfragmented client text frames are protected, and non-text frames pass through unchanged. Unsupported or not-ready traffic fails closed rather than becoming an opaque tunnel.
 
 Supported provider IDs are:
 
@@ -77,7 +77,7 @@ cargo run -p dam-proxy -- \
   --no-api-key-env
 ```
 
-The local `dam claude` launcher uses this pass-through auth mode by default. `dam codex --api` also uses pass-through auth from Codex's `OPENAI_API_KEY` custom provider mode. `dam codex` without `--api` fails closed until Codex's current ChatGPT-login model transport can be protected.
+Local proxy/interception flows use this pass-through auth mode by default. The legacy `dam claude`, `dam codex`, and `dam codex --api` one-shot launchers fail closed because DAM no longer protects by rewriting provider API base URLs or Codex provider config.
 
 To leave DAM references unresolved on the inbound response path:
 
@@ -121,7 +121,7 @@ enabled = true
 listen = "127.0.0.1:7828"
 mode = "reverse_proxy"
 default_failure_mode = "bypass_on_error"
-resolve_inbound = false
+resolve_inbound = true
 
 [[proxy.targets]]
 name = "openai"
@@ -164,7 +164,7 @@ Covered cases:
 
 - redacted request forwarding to fake upstream;
 - inbound response resolution for DAM references in non-streaming responses;
-- `text/event-stream` response pass-through without inbound resolution;
+- `text/event-stream` response chunk transformation with inbound reference resolution enabled;
 - disabled inbound response resolution leaving DAM references intact;
 - vault writes and log writes during forwarding;
 - bypass on invalid UTF-8 with `bypass_on_error`;
@@ -175,7 +175,7 @@ Covered cases:
 - Anthropic `x-api-key` passthrough and configured key replacement;
 - transparent `CONNECT` requests failing closed without provider egress;
 - transparent HTTP/1.1 CONNECT/TLS requests completing a local-CA TLS handshake and forwarding only protected request bodies to the fake upstream;
-- transparent raw HTTP `text/event-stream` responses forwarded as chunked pass-through without inbound resolution;
+- transparent raw HTTP `text/event-stream` responses resolved before reaching the client when inbound resolution is enabled;
 - hop-by-hop and `Connection`-listed header stripping;
 - upstream connection failure producing `provider_down`;
 - `dam-api` `ProxyReport` JSON for health and DAM-owned failure responses;
@@ -189,9 +189,9 @@ cargo test -p dam-proxy
 
 ## Parked
 
-- HTTP/2, WebSocket, and multi-request transparent tunnel handling.
+- HTTP/2 and multi-request transparent tunnel handling.
 - Local CA management and OS route installation.
 - VPN/TUN/network-extension routing.
-- WebSocket adapters.
+- fragmented/compressed WebSocket payload protection beyond the Codex MVP text-frame adapter.
 - Arbitrary web traffic adapters.
-- Streaming/SSE response reference resolution.
+- provider-aware streaming/SSE response redetection and boundary-aware reference resolution.

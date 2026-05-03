@@ -348,9 +348,6 @@ mod macos {
         let dam_bin_for_connect = dam_bin.clone();
         let data_paths_for_connect = data_paths.clone();
         let config_path_for_connect = cli.config_path.clone();
-        let dam_bin_for_quit = dam_bin.clone();
-        let data_paths_for_quit = data_paths.clone();
-
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Wait;
 
@@ -396,9 +393,6 @@ mod macos {
                     }
                 }
                 Event::UserEvent(UserEvent::QuitRequested) => {
-                    if let Err(error) = disconnect_dam(&dam_bin_for_quit, &data_paths_for_quit) {
-                        eprintln!("{error}");
-                    }
                     web_child.stop();
                     *control_flow = ControlFlow::Exit;
                 }
@@ -549,7 +543,7 @@ mod macos {
             dam_bin,
             data_paths,
             &network_install_args(config_path),
-            "install system proxy routing",
+            "install Network Extension routing",
         )?;
         run_dam_command(
             dam_bin,
@@ -573,7 +567,7 @@ mod macos {
     fn network_install_args(config_path: Option<&PathBuf>) -> Vec<String> {
         let mut args = vec![
             "network".to_string(),
-            "install-system-proxy".to_string(),
+            "install-network-extension".to_string(),
             "--yes".to_string(),
         ];
         if let Some(config_path) = config_path {
@@ -602,7 +596,7 @@ mod macos {
             "--consent-db".to_string(),
             data_paths.consent_path.display().to_string(),
             "--network-mode".to_string(),
-            "system_proxy".to_string(),
+            "tun".to_string(),
             "--trust-mode".to_string(),
             "local_ca".to_string(),
         ]);
@@ -723,98 +717,6 @@ mod macos {
             .next()
             .filter(|authority| !authority.is_empty());
         authority == Some(allowed_authority)
-    }
-
-    fn network_remove_args() -> Vec<String> {
-        vec![
-            "network".to_string(),
-            "remove-system-proxy".to_string(),
-            "--yes".to_string(),
-        ]
-    }
-
-    fn disconnect_dam(dam_bin: &PathBuf, data_paths: &DataPaths) -> Result<(), String> {
-        run_dam_command(
-            dam_bin,
-            data_paths,
-            &network_remove_args(),
-            "restore system proxy routing",
-        )?;
-        for profile_id in profiles_with_rollback(dam_bin, data_paths)? {
-            run_dam_command(
-                dam_bin,
-                data_paths,
-                &[
-                    "integrations".to_string(),
-                    "rollback".to_string(),
-                    profile_id,
-                ],
-                "restore active profile setup",
-            )?;
-        }
-        let status = Command::new(dam_bin)
-            .arg("disconnect")
-            .env(DAM_STATE_DIR_ENV, &data_paths.state_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()
-            .map_err(|error| format!("failed to run `dam disconnect`: {error}"))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("`dam disconnect` exited with {status}"))
-        }
-    }
-
-    fn profiles_with_rollback(
-        dam_bin: &PathBuf,
-        data_paths: &DataPaths,
-    ) -> Result<Vec<String>, String> {
-        let output = Command::new(dam_bin)
-            .arg("profile")
-            .arg("status")
-            .env(DAM_STATE_DIR_ENV, &data_paths.state_dir)
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|error| format!("failed to inspect active profile: {error}"))?;
-        if !output.status.success() {
-            return Err(command_error(
-                "inspect active profile",
-                &["profile".to_string(), "status".to_string()],
-                &output,
-            ));
-        }
-        Ok(parse_profiles_with_rollback(&String::from_utf8_lossy(
-            &output.stdout,
-        )))
-    }
-
-    fn parse_profiles_with_rollback(output: &str) -> Vec<String> {
-        let profiles = output
-            .lines()
-            .filter_map(|line| line.strip_prefix("rollback_profile: "))
-            .map(str::trim)
-            .filter(|profile| !profile.is_empty())
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
-        if !profiles.is_empty() {
-            return profiles;
-        }
-        let profile = output
-            .lines()
-            .find_map(|line| line.strip_prefix("active_profile: "))
-            .map(str::trim)
-            .filter(|profile| !profile.is_empty() && *profile != "none");
-        let rollback_available = output
-            .lines()
-            .find_map(|line| line.strip_prefix("rollback: "))
-            .map(str::trim)
-            == Some("available");
-        match (profile, rollback_available) {
-            (Some(profile), true) => vec![profile.to_string()],
-            _ => Vec::new(),
-        }
     }
 
     fn generate_tray_post_token() -> Result<String, String> {
@@ -971,46 +873,8 @@ mod macos {
                 "--consent-db",
                 "/tmp/dam-state/consent.db"
             ));
-            assert!(arg_pair_exists(&args, "--network-mode", "system_proxy"));
+            assert!(arg_pair_exists(&args, "--network-mode", "tun"));
             assert!(arg_pair_exists(&args, "--trust-mode", "local_ca"));
-        }
-
-        #[test]
-        fn native_disconnect_removes_system_proxy_before_daemon_stop() {
-            assert_eq!(
-                network_remove_args(),
-                vec![
-                    "network".to_string(),
-                    "remove-system-proxy".to_string(),
-                    "--yes".to_string(),
-                ]
-            );
-        }
-
-        #[test]
-        fn native_disconnect_rolls_back_applied_enabled_profiles() {
-            assert_eq!(
-                parse_profiles_with_rollback(
-                    "active_profile: claude-code\napply_state: applied\nrollback: available\n"
-                ),
-                vec!["claude-code".to_string()]
-            );
-            assert_eq!(
-                parse_profiles_with_rollback(
-                    "active_profile: claude-code\napply_state: needs_apply\nrollback: unavailable\n"
-                ),
-                Vec::<String>::new()
-            );
-            assert_eq!(
-                parse_profiles_with_rollback("active_profile: none\n"),
-                Vec::<String>::new()
-            );
-            assert_eq!(
-                parse_profiles_with_rollback(
-                    "enabled_profiles: codex-api, claude-code\nrollback_profile: codex-api\nrollback_profile: claude-code\n"
-                ),
-                vec!["codex-api".to_string(), "claude-code".to_string()]
-            );
         }
 
         #[test]

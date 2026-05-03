@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
+mod network_extension;
+
+pub use network_extension::*;
+
 const NETWORK_DIR: &str = "network/macos-system-proxy";
 const ROLLBACK_FILE: &str = "latest.json";
 const PAC_FILE: &str = "dam-ai-proxy.pac";
@@ -355,6 +359,10 @@ fn install_plan_for_hosts(
         let services = read_rollback(&paths)?
             .map(|record| record.services)
             .unwrap_or_default();
+        let desired_pac = pac_content_for_hosts(proxy_url, &ai_hosts);
+        let pac_needs_update = fs::read_to_string(&paths.pac_path)
+            .map(|current| current != desired_pac)
+            .unwrap_or(true);
         return Ok(MacosSystemProxyPlan {
             action: MacosSystemProxyAction::Install,
             support: support(),
@@ -366,8 +374,12 @@ fn install_plan_for_hosts(
             commands: Vec::new(),
             requires_admin: false,
             changes_system_routes: true,
-            can_execute: false,
-            message: "macOS system proxy routing is already installed by DAM".to_string(),
+            can_execute: pac_needs_update && support() == MacosSystemProxySupport::Implemented,
+            message: if pac_needs_update {
+                "will update DAM macOS PAC routing to the current all-traffic scope".to_string()
+            } else {
+                "macOS system proxy routing is already installed by DAM".to_string()
+            },
         });
     }
 
@@ -388,7 +400,7 @@ fn install_plan_for_hosts(
         requires_admin: false,
         changes_system_routes: true,
         can_execute: support() == MacosSystemProxySupport::Implemented,
-        message: "will route known AI hosts through DAM using a macOS PAC system proxy".to_string(),
+        message: "will route proxy-capable HTTP and HTTPS traffic through DAM using a macOS PAC system proxy".to_string(),
     })
 }
 
@@ -549,18 +561,13 @@ fn pac_content_for_hosts(proxy_url: &str, ai_hosts: &[String]) -> String {
         .trim_start_matches("http://")
         .trim_start_matches("https://")
         .trim_end_matches('/');
-    let host_checks = normalized_ai_hosts(ai_hosts)
+    let protected_host_comment = normalized_ai_hosts(ai_hosts)
         .into_iter()
-        .map(|host| format!("host === \"{host}\""))
+        .map(|host| format!("// protected-host: {host}"))
         .collect::<Vec<_>>()
-        .join(" || ");
-    let host_checks = if host_checks.is_empty() {
-        "false".to_string()
-    } else {
-        host_checks
-    };
+        .join("\n");
     format!(
-        "function FindProxyForURL(url, host) {{\n  host = host.toLowerCase();\n  if ({host_checks}) {{\n    return \"PROXY {proxy}\";\n  }}\n  return \"DIRECT\";\n}}\n"
+        "{protected_host_comment}\nfunction FindProxyForURL(url, host) {{\n  host = host.toLowerCase();\n  if (isPlainHostName(host) || host === \"localhost\" || host === \"::1\" || shExpMatch(host, \"*.local\")) {{\n    return \"DIRECT\";\n  }}\n  if (shExpMatch(host, \"127.*\") || shExpMatch(host, \"10.*\") || shExpMatch(host, \"192.168.*\") || shExpMatch(host, \"169.254.*\")) {{\n    return \"DIRECT\";\n  }}\n  if (shExpMatch(host, \"172.16.*\") || shExpMatch(host, \"172.17.*\") || shExpMatch(host, \"172.18.*\") || shExpMatch(host, \"172.19.*\") || shExpMatch(host, \"172.2?.*\") || shExpMatch(host, \"172.30.*\") || shExpMatch(host, \"172.31.*\")) {{\n    return \"DIRECT\";\n  }}\n  if (url.substring(0, 5) === \"http:\" || url.substring(0, 6) === \"https:\") {{\n    return \"PROXY {proxy}; DIRECT\";\n  }}\n  return \"DIRECT\";\n}}\n"
     )
 }
 
@@ -757,13 +764,15 @@ mod tests {
     }
 
     #[test]
-    fn pac_routes_only_known_ai_hosts() {
+    fn pac_routes_proxyable_http_traffic_with_local_bypass() {
         let pac = pac_content("http://127.0.0.1:7828");
 
-        assert!(pac.contains("host === \"api.openai.com\""));
+        assert!(pac.contains("protected-host: api.openai.com"));
         assert!(pac.contains("PROXY 127.0.0.1:7828"));
         assert!(pac.contains("DIRECT"));
-        assert!(!pac.contains("example.com"));
+        assert!(pac.contains("url.substring(0, 5) === \"http:\""));
+        assert!(pac.contains("host === \"localhost\""));
+        assert!(pac.contains("shExpMatch(host, \"192.168.*\")"));
     }
 
     #[test]
@@ -776,18 +785,18 @@ mod tests {
             ],
         );
 
-        assert!(pac.contains("host === \"api.enterprise-ai.example\""));
+        assert!(pac.contains("protected-host: api.enterprise-ai.example"));
         assert_eq!(pac.matches("api.enterprise-ai.example").count(), 1);
         assert!(!pac.contains("api.openai.com"));
     }
 
     #[test]
     fn file_url_percent_encodes_paths_for_pac_settings() {
-        let path = PathBuf::from("/Users/Alexy Boyer/.dam/network/macos-system-proxy/dam ai.pac");
+        let path = PathBuf::from("/Users/DAM Tester/.dam/network/macos-system-proxy/dam ai.pac");
 
         assert_eq!(
             file_url(&path),
-            "file:///Users/Alexy%20Boyer/.dam/network/macos-system-proxy/dam%20ai.pac"
+            "file:///Users/DAM%20Tester/.dam/network/macos-system-proxy/dam%20ai.pac"
         );
     }
 

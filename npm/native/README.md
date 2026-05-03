@@ -7,6 +7,7 @@ npm/native/darwin-arm64/dam
 npm/native/darwin-arm64/dam-web
 npm/native/darwin-arm64/dam-proxy
 npm/native/darwin-arm64/dam-mcp
+npm/native/darwin-arm64/dam-macos-ne-helper
 ```
 
 Repeat the same binary names under each supported `platform-arch` directory.

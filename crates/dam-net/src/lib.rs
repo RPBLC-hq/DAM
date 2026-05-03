@@ -2,6 +2,12 @@ use std::{fmt, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 
+mod capture;
+mod protocol;
+
+pub use capture::*;
+pub use protocol::*;
+
 pub const OPENAI_COMPATIBLE_PROVIDER: &str = "openai-compatible";
 pub const ANTHROPIC_PROVIDER: &str = "anthropic";
 
@@ -78,8 +84,8 @@ impl CapturePlan {
                 support: CaptureSupport::Implemented,
                 requires_admin: false,
                 installs_system_routes: false,
-                tls_visibility: TlsVisibility::NotRequired,
-                message: "selected AI clients must point at DAM's local app-layer endpoint"
+                tls_visibility: TlsVisibility::RequiresInterception,
+                message: "selected AI clients must use DAM as their local HTTP(S) proxy"
                     .to_string(),
             },
             CaptureMode::SystemProxy => Self {
@@ -390,8 +396,8 @@ pub fn transparent_route_capture_readiness(
     let (support, readiness, message) = match mode {
         CaptureMode::ExplicitProxy => (
             plan.support,
-            RouteCaptureReadiness::NotTransparentMode,
-            "explicit proxy mode only protects clients configured to use DAM".to_string(),
+            RouteCaptureReadiness::Ready,
+            "explicit proxy routing is active for clients configured to use DAM".to_string(),
         ),
         CaptureMode::SystemProxy if system_proxy_active => (
             CaptureSupport::Implemented,
@@ -573,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_proxy_is_not_transparent_routing_ready() {
+    fn explicit_proxy_is_ready_for_configured_clients() {
         let readiness = transparent_capture_readiness_for_known_ai_routes(
             CaptureMode::ExplicitProxy,
             false,
@@ -584,7 +590,7 @@ mod tests {
         assert!(
             readiness
                 .iter()
-                .all(|route| route.readiness == RouteCaptureReadiness::NotTransparentMode)
+                .all(|route| route.readiness == RouteCaptureReadiness::Ready)
         );
     }
 

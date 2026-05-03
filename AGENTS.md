@@ -27,6 +27,15 @@ When editing a module under `crates/<module>`:
 - Update `../RPBLC.Architecture` when an agreed design decision, implemented behavior, public interface, config key, failure mode, pipeline shape, or module boundary changes.
 - Do not introduce direct cross-module calls that bypass `dam-core` contracts.
 
+## File Division
+
+Do not grow single-file libraries for non-trivial modules. When a crate adds meaningful behavior, split it into focused files with explicit responsibilities, for example `config`, `state`, `platform`, `routing`, `server`, `errors`, and `tests` where those boundaries fit the crate.
+
+- Keep `src/lib.rs` as the public contract/re-export surface, not as the implementation dumping ground.
+- Keep `src/main.rs` as command wiring and process startup, not business logic.
+- Prefer small module files with narrow ownership over broad "manager" files.
+- Update the matching docs when module boundaries change so future agents can find the implementation quickly.
+
 ## Architecture Sync
 
 `../RPBLC.Architecture` is the authoritative contract repo. Keep it current when design decisions are agreed in discussion and when behavior is implemented in code.

@@ -102,6 +102,17 @@ pub struct VaultRecord {
     pub value: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VaultWriteOptions {
+    pub deduplicate: bool,
+}
+
+impl Default for VaultWriteOptions {
+    fn default() -> Self {
+        Self { deduplicate: true }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct VaultWriteError {
@@ -117,7 +128,15 @@ impl VaultWriteError {
 }
 
 pub trait VaultWriter: Send + Sync {
-    fn write(&self, record: &VaultRecord) -> Result<(), VaultWriteError>;
+    fn write(&self, record: &VaultRecord) -> Result<Reference, VaultWriteError> {
+        self.write_with_options(record, VaultWriteOptions::default())
+    }
+
+    fn write_with_options(
+        &self,
+        record: &VaultRecord,
+        options: VaultWriteOptions,
+    ) -> Result<Reference, VaultWriteError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -651,8 +670,11 @@ pub fn build_replacement_plan_from_decisions_with_options(
                     value: detection.value.clone(),
                 };
 
-                match vault.write(&record) {
-                    Ok(()) => {
+                let write_options = VaultWriteOptions {
+                    deduplicate: options.deduplicate_replacements,
+                };
+                match vault.write_with_options(&record, write_options) {
+                    Ok(reference) => {
                         if let Some(key) = dedup_key {
                             dedup_cache
                                 .insert(key, CachedReplacement::Tokenized(reference.clone()));
@@ -952,9 +974,13 @@ mod tests {
     }
 
     impl VaultWriter for RecordingVault {
-        fn write(&self, record: &VaultRecord) -> Result<(), VaultWriteError> {
+        fn write_with_options(
+            &self,
+            record: &VaultRecord,
+            _options: VaultWriteOptions,
+        ) -> Result<Reference, VaultWriteError> {
             self.records.lock().unwrap().push(record.clone());
-            Ok(())
+            Ok(record.reference.clone())
         }
     }
 
@@ -973,8 +999,28 @@ mod tests {
     struct FailingVault;
 
     impl VaultWriter for FailingVault {
-        fn write(&self, _record: &VaultRecord) -> Result<(), VaultWriteError> {
+        fn write_with_options(
+            &self,
+            _record: &VaultRecord,
+            _options: VaultWriteOptions,
+        ) -> Result<Reference, VaultWriteError> {
             Err(VaultWriteError::new("vault unavailable"))
+        }
+    }
+
+    struct CanonicalVault {
+        reference: Reference,
+        records: Mutex<Vec<VaultRecord>>,
+    }
+
+    impl VaultWriter for CanonicalVault {
+        fn write_with_options(
+            &self,
+            record: &VaultRecord,
+            _options: VaultWriteOptions,
+        ) -> Result<Reference, VaultWriteError> {
+            self.records.lock().unwrap().push(record.clone());
+            Ok(self.reference.clone())
         }
     }
 
@@ -1038,6 +1084,23 @@ mod tests {
             plan.replacements[1].reference
         );
         assert_eq!(plan.replacements[0].text, plan.replacements[1].text);
+    }
+
+    #[test]
+    fn replacement_plan_uses_canonical_reference_returned_by_vault() {
+        let canonical = Reference::generate(SensitiveType::Email);
+        let vault = CanonicalVault {
+            reference: canonical.clone(),
+            records: Mutex::new(Vec::new()),
+        };
+        let detections = [detection(SensitiveType::Email, "alice@example.com", 6, 23)];
+
+        let plan = build_replacement_plan(&detections, &vault);
+
+        assert_eq!(plan.tokenized_count(), 1);
+        assert_eq!(plan.replacements[0].reference, Some(canonical.clone()));
+        assert_eq!(plan.replacements[0].text, canonical.display());
+        assert_eq!(vault.records.lock().unwrap().len(), 1);
     }
 
     #[test]

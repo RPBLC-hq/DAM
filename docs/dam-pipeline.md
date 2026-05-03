@@ -40,7 +40,7 @@ The crate does not:
 - open SQLite databases;
 - create HTTP responses;
 - scan or transform non-UTF-8 bytes;
-- resolve streaming/SSE responses.
+- incrementally resolve streaming/SSE responses.
 
 Those responsibilities stay with caller, provider, or router crates.
 
@@ -48,7 +48,7 @@ OpenAI-compatible forwarding lives in `dam-provider-openai`, Anthropic forwardin
 
 ## Current Consumers
 
-- `dam-proxy` uses `dam-pipeline` for outbound request body protection and opt-in non-streaming inbound reference resolution.
+- `dam-proxy` uses `dam-pipeline` for outbound request body protection and default inbound reference resolution. Streaming/SSE bodies are transformed chunk by chunk before this pipeline has provider-aware event parsing.
 
 `dam-filter` still owns its CLI-specific pipeline wiring because it also owns report emission, exit codes, and file/stdin handling.
 

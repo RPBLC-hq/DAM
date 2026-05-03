@@ -28,7 +28,7 @@ Policy action effects:
 | `allow` | no | unchanged |
 | `block` | no | no transformed output |
 
-By default, replacement planning deduplicates repeated equal `(kind, action, value)` matches within one plan. Repeated tokenized values reuse the same `[kind:id]` reference and require one vault write. Set `policy.deduplicate_replacements = false` to generate separate references for each occurrence when equality leakage is a concern.
+By default, replacement planning deduplicates repeated equal `(kind, action, value)` matches within one plan and asks the vault writer to reuse an existing canonical reference for the same stored value. Repeated tokenized values therefore reuse the same `[kind:id]` reference when the vault writer supports value deduplication. Set `policy.deduplicate_replacements = false` to generate separate references for each occurrence when equality leakage is a concern.
 
 Vault write failure while tokenizing uses redact-only fallback:
 
@@ -42,7 +42,13 @@ Implementations plug in through traits:
 
 ```rust
 pub trait VaultWriter: Send + Sync {
-    fn write(&self, record: &VaultRecord) -> Result<(), VaultWriteError>;
+    fn write(&self, record: &VaultRecord) -> Result<Reference, VaultWriteError>;
+
+    fn write_with_options(
+        &self,
+        record: &VaultRecord,
+        options: VaultWriteOptions,
+    ) -> Result<Reference, VaultWriteError>;
 }
 
 pub trait VaultReader: Send + Sync {

@@ -6,14 +6,16 @@ The architecture rule is: modules stay replaceable, and cross-module coordinatio
 
 Deferred security and product-design work is tracked in [parking-lot.md](parking-lot.md). Parking-lot items are not current product guarantees.
 
+DAM is designed for macOS, Linux, and Windows. Platform-specific routing, trust, tray, and packaging implementations may land in staged slices, but partial or delayed platform behavior must be tracked in [parking-lot.md](parking-lot.md) or the relevant module parking-lot doc.
+
 ## Modules
 
 - [dam-core](dam-core.md): shared contracts, reference generation, replacement planning, policy actions, log event shape.
-- [dam](dam.md): local UX entry point for `connect/status/disconnect`, Claude Code, explicit Codex API-key mode, and the npm wrapper.
+- [dam](dam.md): local UX entry point for `connect/status/disconnect`, integration profiles, fail-closed legacy one-shot launchers, and the npm wrapper.
 - [dam-api](dam-api.md): shared JSON/report/status DTOs for CLIs, proxy status, health, and future automation.
 - [dam-config](dam-config.md): layered runtime config for defaults, TOML, env, and CLI overrides.
 - [dam-consent](dam-consent.md): exact-value passthrough grants with TTL and revocation.
-- [dam-daemon](dam-daemon.md): background local proxy lifecycle, state file, and `dam connect/status/disconnect` support.
+- [dam-daemon](dam-daemon.md): background local proxy lifecycle, pause/resume protection state, state file, and `dam connect/status/disconnect` support.
 - [dam-diagnostics](dam-diagnostics.md): shared local readiness checks for `damctl doctor` and `dam-web /doctor`.
 - [dam-intercept](dam-intercept.md): guarded TLS interception activation contract for transparent AI routes.
 - [dam-integrations](dam-integrations.md): known local harness profiles, enabled app state, and legacy active profile state for `dam integrations`, `dam profile`, and `dam connect --profile`.
@@ -27,13 +29,13 @@ Deferred security and product-design work is tracked in [parking-lot.md](parking
 - [dam-router](dam-router.md): proxy target selection, provider classification, auth mode, and failure-mode decisions.
 - [dam-vault](dam-vault.md): local SQLite `VaultWriter` and `VaultReader` implementation.
 - [dam-log](dam-log.md): local SQLite `EventSink` implementation.
-- [dam-net](dam-net.md): network capture-mode vocabulary, routing readiness, and transparent AI host classification for future system routing.
-- [dam-net-macos](dam-net-macos.md): macOS PAC system-proxy install/remove with rollback for built-in and configured AI host routing.
+- [dam-net](dam-net.md): network capture-mode vocabulary, routing readiness, capture backend status, protocol adapter status, and selected AI host classification.
+- [dam-net-macos](dam-net-macos.md): macOS PAC system-proxy install/remove plus Network Extension capture planning/status for `tun`.
 - [dam-trust](dam-trust.md): TLS trust-mode vocabulary, local CA artifacts, leaf issuance, macOS trust install/remove, readiness contracts, and trusted AI host scope for transparent protection.
 - [dam-redact](dam-redact.md): pure replacement application.
 - [dam-filter](dam-filter.md): CLI pipeline wiring detection, policy, vault, logs, and redaction.
 - [dam-resolve](dam-resolve.md): CLI pipeline for resolving `[kind:id]` references through `VaultReader`.
-- [dam-proxy](dam-proxy.md): app-layer LLM proxy plus daemon-gated HTTP/1.1 CONNECT/TLS runtime for ready transparent AI routes.
+- [dam-proxy](dam-proxy.md): app-layer LLM proxy plus daemon-gated HTTP/1.1 CONNECT/TLS and WebSocket runtime for ready transparent AI routes.
 - [dam-web](dam-web.md): local web UI for setup-plan-driven Connect/app controls, Settings, protected values, Allowed values, log events, and diagnostics.
 - [dam-tray](dam-tray.md): native desktop shell that hosts the Connect surface from the local web UI.
 - [dam-mcp](dam-mcp.md): MCP tools for agent-managed consent operations.
@@ -57,7 +59,7 @@ dam-core also builds non-sensitive log events
   -> dam-log when enabled
 ```
 
-Replacement planning deduplicates repeated equal values by default within one run/request. Set `policy.deduplicate_replacements = false` to issue a distinct reference per occurrence when repeated-reference equality is too revealing.
+Replacement planning deduplicates repeated equal values by default, and compatible vault writers reuse an existing canonical reference for the same stored value. Set `policy.deduplicate_replacements = false` to issue a distinct reference per occurrence when repeated-reference equality is too revealing.
 
 ## Resolve Pipeline
 
@@ -102,22 +104,21 @@ provider response
   -> LLM client
 ```
 
-Proxy defaults are directional: outbound requests are redacted before the provider sees them; inbound responses are not redacted. Inbound DAM reference resolution is disabled by default for non-streaming responses and can be enabled with `proxy.resolve_inbound = true` when the caller deliberately wants local restoration. `text/event-stream` responses pass through as streams without inbound reference resolution.
+Proxy defaults are directional: outbound requests are redacted before the provider sees them; inbound responses are not redetected or redacted. Inbound DAM reference resolution is enabled by default so known local references are restored before the client sees the response. Set `proxy.resolve_inbound = false` to leave references unresolved. `text/event-stream` responses are transformed chunk by chunk when restoration is enabled so streaming transport stays intact; provider-aware SSE parsing remains parked.
 
 `dam-pipeline`, `dam-provider-openai`, `dam-provider-anthropic`, and `dam-router` have been extracted from the first compact proxy implementation.
 
 ## Control And Diagnostics
 
 ```text
-dam claude
-  -> embedded dam-proxy
-  -> tool base URL override
-  -> pass-through provider auth
+dam claude / dam codex / dam codex --api
+  -> fail closed
+  -> no provider base URL or Codex provider override
 
 dam connect
   -> background daemon process
   -> dam-proxy
-  -> explicit local endpoint for AI harnesses
+  -> HTTP(S) proxy / system-proxy route for AI harnesses
   -> pass-through provider auth
 
 dam status / dam disconnect
@@ -129,18 +130,7 @@ dam profile
 
 dam integrations list/show/apply/rollback
   -> dam-integrations profile catalog
-  -> local base URL and harness setup snippets
-
-npx @rpblc/dam claude
-  -> npm wrapper trial mode
-  -> temporary vault/log/consent stores
-  -> embedded dam-proxy
-
-dam codex --api
-  -> embedded dam-proxy
-  -> Codex custom provider override
-  -> pass-through OPENAI_API_KEY auth
-  -> Responses API HTTP/SSE path
+  -> local proxy URL and harness setup snippets
 
 damctl status
   -> dam-proxy /health
@@ -165,7 +155,10 @@ damctl network inspect
   -> dam-net route readiness
 
 dam network install-system-proxy / remove-system-proxy
-  -> dam-net-macos macOS PAC routing with rollback
+  -> dam-net-macos macOS all-proxyable HTTP/HTTPS PAC routing with rollback
+
+dam network install-network-extension / remove-network-extension / status
+  -> dam-net-macos macOS Network Extension capture state for tun mode
 
 damctl trust inspect
   -> dam-trust readiness and action plans
@@ -182,7 +175,7 @@ damctl config check
 
 dam-web /connect
   -> dam-integrations enabled profiles and apply-state inspection
-  -> dam connect/disconnect control
+  -> dam connect/disconnect pause-resume control
 
 dam-tray
   -> native desktop shell

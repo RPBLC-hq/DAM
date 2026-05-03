@@ -13,13 +13,13 @@ protected HTTP request body
   -> forward caller x-api-key auth or inject configured upstream x-api-key
   -> send to Anthropic upstream with redirects disabled and timeout bounded
   -> strip hop-by-hop and Connection-listed response headers
-  -> stream text/event-stream responses through unchanged
+  -> stream text/event-stream responses through, optionally transforming each chunk
   -> pass non-streaming response bytes to the caller for optional local transform
 ```
 
-For local `dam claude` flows, DAM normally uses caller-owned provider auth. When a proxy target owns an upstream API key, this crate replaces inbound `x-api-key` and drops inbound `Authorization` before forwarding. This follows Anthropic's API auth model, which uses the `x-api-key` request header.
+For local proxy/interception flows, DAM normally uses caller-owned provider auth. When a proxy target owns an upstream API key, this crate replaces inbound `x-api-key` and drops inbound `Authorization` before forwarding. This follows Anthropic's API auth model, which uses the `x-api-key` request header.
 
-Non-streaming response bytes are handed back through a caller-provided transform hook. `dam-proxy` uses that hook only for opt-in DAM reference resolution through `dam-pipeline`.
+Response bytes are handed back through a caller-provided transform hook. `dam-proxy` uses that hook for default DAM reference resolution through `dam-pipeline`. Streaming responses use the same hook chunk by chunk only when the caller enables streaming response transformation.
 
 ## Boundaries
 
@@ -29,7 +29,7 @@ The crate does not:
 - choose proxy targets or failure modes;
 - open local vault, consent, or log backends;
 - parse Anthropic JSON request/response shapes into typed DTOs;
-- parse SSE events or transform streaming responses;
+- parse SSE events or transform references split across stream chunks;
 - implement WebSocket, OpenAI, or arbitrary web adapters.
 
 Those responsibilities stay in `dam-proxy`, `dam-pipeline`, or future provider/router modules.
@@ -45,11 +45,11 @@ Tests use fake local upstream servers and do not call real OpenAI, Anthropic, Op
 Covered cases:
 
 - base-path, request-path, and query preservation;
-- non-streaming response body transform hook;
+- response body transform hook;
 - caller `x-api-key` passthrough when DAM does not inject a target key;
 - configured upstream API key replacing inbound `x-api-key` and dropping inbound `Authorization`;
 - hop-by-hop and `Connection`-listed header stripping;
-- `text/event-stream` passthrough without body transformation.
+- `text/event-stream` passthrough without body transformation when streaming transformation is disabled.
 
 Run:
 

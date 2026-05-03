@@ -86,3 +86,4 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring"]
 toml = "0.8"
 toml_edit = "0.22"
 uuid = { version = "1", features = ["v4"] }
+webpki-roots = "1.0.7"

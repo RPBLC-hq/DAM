@@ -2,7 +2,7 @@ use axum::{
     body::{Body, Bytes},
     http::{HeaderMap, Method, Response, Uri, header},
 };
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use reqwest::Url;
 use std::time::Duration;
 
@@ -35,6 +35,7 @@ pub struct ForwardRequest<'a> {
     pub headers: HeaderMap,
     pub body: Bytes,
     pub target_api_key: Option<&'a str>,
+    pub transform_streaming_response: bool,
 }
 
 impl OpenAiProvider {
@@ -51,10 +52,10 @@ impl OpenAiProvider {
     pub async fn forward<F>(
         &self,
         request: ForwardRequest<'_>,
-        transform_non_streaming_body: F,
+        transform_response_body: F,
     ) -> Result<Response<Body>, OpenAiProviderError>
     where
-        F: FnOnce(Bytes) -> Bytes,
+        F: Fn(Bytes) -> Bytes + Clone + Send + Sync + 'static,
     {
         let url = upstream_url(request.upstream, &request.uri)?;
         let method = reqwest::Method::from_bytes(request.method.as_str().as_bytes())
@@ -98,6 +99,12 @@ impl OpenAiProvider {
             let stream = response
                 .bytes_stream()
                 .map_err(|error| std::io::Error::other(error.without_url().to_string()));
+            let stream = if request.transform_streaming_response {
+                let transform = transform_response_body.clone();
+                stream.map_ok(transform).left_stream()
+            } else {
+                stream.right_stream()
+            };
 
             return builder
                 .body(Body::from_stream(stream))
@@ -108,7 +115,7 @@ impl OpenAiProvider {
             .bytes()
             .await
             .map_err(|error| OpenAiProviderError::Response(error.without_url().to_string()))?;
-        let response_body = transform_non_streaming_body(response_body);
+        let response_body = transform_response_body(response_body);
 
         let mut builder = Response::builder().status(status);
         for (name, value) in response_headers.iter() {
@@ -331,6 +338,7 @@ mod tests {
                     headers: HeaderMap::new(),
                     body: Bytes::from_static(b"raw [email:abc]"),
                     target_api_key: None,
+                    transform_streaming_response: false,
                 },
                 |_| Bytes::from_static(b"resolved body"),
             )
@@ -364,6 +372,7 @@ mod tests {
                     headers,
                     body: Bytes::from_static(b"{}"),
                     target_api_key: Some("upstream-secret"),
+                    transform_streaming_response: false,
                 },
                 |body| body,
             )
@@ -403,6 +412,7 @@ mod tests {
                     headers,
                     body: Bytes::from_static(b"{}"),
                     target_api_key: None,
+                    transform_streaming_response: false,
                 },
                 |body| body,
             )
@@ -447,6 +457,7 @@ mod tests {
                     headers: HeaderMap::new(),
                     body: Bytes::from_static(b"stream token"),
                     target_api_key: None,
+                    transform_streaming_response: false,
                 },
                 |_| panic!("streaming response body should not be transformed"),
             )
@@ -462,5 +473,43 @@ mod tests {
         );
         assert_eq!(seen_body.lock().unwrap().as_deref(), Some("stream token"));
         assert!(response_body(response).await.contains("stream token"));
+    }
+
+    #[tokio::test]
+    async fn event_stream_response_uses_chunk_transform_when_enabled() {
+        let seen_body = Arc::new(Mutex::new(None::<String>));
+        let upstream = spawn_sse_upstream(seen_body.clone()).await;
+        let provider = OpenAiProvider::new().unwrap();
+
+        let response = provider
+            .forward(
+                ForwardRequest {
+                    upstream: &upstream,
+                    method: Method::POST,
+                    uri: Uri::from_static("/v1/responses"),
+                    headers: HeaderMap::new(),
+                    body: Bytes::from_static(b"stream token"),
+                    target_api_key: None,
+                    transform_streaming_response: true,
+                },
+                |chunk| {
+                    let text = String::from_utf8(chunk.to_vec()).unwrap();
+                    Bytes::from(text.replace("stream token", "resolved token"))
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        assert_eq!(seen_body.lock().unwrap().as_deref(), Some("stream token"));
+        let body = response_body(response).await;
+        assert!(body.contains("resolved token"));
+        assert!(!body.contains("stream token"));
     }
 }

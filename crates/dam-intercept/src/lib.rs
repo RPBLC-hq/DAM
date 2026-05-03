@@ -165,7 +165,7 @@ pub fn readiness_for_route(
         if routing.readiness == dam_net::RouteCaptureReadiness::NotTransparentMode {
             (
                 TlsInterceptionReadiness::NotTransparentMode,
-                "transparent interception is inactive in explicit proxy mode".to_string(),
+                "route capture is inactive for this mode".to_string(),
             )
         } else if routing.readiness != dam_net::RouteCaptureReadiness::Ready {
             (
@@ -227,7 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_proxy_does_not_activate_transparent_interception() {
+    fn explicit_proxy_can_activate_interception_for_configured_clients() {
         let readiness = readiness_for_known_ai_routes(
             dam_net::CaptureMode::ExplicitProxy,
             false,
@@ -240,12 +240,12 @@ mod tests {
         assert!(
             readiness
                 .iter()
-                .all(|route| route.readiness == TlsInterceptionReadiness::NotTransparentMode)
+                .all(|route| route.readiness == TlsInterceptionReadiness::Ready)
         );
         assert!(
             TlsInterceptionAdapter::new(true)
                 .activate(&readiness[0])
-                .is_err()
+                .is_ok()
         );
     }
 

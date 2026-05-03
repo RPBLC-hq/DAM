@@ -63,7 +63,7 @@ enabled = false
 listen = "127.0.0.1:7828"
 mode = "reverse_proxy"
 default_failure_mode = "bypass_on_error"
-resolve_inbound = false
+resolve_inbound = true
 
 [[proxy.targets]]
 name = "openai"
@@ -193,7 +193,7 @@ token_env = "DAM_VAULT_TOKEN"
 
 Current binaries validate remote settings but do not implement remote backends yet.
 
-`policy.deduplicate_replacements` defaults to `true`. Set it to `false` when each occurrence should receive an independent token reference to reduce equality leakage.
+`policy.deduplicate_replacements` defaults to `true`. Repeated equal values reuse one token reference within a replacement plan, and vault writers that support value deduplication may return an existing canonical reference across plans. Set it to `false` when each occurrence should receive an independent token reference to reduce equality leakage.
 
 Proxy target API keys are also secret refs:
 

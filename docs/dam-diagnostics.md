@@ -16,12 +16,12 @@ Status: implemented first extraction.
 - SQLite runtime open checks for local vault, consent, and log stores;
 - router target/provider/auth/failure-mode decisions;
 - proxy runtime `/health` reachability when proxy is enabled;
-- a read-only setup plan summary for the default local explicit-proxy path;
-- launcher readiness notes for `dam claude`, `dam codex --api`, and fail-closed Codex ChatGPT-login mode.
+- a read-only setup plan summary for the default local proxy/interception path;
+- readiness notes for fail-closed legacy launchers and Codex ChatGPT-login mode.
 
 `setup_plan` emits a side-effect-free setup checklist for the local "connect" UX. It evaluates:
 
-- active integration profile apply state;
+- enabled integration profile selection;
 - system-proxy routing readiness when requested;
 - local CA trust readiness when requested;
 - daemon lifecycle readiness for the requested network/trust modes.

@@ -7,12 +7,12 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use toml_edit::{DocumentMut, Item, Table, value};
 
 pub const DEFAULT_PROXY_URL: &str = "http://127.0.0.1:7828";
 pub const CODEX_API_KEY_ENV: &str = "OPENAI_API_KEY";
-pub const CODEX_DAM_PROVIDER_ID: &str = "dam_openai";
 pub const CLAUDE_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
+pub const HTTPS_PROXY_ENV: &str = "HTTPS_PROXY";
+pub const HTTP_PROXY_ENV: &str = "HTTP_PROXY";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntegrationProfile {
@@ -176,6 +176,7 @@ pub fn profiles(proxy_url: &str) -> Vec<IntegrationProfile> {
         anthropic(proxy_url),
         claude_code(proxy_url),
         codex_api(proxy_url),
+        codex_chatgpt(proxy_url),
         xai_compatible(proxy_url),
     ]
 }
@@ -192,12 +193,9 @@ pub fn profile_ids() -> Vec<&'static str> {
         "anthropic",
         "claude-code",
         "codex-api",
+        "codex-chatgpt",
         "xai-compatible",
     ]
-}
-
-pub fn openai_base_url(proxy_url: &str) -> String {
-    format!("{}/v1", proxy_url.trim_end_matches('/'))
 }
 
 pub fn active_profile_path(integration_state_dir: &Path) -> PathBuf {
@@ -390,11 +388,10 @@ fn write_enabled_integrations(
 pub fn default_apply_path(
     profile_id: &str,
     integration_state_dir: &Path,
-    codex_home: Option<PathBuf>,
+    _codex_home: Option<PathBuf>,
     home: Option<PathBuf>,
 ) -> Result<PathBuf, String> {
     match profile_id {
-        "codex-api" => codex_config_path(codex_home, home),
         "claude-code" => claude_settings_path(home),
         _ if profile(profile_id, DEFAULT_PROXY_URL).is_some() => Ok(integration_state_dir
             .join("profiles")
@@ -422,9 +419,8 @@ pub fn prepare_apply(
         (false, false) => FileAction::Create,
     };
     let description = match profile_id {
-        "codex-api" => "update Codex config with DAM OpenAI provider".to_string(),
-        "claude-code" => "update Claude Code settings env with DAM Anthropic base URL".to_string(),
-        _ => "write DAM-managed environment file for this profile".to_string(),
+        "claude-code" => "update Claude Code settings env with DAM proxy routing".to_string(),
+        _ => "write DAM-managed proxy environment file for this profile".to_string(),
     };
 
     Ok(PreparedIntegrationApply {
@@ -491,10 +487,12 @@ pub fn run_apply(
                 message: "integration profile already applied".to_string(),
             });
         }
-        return Err(format!(
-            "refusing to apply {} because DAM already has a rollback record and the target changed; run `dam integrations rollback {}` before applying again",
-            prepared.profile_id, prepared.profile_id
-        ));
+        if !allows_reapply_with_existing_record(&prepared) {
+            return Err(format!(
+                "refusing to apply {} because DAM already has a rollback record and the target changed; run `dam integrations rollback {}` before applying again",
+                prepared.profile_id, prepared.profile_id
+            ));
+        }
     }
     if prepared.action == FileAction::Unchanged {
         return Ok(IntegrationApplyResult {
@@ -570,9 +568,13 @@ pub fn inspect_apply(
     let prepared = prepare_apply(profile_id, proxy_url, target_path)?;
     let record_path = profile_state_dir(state_dir, profile_id).join("latest.json");
     let (rollback_available, record_error) = rollback_record_state(profile_id, &record_path);
-    let status = match (prepared.action, rollback_available) {
-        (FileAction::Unchanged, _) => IntegrationApplyStatus::Applied,
-        (_, true) => IntegrationApplyStatus::Modified,
+    let status = match (
+        prepared.action,
+        rollback_available,
+        allows_reapply_with_existing_record(&prepared),
+    ) {
+        (FileAction::Unchanged, _, _) => IntegrationApplyStatus::Applied,
+        (_, true, false) => IntegrationApplyStatus::Modified,
         _ => IntegrationApplyStatus::NeedsApply,
     };
     let message = match (status, rollback_available, record_error.as_ref()) {
@@ -618,6 +620,33 @@ pub fn inspect_apply(
         record_error,
         message,
     })
+}
+
+fn allows_reapply_with_existing_record(prepared: &PreparedIntegrationApply) -> bool {
+    prepared.profile_id == "claude-code"
+        && prepared.current_content.as_deref().is_some_and(|content| {
+            claude_settings_use_legacy_dam_base_url(content, &prepared.proxy_url)
+        })
+}
+
+fn claude_settings_use_legacy_dam_base_url(current: &str, proxy_url: &str) -> bool {
+    let Ok(settings) = serde_json::from_str::<Value>(current) else {
+        return false;
+    };
+    let Some(env) = settings.get("env").and_then(Value::as_object) else {
+        return false;
+    };
+    let Some(base_url) = env.get(CLAUDE_BASE_URL_ENV).and_then(Value::as_str) else {
+        return false;
+    };
+    let base_url = base_url.trim_end_matches('/');
+    base_url == proxy_url.trim_end_matches('/') || is_local_http_proxy_url(base_url)
+}
+
+fn is_local_http_proxy_url(value: &str) -> bool {
+    value.starts_with("http://127.0.0.1:")
+        || value.starts_with("http://localhost:")
+        || value.starts_with("http://[::1]:")
 }
 
 pub fn rollback_profile(
@@ -702,29 +731,26 @@ fn openai_compatible(proxy_url: &str) -> IntegrationProfile {
     IntegrationProfile {
         id: "openai-compatible".to_string(),
         name: "Generic OpenAI-compatible harness".to_string(),
-        summary: "Point an OpenAI-compatible SDK or harness at the local DAM /v1 endpoint."
-            .to_string(),
+        summary: "Route normal OpenAI-compatible HTTPS traffic through DAM.".to_string(),
         provider: "openai-compatible".to_string(),
-        connect_args: vec!["--openai".to_string()],
-        settings: vec![IntegrationSetting {
-            key: "OPENAI_BASE_URL".to_string(),
-            value: openai_base_url(proxy_url),
-            description: "OpenAI-compatible base URL for clients that honor OPENAI_BASE_URL"
-                .to_string(),
-        }],
+        connect_args: interception_connect_args(vec!["--openai".to_string()]),
+        settings: proxy_env_settings(proxy_url),
         commands: vec![IntegrationCommand {
             label: "Start DAM for OpenAI-compatible traffic".to_string(),
             command: vec![
                 "dam".to_string(),
                 "connect".to_string(),
                 "--openai".to_string(),
+                "--network-mode".to_string(),
+                "tun".to_string(),
+                "--trust-mode".to_string(),
+                "local_ca".to_string(),
             ],
         }],
         notes: vec![
             "Keep provider credentials owned by the harness. DAM forwards caller auth headers."
                 .to_string(),
-            "Use this for SDKs and tools that let you set an OpenAI-compatible base URL."
-                .to_string(),
+            "Tray/web Connect installs Network Extension capture first; HTTPS_PROXY / HTTP_PROXY remains the explicit-proxy fallback for source builds and unsupported environments.".to_string(),
         ],
         automation: AutomationLevel::ConnectPreset,
     }
@@ -734,28 +760,26 @@ fn anthropic(proxy_url: &str) -> IntegrationProfile {
     IntegrationProfile {
         id: "anthropic".to_string(),
         name: "Generic Anthropic-compatible harness".to_string(),
-        summary: "Point an Anthropic-compatible harness at the local DAM endpoint.".to_string(),
+        summary: "Route normal Anthropic HTTPS traffic through DAM.".to_string(),
         provider: "anthropic".to_string(),
-        connect_args: vec!["--anthropic".to_string()],
-        settings: vec![IntegrationSetting {
-            key: CLAUDE_BASE_URL_ENV.to_string(),
-            value: proxy_url.trim_end_matches('/').to_string(),
-            description: "Anthropic-compatible base URL for clients that honor ANTHROPIC_BASE_URL"
-                .to_string(),
-        }],
+        connect_args: interception_connect_args(vec!["--anthropic".to_string()]),
+        settings: proxy_env_settings(proxy_url),
         commands: vec![IntegrationCommand {
             label: "Start DAM for Anthropic traffic".to_string(),
             command: vec![
                 "dam".to_string(),
                 "connect".to_string(),
                 "--anthropic".to_string(),
+                "--network-mode".to_string(),
+                "tun".to_string(),
+                "--trust-mode".to_string(),
+                "local_ca".to_string(),
             ],
         }],
         notes: vec![
             "Keep provider credentials owned by the harness. DAM forwards caller auth headers."
                 .to_string(),
-            "Use this for tools that speak Anthropic's HTTP API and expose a base URL setting."
-                .to_string(),
+            "Tray/web Connect installs Network Extension capture first; HTTPS_PROXY / HTTP_PROXY remains the explicit-proxy fallback for source builds and unsupported environments.".to_string(),
         ],
         automation: AutomationLevel::ConnectPreset,
     }
@@ -765,15 +789,16 @@ fn claude_code(proxy_url: &str) -> IntegrationProfile {
     IntegrationProfile {
         id: "claude-code".to_string(),
         name: "Claude Code".to_string(),
-        summary: "Run Claude Code through a background Anthropic-compatible DAM endpoint."
-            .to_string(),
+        summary: "Route Claude Code's normal Anthropic HTTPS traffic through DAM.".to_string(),
         provider: "anthropic".to_string(),
-        connect_args: vec!["--anthropic".to_string()],
-        settings: vec![IntegrationSetting {
-            key: CLAUDE_BASE_URL_ENV.to_string(),
-            value: proxy_url.trim_end_matches('/').to_string(),
-            description: "Claude Code session environment setting".to_string(),
-        }],
+        connect_args: vec![
+            "--anthropic".to_string(),
+            "--network-mode".to_string(),
+            "tun".to_string(),
+            "--trust-mode".to_string(),
+            "local_ca".to_string(),
+        ],
+        settings: proxy_env_settings(proxy_url),
         commands: vec![
             IntegrationCommand {
                 label: "Start DAM for Claude Code".to_string(),
@@ -781,73 +806,127 @@ fn claude_code(proxy_url: &str) -> IntegrationProfile {
                     "dam".to_string(),
                     "connect".to_string(),
                     "--anthropic".to_string(),
+                    "--network-mode".to_string(),
+                    "tun".to_string(),
+                    "--trust-mode".to_string(),
+                    "local_ca".to_string(),
                 ],
             },
             IntegrationCommand {
-                label: "Launch Claude Code against the connected daemon".to_string(),
+                label: "Run Claude Code through explicit-proxy fallback".to_string(),
                 command: vec![
                     "env".to_string(),
-                    format!("ANTHROPIC_BASE_URL={}", proxy_url.trim_end_matches('/')),
+                    format!("{HTTPS_PROXY_ENV}={}", proxy_url.trim_end_matches('/')),
+                    format!("{HTTP_PROXY_ENV}={}", proxy_url.trim_end_matches('/')),
                     "claude".to_string(),
                 ],
             },
         ],
         notes: vec![
-            "`dam claude` remains the one-shot path when a background daemon is not needed."
-                .to_string(),
-            "`dam integrations apply claude-code` writes the env setting to Claude Code settings JSON with a rollback record.".to_string(),
+            "Claude Code keeps its normal Anthropic API endpoint; Network Extension capture is primary and explicit proxy remains a fallback for source builds and unsupported environments.".to_string(),
+            "`dam integrations apply claude-code` writes fallback proxy env settings to Claude Code settings JSON with a rollback record.".to_string(),
             "Use `--target-path .claude/settings.local.json` for a project-local Claude Code setting instead of the default user setting.".to_string(),
+            "The apply step removes the old DAM-owned ANTHROPIC_BASE_URL override so Claude talks to the real Anthropic host.".to_string(),
             "Claude Code keeps provider authentication; DAM only receives and forwards the request headers.".to_string(),
         ],
         automation: AutomationLevel::ConnectPreset,
     }
 }
 
+fn proxy_env_settings(proxy_url: &str) -> Vec<IntegrationSetting> {
+    let proxy_url = proxy_url.trim_end_matches('/').to_string();
+    vec![
+        IntegrationSetting {
+            key: HTTPS_PROXY_ENV.to_string(),
+            value: proxy_url.clone(),
+            description: "HTTPS proxy for explicit-proxy fallback".to_string(),
+        },
+        IntegrationSetting {
+            key: HTTP_PROXY_ENV.to_string(),
+            value: proxy_url,
+            description: "HTTP proxy for explicit-proxy fallback".to_string(),
+        },
+    ]
+}
+
 fn codex_api(proxy_url: &str) -> IntegrationProfile {
-    let base_url = openai_base_url(proxy_url);
     IntegrationProfile {
         id: "codex-api".to_string(),
         name: "Codex API-key mode".to_string(),
-        summary: "Point Codex API-key mode at a background OpenAI-compatible DAM endpoint."
-            .to_string(),
+        summary: "Route Codex API-key OpenAI HTTPS traffic through DAM.".to_string(),
         provider: "openai-compatible".to_string(),
-        connect_args: vec!["--openai".to_string()],
-        settings: vec![
-            IntegrationSetting {
-                key: "model_provider".to_string(),
-                value: "dam_openai".to_string(),
-                description: "Temporary Codex provider id for DAM-routed API-key mode".to_string(),
-            },
-            IntegrationSetting {
-                key: "model_providers.dam_openai.base_url".to_string(),
-                value: base_url.clone(),
-                description: "OpenAI Responses API base URL through DAM".to_string(),
-            },
-            IntegrationSetting {
-                key: "model_providers.dam_openai.env_key".to_string(),
-                value: "OPENAI_API_KEY".to_string(),
-                description: "Codex still owns the provider API key".to_string(),
-            },
-            IntegrationSetting {
-                key: "model_providers.dam_openai.supports_websockets".to_string(),
-                value: "false".to_string(),
-                description: "Disable Codex WebSockets until DAM has a WebSocket adapter"
-                    .to_string(),
-            },
-        ],
+        connect_args: interception_connect_args(vec!["--openai".to_string()]),
+        settings: proxy_env_settings(proxy_url),
         commands: vec![
             IntegrationCommand {
                 label: "Start DAM for Codex API-key mode".to_string(),
-                command: vec!["dam".to_string(), "connect".to_string(), "--openai".to_string()],
+                command: vec![
+                    "dam".to_string(),
+                    "connect".to_string(),
+                    "--openai".to_string(),
+                    "--network-mode".to_string(),
+                    "tun".to_string(),
+                    "--trust-mode".to_string(),
+                    "local_ca".to_string(),
+                ],
             },
             IntegrationCommand {
-                label: "Launch Codex against the connected daemon".to_string(),
-                command: codex_command(&base_url),
+                label: "Run Codex through explicit-proxy fallback".to_string(),
+                command: proxy_env_command("codex", proxy_url),
             },
         ],
         notes: vec![
-            "`dam codex --api` remains the one-shot protected path.".to_string(),
-            "Codex ChatGPT-login mode is still not protected by this profile because its model transport uses the ChatGPT backend path/WebSocket flow.".to_string(),
+            "Codex must keep its normal OpenAI API-key configuration; DAM does not write a custom Codex provider or base URL.".to_string(),
+            "Tray/web Connect installs Network Extension capture first; proxy env fallback is retained for source builds and unsupported environments.".to_string(),
+            "Codex ChatGPT-login mode uses the codex-chatgpt profile so chatgpt.com WebSocket traffic is routed through the WebSocket protocol adapter.".to_string(),
+            format!("{CODEX_API_KEY_ENV} stays owned by Codex or the user's shell; DAM forwards caller auth headers."),
+        ],
+        automation: AutomationLevel::ConnectPreset,
+    }
+}
+
+fn codex_chatgpt(proxy_url: &str) -> IntegrationProfile {
+    IntegrationProfile {
+        id: "codex-chatgpt".to_string(),
+        name: "Codex ChatGPT-login mode".to_string(),
+        summary: "Route Codex ChatGPT-login WebSocket traffic through DAM.".to_string(),
+        provider: "openai-compatible".to_string(),
+        connect_args: interception_connect_args(vec![
+            "--target-name".to_string(),
+            "chatgpt-codex".to_string(),
+            "--provider".to_string(),
+            "openai-compatible".to_string(),
+            "--upstream".to_string(),
+            "https://chatgpt.com".to_string(),
+        ]),
+        settings: proxy_env_settings(proxy_url),
+        commands: vec![
+            IntegrationCommand {
+                label: "Start DAM for Codex ChatGPT-login mode".to_string(),
+                command: vec![
+                    "dam".to_string(),
+                    "connect".to_string(),
+                    "--target-name".to_string(),
+                    "chatgpt-codex".to_string(),
+                    "--provider".to_string(),
+                    "openai-compatible".to_string(),
+                    "--upstream".to_string(),
+                    "https://chatgpt.com".to_string(),
+                    "--network-mode".to_string(),
+                    "tun".to_string(),
+                    "--trust-mode".to_string(),
+                    "local_ca".to_string(),
+                ],
+            },
+            IntegrationCommand {
+                label: "Run Codex through explicit-proxy fallback".to_string(),
+                command: proxy_env_command("codex", proxy_url),
+            },
+        ],
+        notes: vec![
+            "Codex keeps its normal ChatGPT login and session flow; DAM captures configured chatgpt.com traffic through Network Extension routing.".to_string(),
+            "The MVP WebSocket adapter protects unfragmented text frames and forwards non-text frames without mutation.".to_string(),
+            "Explicit proxy env fallback is retained for source builds and unsupported environments, but Network Extension capture is the primary path for ChatGPT-login traffic.".to_string(),
         ],
         automation: AutomationLevel::ConnectPreset,
     }
@@ -857,21 +936,17 @@ fn xai_compatible(proxy_url: &str) -> IntegrationProfile {
     IntegrationProfile {
         id: "xai-compatible".to_string(),
         name: "xAI OpenAI-compatible harness".to_string(),
-        summary: "Start DAM with xAI as an OpenAI-compatible upstream target.".to_string(),
+        summary: "Route normal xAI HTTPS traffic through DAM.".to_string(),
         provider: "openai-compatible".to_string(),
-        connect_args: vec![
+        connect_args: interception_connect_args(vec![
             "--target-name".to_string(),
             "xai".to_string(),
             "--provider".to_string(),
             "openai-compatible".to_string(),
             "--upstream".to_string(),
             "https://api.x.ai".to_string(),
-        ],
-        settings: vec![IntegrationSetting {
-            key: "OPENAI_BASE_URL".to_string(),
-            value: openai_base_url(proxy_url),
-            description: "OpenAI-compatible base URL exposed by DAM for the harness".to_string(),
-        }],
+        ]),
+        settings: proxy_env_settings(proxy_url),
         commands: vec![IntegrationCommand {
             label: "Start DAM with xAI upstream".to_string(),
             command: vec![
@@ -879,47 +954,37 @@ fn xai_compatible(proxy_url: &str) -> IntegrationProfile {
                 "connect".to_string(),
                 "--profile".to_string(),
                 "xai-compatible".to_string(),
+                "--network-mode".to_string(),
+                "tun".to_string(),
+                "--trust-mode".to_string(),
+                "local_ca".to_string(),
             ],
         }],
         notes: vec![
             "The harness still owns provider credentials. Configure its xAI API key through the harness's normal secret mechanism.".to_string(),
-            "This profile only selects the upstream target and exposes a local OpenAI-compatible DAM endpoint.".to_string(),
+            "This profile selects the upstream target while keeping the harness on the normal xAI endpoint through DAM proxy routing.".to_string(),
         ],
         automation: AutomationLevel::ConnectPreset,
     }
 }
 
-fn codex_command(base_url: &str) -> Vec<String> {
-    vec![
-        "codex".to_string(),
-        "-c".to_string(),
-        "model_provider=\"dam_openai\"".to_string(),
-        "-c".to_string(),
-        "model_providers.dam_openai.name=\"OpenAI through DAM\"".to_string(),
-        "-c".to_string(),
-        format!("model_providers.dam_openai.base_url=\"{base_url}\""),
-        "-c".to_string(),
-        "model_providers.dam_openai.env_key=\"OPENAI_API_KEY\"".to_string(),
-        "-c".to_string(),
-        "model_providers.dam_openai.wire_api=\"responses\"".to_string(),
-        "-c".to_string(),
-        "model_providers.dam_openai.supports_websockets=false".to_string(),
-    ]
+fn interception_connect_args(mut args: Vec<String>) -> Vec<String> {
+    args.extend([
+        "--network-mode".to_string(),
+        "tun".to_string(),
+        "--trust-mode".to_string(),
+        "local_ca".to_string(),
+    ]);
+    args
 }
 
-fn codex_config_path(
-    codex_home: Option<PathBuf>,
-    home: Option<PathBuf>,
-) -> Result<PathBuf, String> {
-    if let Some(home) = codex_home
-        && !home.as_os_str().is_empty()
-    {
-        return Ok(home.join("config.toml"));
-    }
-    let home = home
-        .filter(|home| !home.as_os_str().is_empty())
-        .ok_or_else(|| "HOME or CODEX_HOME is required to locate Codex config".to_string())?;
-    Ok(home.join(".codex").join("config.toml"))
+fn proxy_env_command(program: &str, proxy_url: &str) -> Vec<String> {
+    vec![
+        "env".to_string(),
+        format!("{HTTPS_PROXY_ENV}={}", proxy_url.trim_end_matches('/')),
+        format!("{HTTP_PROXY_ENV}={}", proxy_url.trim_end_matches('/')),
+        program.to_string(),
+    ]
 }
 
 fn claude_settings_path(home: Option<PathBuf>) -> Result<PathBuf, String> {
@@ -936,38 +1001,9 @@ fn desired_integration_content(
     current_content: Option<&str>,
 ) -> Result<String, String> {
     match profile_id {
-        "codex-api" => codex_config_content(current_content.unwrap_or_default(), proxy_url),
         "claude-code" => claude_settings_content(current_content.unwrap_or_default(), proxy_url),
         _ => Ok(env_profile_content(profile)),
     }
-}
-
-fn codex_config_content(current: &str, proxy_url: &str) -> Result<String, String> {
-    let mut document = current
-        .parse::<DocumentMut>()
-        .map_err(|error| format!("failed to parse Codex config TOML: {error}"))?;
-    let base_url = openai_base_url(proxy_url);
-
-    document["model_provider"] = value(CODEX_DAM_PROVIDER_ID);
-    if !matches!(document.get("model_providers"), Some(Item::Table(_))) {
-        document["model_providers"] = Item::Table(Table::new());
-    }
-    let providers = document["model_providers"]
-        .as_table_mut()
-        .ok_or_else(|| "failed to prepare Codex model_providers table in config".to_string())?;
-    if !matches!(providers.get(CODEX_DAM_PROVIDER_ID), Some(Item::Table(_))) {
-        providers.insert(CODEX_DAM_PROVIDER_ID, Item::Table(Table::new()));
-    }
-    let provider = providers[CODEX_DAM_PROVIDER_ID]
-        .as_table_mut()
-        .ok_or_else(|| "failed to prepare Codex dam_openai provider table in config".to_string())?;
-    provider.insert("name", value("OpenAI through DAM"));
-    provider.insert("base_url", value(base_url));
-    provider.insert("env_key", value(CODEX_API_KEY_ENV));
-    provider.insert("wire_api", value("responses"));
-    provider.insert("supports_websockets", value(false));
-
-    Ok(document.to_string())
 }
 
 fn claude_settings_content(current: &str, proxy_url: &str) -> Result<String, String> {
@@ -986,10 +1022,10 @@ fn claude_settings_content(current: &str, proxy_url: &str) -> Result<String, Str
     let env_object = env
         .as_object_mut()
         .ok_or_else(|| "Claude Code settings env value must be an object".to_string())?;
-    env_object.insert(
-        CLAUDE_BASE_URL_ENV.to_string(),
-        Value::String(proxy_url.trim_end_matches('/').to_string()),
-    );
+    env_object.remove(CLAUDE_BASE_URL_ENV);
+    for setting in proxy_env_settings(proxy_url) {
+        env_object.insert(setting.key, Value::String(setting.value));
+    }
     serde_json::to_string_pretty(&settings)
         .map(|json| format!("{json}\n"))
         .map_err(|error| format!("failed to serialize Claude Code settings JSON: {error}"))
@@ -1170,25 +1206,67 @@ mod tests {
                 "anthropic",
                 "claude-code",
                 "codex-api",
+                "codex-chatgpt",
                 "xai-compatible"
             ]
         );
     }
 
     #[test]
-    fn openai_profiles_use_v1_local_endpoint() {
+    fn openai_profiles_use_proxy_env_not_base_url() {
         let profile = profile("openai-compatible", DEFAULT_PROXY_URL).unwrap();
 
-        assert_eq!(profile.settings[0].key, "OPENAI_BASE_URL");
-        assert_eq!(profile.settings[0].value, "http://127.0.0.1:7828/v1");
+        assert!(profile.connect_args.contains(&"--network-mode".to_string()));
+        assert!(profile.connect_args.contains(&"tun".to_string()));
+        assert!(profile.connect_args.contains(&"--trust-mode".to_string()));
+        assert!(profile.connect_args.contains(&"local_ca".to_string()));
+        assert_eq!(profile.settings[0].key, HTTPS_PROXY_ENV);
+        assert_eq!(profile.settings[0].value, DEFAULT_PROXY_URL);
+        assert_eq!(profile.settings[1].key, HTTP_PROXY_ENV);
+        assert!(!profile.settings.iter().any(|setting| {
+            matches!(
+                setting.key.as_str(),
+                "OPENAI_BASE_URL" | "ANTHROPIC_BASE_URL"
+            )
+        }));
     }
 
     #[test]
-    fn anthropic_profiles_use_root_local_endpoint() {
+    fn anthropic_profiles_use_proxy_env_not_base_url() {
         let profile = profile("anthropic", "http://127.0.0.1:7828/").unwrap();
 
-        assert_eq!(profile.settings[0].key, "ANTHROPIC_BASE_URL");
+        assert!(profile.connect_args.contains(&"--network-mode".to_string()));
+        assert!(profile.connect_args.contains(&"tun".to_string()));
+        assert!(profile.connect_args.contains(&"--trust-mode".to_string()));
+        assert!(profile.connect_args.contains(&"local_ca".to_string()));
+        assert_eq!(profile.settings[0].key, HTTPS_PROXY_ENV);
+        assert_eq!(profile.settings[0].value, DEFAULT_PROXY_URL);
+        assert_eq!(profile.settings[1].key, HTTP_PROXY_ENV);
+        assert!(!profile.settings.iter().any(|setting| {
+            matches!(
+                setting.key.as_str(),
+                "OPENAI_BASE_URL" | "ANTHROPIC_BASE_URL"
+            )
+        }));
+    }
+
+    #[test]
+    fn claude_code_profile_uses_proxy_env_not_anthropic_base_url() {
+        let profile = profile("claude-code", "http://127.0.0.1:7828/").unwrap();
+
+        assert!(profile.connect_args.contains(&"--network-mode".to_string()));
+        assert!(profile.connect_args.contains(&"tun".to_string()));
+        assert!(profile.connect_args.contains(&"--trust-mode".to_string()));
+        assert!(profile.connect_args.contains(&"local_ca".to_string()));
+        assert_eq!(profile.settings[0].key, HTTPS_PROXY_ENV);
         assert_eq!(profile.settings[0].value, "http://127.0.0.1:7828");
+        assert_eq!(profile.settings[1].key, HTTP_PROXY_ENV);
+        assert!(
+            !profile
+                .settings
+                .iter()
+                .any(|setting| setting.key == CLAUDE_BASE_URL_ENV)
+        );
     }
 
     #[test]
@@ -1203,23 +1281,54 @@ mod tests {
                 "--provider",
                 "openai-compatible",
                 "--upstream",
-                "https://api.x.ai"
+                "https://api.x.ai",
+                "--network-mode",
+                "tun",
+                "--trust-mode",
+                "local_ca"
             ]
         );
+        assert_eq!(profile.settings[0].key, HTTPS_PROXY_ENV);
     }
 
     #[test]
-    fn codex_profile_disables_websockets() {
+    fn codex_profile_uses_proxy_env_not_custom_provider() {
         let profile = profile("codex-api", DEFAULT_PROXY_URL).unwrap();
         let command = &profile.commands[1].command;
 
-        assert!(
-            command.contains(&"model_providers.dam_openai.supports_websockets=false".to_string())
-        );
+        assert_eq!(profile.settings[0].key, HTTPS_PROXY_ENV);
+        assert_eq!(profile.settings[1].key, HTTP_PROXY_ENV);
+        assert!(command.contains(&format!("{HTTPS_PROXY_ENV}={DEFAULT_PROXY_URL}")));
+        assert!(command.contains(&format!("{HTTP_PROXY_ENV}={DEFAULT_PROXY_URL}")));
+        assert!(!command.iter().any(|arg| arg.contains("dam_openai")));
     }
 
     #[test]
-    fn codex_default_path_prefers_codex_home() {
+    fn codex_chatgpt_profile_targets_chatgpt_websocket_backend() {
+        let profile = profile("codex-chatgpt", DEFAULT_PROXY_URL).unwrap();
+
+        assert_eq!(profile.provider, "openai-compatible");
+        assert_eq!(
+            profile.connect_args,
+            [
+                "--target-name",
+                "chatgpt-codex",
+                "--provider",
+                "openai-compatible",
+                "--upstream",
+                "https://chatgpt.com",
+                "--network-mode",
+                "tun",
+                "--trust-mode",
+                "local_ca"
+            ]
+        );
+        assert!(profile.summary.contains("WebSocket"));
+        assert_eq!(profile.settings[0].key, HTTPS_PROXY_ENV);
+    }
+
+    #[test]
+    fn codex_default_path_lives_under_integration_state() {
         let path = default_apply_path(
             "codex-api",
             Path::new("/tmp/dam/integrations"),
@@ -1228,7 +1337,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(path, PathBuf::from("/tmp/codex/config.toml"));
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/dam/integrations/profiles/codex-api.env")
+        );
     }
 
     #[test]
@@ -1337,29 +1449,29 @@ mod tests {
     }
 
     #[test]
-    fn codex_apply_writes_config_and_rollback_restores_backup() {
+    fn codex_apply_writes_proxy_env_and_rollback_restores_backup() {
         let dir = tempfile::tempdir().unwrap();
         let state_dir = dir.path().join("state");
-        let config_path = dir.path().join("config.toml");
-        let original = "approval_policy = \"never\"\n";
-        fs::write(&config_path, original).unwrap();
+        let env_path = dir.path().join("codex.env");
+        let original = "export EXISTING=1\n";
+        fs::write(&env_path, original).unwrap();
 
         let prepared =
-            prepare_apply("codex-api", "http://127.0.0.1:9000", config_path.clone()).unwrap();
+            prepare_apply("codex-api", "http://127.0.0.1:9000", env_path.clone()).unwrap();
         let result = run_apply(prepared, false, &state_dir).unwrap();
 
         assert!(!result.dry_run);
         assert_eq!(result.changes[0].action, FileAction::Update);
-        let applied = fs::read_to_string(&config_path).unwrap();
-        assert!(applied.contains("approval_policy = \"never\""));
-        assert!(applied.contains("model_provider = \"dam_openai\""));
-        assert!(applied.contains("base_url = \"http://127.0.0.1:9000/v1\""));
-        assert!(applied.contains("supports_websockets = false"));
+        let applied = fs::read_to_string(&env_path).unwrap();
+        assert!(applied.contains("# DAM integration profile: codex-api"));
+        assert!(applied.contains("export HTTPS_PROXY=http://127.0.0.1:9000"));
+        assert!(applied.contains("export HTTP_PROXY=http://127.0.0.1:9000"));
+        assert!(!applied.contains("dam_openai"));
 
         let rollback = rollback_profile("codex-api", &state_dir).unwrap();
 
         assert_eq!(rollback.changes[0].action, FileAction::Restore);
-        assert_eq!(fs::read_to_string(&config_path).unwrap(), original);
+        assert_eq!(fs::read_to_string(&env_path).unwrap(), original);
     }
 
     #[test]
@@ -1367,7 +1479,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state_dir = dir.path().join("state");
         let settings_path = dir.path().join("settings.json");
-        let original = r#"{"model":"claude-sonnet-4-5","env":{"FOO":"bar"}}"#;
+        let original = r#"{"model":"claude-sonnet-4-5","env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:7828","FOO":"bar"}}"#;
         fs::write(&settings_path, original).unwrap();
 
         let prepared = prepare_apply(
@@ -1383,15 +1495,60 @@ mod tests {
         let settings: Value = serde_json::from_str(&applied).unwrap();
         assert_eq!(settings["model"], "claude-sonnet-4-5");
         assert_eq!(settings["env"]["FOO"], "bar");
-        assert_eq!(
-            settings["env"][CLAUDE_BASE_URL_ENV],
-            "http://127.0.0.1:9000"
-        );
+        assert!(settings["env"][CLAUDE_BASE_URL_ENV].is_null());
+        assert_eq!(settings["env"][HTTPS_PROXY_ENV], "http://127.0.0.1:9000");
+        assert_eq!(settings["env"][HTTP_PROXY_ENV], "http://127.0.0.1:9000");
 
         let rollback = rollback_profile("claude-code", &state_dir).unwrap();
 
         assert_eq!(rollback.changes[0].action, FileAction::Restore);
         assert_eq!(fs::read_to_string(&settings_path).unwrap(), original);
+    }
+
+    #[test]
+    fn claude_code_apply_migrates_legacy_dam_base_url_with_rollback_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("state");
+        let settings_path = dir.path().join("settings.json");
+        let legacy = r#"{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:7828","FOO":"bar"}}"#;
+        fs::write(&settings_path, legacy).unwrap();
+        let profile_dir = profile_state_dir(&state_dir, "claude-code");
+        fs::create_dir_all(&profile_dir).unwrap();
+        let backup_path = profile_dir.join("legacy.backup");
+        fs::write(&backup_path, r#"{"env":{"FOO":"bar"}}"#).unwrap();
+        write_json_file(
+            &profile_dir.join("latest.json"),
+            &IntegrationApplyRecord {
+                profile_id: "claude-code".to_string(),
+                applied_at_unix: 1,
+                files: vec![IntegrationBackupFile {
+                    path: settings_path.clone(),
+                    existed: true,
+                    backup_path: Some(backup_path),
+                }],
+            },
+        )
+        .unwrap();
+
+        let inspection = inspect_apply(
+            "claude-code",
+            DEFAULT_PROXY_URL,
+            settings_path.clone(),
+            &state_dir,
+        )
+        .unwrap();
+        assert_eq!(inspection.status, IntegrationApplyStatus::NeedsApply);
+
+        let prepared =
+            prepare_apply("claude-code", DEFAULT_PROXY_URL, settings_path.clone()).unwrap();
+        let result = run_apply(prepared, false, &state_dir).unwrap();
+
+        assert_eq!(result.message, "integration profile applied");
+        let settings: Value =
+            serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert!(settings["env"][CLAUDE_BASE_URL_ENV].is_null());
+        assert_eq!(settings["env"][HTTPS_PROXY_ENV], DEFAULT_PROXY_URL);
+        assert_eq!(settings["env"][HTTP_PROXY_ENV], DEFAULT_PROXY_URL);
     }
 
     #[test]
@@ -1419,7 +1576,8 @@ mod tests {
         assert_eq!(result.changes[0].action, FileAction::Create);
         let applied = fs::read_to_string(&env_path).unwrap();
         assert!(applied.contains("# DAM integration profile: anthropic"));
-        assert!(applied.contains("export ANTHROPIC_BASE_URL=http://127.0.0.1:9000"));
+        assert!(applied.contains("export HTTPS_PROXY=http://127.0.0.1:9000"));
+        assert!(applied.contains("export HTTP_PROXY=http://127.0.0.1:9000"));
 
         let rollback = rollback_profile("anthropic", &state_dir).unwrap();
 
@@ -1459,11 +1617,7 @@ mod tests {
         assert_eq!(applied.planned_action, FileAction::Unchanged);
         assert!(applied.rollback_available);
 
-        fs::write(
-            &env_path,
-            "export ANTHROPIC_BASE_URL=http://example.invalid\n",
-        )
-        .unwrap();
+        fs::write(&env_path, "export HTTPS_PROXY=http://example.invalid\n").unwrap();
 
         let modified =
             inspect_apply("anthropic", "http://127.0.0.1:9000", env_path, &state_dir).unwrap();
@@ -1481,11 +1635,7 @@ mod tests {
         let prepared =
             prepare_apply("anthropic", "http://127.0.0.1:9000", env_path.clone()).unwrap();
         run_apply(prepared, false, &state_dir).unwrap();
-        fs::write(
-            &env_path,
-            "export ANTHROPIC_BASE_URL=http://example.invalid\n",
-        )
-        .unwrap();
+        fs::write(&env_path, "export HTTPS_PROXY=http://example.invalid\n").unwrap();
 
         let prepared = prepare_apply("anthropic", "http://127.0.0.1:9000", env_path).unwrap();
         let error = run_apply(prepared, false, &state_dir).unwrap_err();

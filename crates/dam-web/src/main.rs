@@ -20,6 +20,7 @@ use tokio::process::Command as TokioCommand;
 
 const RPBLC_HOME_URL: &str = "https://rpblc.com";
 const RPBLC_FAVICON_SVG: &str = include_str!("../assets/favicon.svg");
+const DAM_WEB_UI_JS: &str = include_str!("../assets/dam-web-ui.js");
 const DAM_BIN_ENV: &str = "DAM_BIN";
 const DAM_WEB_SHELL_ENV: &str = "DAM_WEB_SHELL";
 const DAM_WEB_SHELL_TRAY: &str = "tray";
@@ -88,6 +89,7 @@ struct LogOrder {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DashboardState {
     Protected,
+    Paused,
     Disconnected,
     Degraded,
     NeedsSetup,
@@ -262,6 +264,7 @@ fn router(state: AppState) -> Router {
         .route("/doctor", get(doctor))
         .route("/diagnostics", get(diagnostics))
         .route("/favicon.svg", get(favicon))
+        .route("/assets/dam-web-ui.js", get(dam_web_ui_js))
         .route("/health", get(|| async { "ok" }))
         .route_layer(middleware::from_fn(require_local_browser_context))
         .with_state(state)
@@ -448,9 +451,9 @@ async fn connect_action(State(state): State<AppState>, body: Bytes) -> Response 
         )
         .await
         .map(|_| "DAM connected".to_string()),
-        "disconnect" => disconnect_protection(&state)
+        "disconnect" => pause_protection()
             .await
-            .map(|_| "DAM disconnected".to_string()),
+            .map(|_| "DAM protection paused".to_string()),
         _ => Err(format!("unknown connect action: {action}")),
     };
 
@@ -513,7 +516,10 @@ async fn settings_action(body: Bytes) -> Response {
 async fn consents(State(state): State<AppState>) -> Response {
     match &state.consent_store {
         Some(store) => match store.list() {
-            Ok(entries) => Html(render_consents(&entries)).into_response(),
+            Ok(entries) => {
+                let vault_entries = state.vault.list().unwrap_or_default();
+                Html(render_consents(&entries, &vault_entries)).into_response()
+            }
             Err(error) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Html(render_error("Consent error", &error.to_string())),
@@ -615,6 +621,20 @@ async fn favicon() -> Response {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         RPBLC_FAVICON_SVG,
+    )
+        .into_response()
+}
+
+async fn dam_web_ui_js() -> Response {
+    (
+        [
+            (
+                header::CONTENT_TYPE,
+                "application/javascript; charset=utf-8",
+            ),
+            (header::CACHE_CONTROL, "no-cache"),
+        ],
+        DAM_WEB_UI_JS,
     )
         .into_response()
 }
@@ -883,16 +903,6 @@ fn optional_str(value: &Option<String>) -> &str {
     value.as_deref().unwrap_or("")
 }
 
-fn render_vault_sort_header(label: &str, field: VaultSortField, order: VaultOrder) -> String {
-    render_sort_header(
-        label,
-        "/vault",
-        field.param(),
-        field == order.field,
-        order.direction,
-    )
-}
-
 fn render_log_sort_header(label: &str, field: LogSortField, order: LogOrder) -> String {
     render_sort_header(
         label,
@@ -941,24 +951,73 @@ fn render_order_button(
     active_direction: SortDirection,
 ) -> String {
     let is_active = active && direction == active_direction;
-    let class = if is_active {
-        "order-button active"
-    } else {
-        "order-button"
+    let direction_class = match direction {
+        SortDirection::Asc => "asc",
+        SortDirection::Desc => "desc",
     };
-    let symbol = match direction {
-        SortDirection::Asc => "A-Z",
-        SortDirection::Desc => "Z-A",
+    let class = if is_active {
+        format!("order-button {direction_class} active")
+    } else {
+        format!("order-button {direction_class}")
     };
     let aria_label = format!("Sort {label} {}", direction.label());
+    let current_attr = if is_active {
+        r#" aria-current="true""#
+    } else {
+        ""
+    };
     format!(
-        r#"<a class="{class}" href="{path}?sort={field}&amp;dir={dir}" aria-label="{aria_label}" title="{aria_label}">{symbol}</a>"#,
+        r#"<a class="{class}" href="{path}?sort={field}&amp;dir={dir}" aria-label="{aria_label}" title="{aria_label}"{current_attr}></a>"#,
         class = class,
         path = escape_html(path),
         field = escape_html(field),
         dir = direction.param(),
         aria_label = escape_html(&aria_label),
-        symbol = symbol,
+        current_attr = current_attr,
+    )
+}
+
+fn wallet_sort_cycle(
+    order: VaultOrder,
+) -> (&'static str, &'static str, VaultSortField, SortDirection) {
+    match (order.field, order.direction) {
+        (VaultSortField::Updated, SortDirection::Desc) => (
+            "Recent",
+            "Oldest",
+            VaultSortField::Updated,
+            SortDirection::Asc,
+        ),
+        (VaultSortField::Updated, SortDirection::Asc) => {
+            ("Oldest", "A-Z", VaultSortField::Value, SortDirection::Asc)
+        }
+        (VaultSortField::Value, SortDirection::Asc) => (
+            "A-Z",
+            "Recent",
+            VaultSortField::Updated,
+            SortDirection::Desc,
+        ),
+        _ => (
+            "Custom",
+            "Recent",
+            VaultSortField::Updated,
+            SortDirection::Desc,
+        ),
+    }
+}
+
+fn render_wallet_sort_cycle(order: VaultOrder) -> String {
+    let (current_label, next_label, next_field, next_direction) = wallet_sort_cycle(order);
+    let aria_label = format!("Sort wallet. Current: {current_label}. Click for {next_label}.");
+    format!(
+        concat!(
+            r#"<a class="cycle-button wallet-sort-cycle" "#,
+            r#"href="/vault?sort={field}&amp;dir={dir}" aria-label="{aria_label}">"#,
+            r#"<span>Sort</span><strong>{current_label}</strong></a>"#
+        ),
+        field = next_field.param(),
+        dir = next_direction.param(),
+        aria_label = escape_html(&aria_label),
+        current_label = escape_html(current_label),
     )
 }
 
@@ -968,13 +1027,13 @@ fn render_vault(db_path: &Path, entries: &[VaultEntry]) -> String {
 }
 
 fn render_vault_with_order(
-    db_path: &Path,
+    _db_path: &Path,
     entries: &[VaultEntry],
     order: VaultOrder,
     consents: &[dam_consent::ConsentEntry],
 ) -> String {
-    let rows = if entries.is_empty() {
-        "<tr><td class=\"empty\" colspan=\"4\">No protected values yet.</td></tr>".to_string()
+    let items = if entries.is_empty() {
+        "<p class=\"empty wallet-empty\">No protected values yet.</p>".to_string()
     } else {
         entries
             .iter()
@@ -982,29 +1041,27 @@ fn render_vault_with_order(
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let sort = render_wallet_sort_cycle(order);
 
     render_shell(
-        "DAM Vault",
+        "Data Wallet",
         "Vault",
-        &format!("Vault: {}", escape_html(&db_path.display().to_string())),
+        "Your protected data points. Pick one to control sharing.",
         entries.len(),
-        "values",
+        "",
         &format!(
-            r#"<table class="data-table vault-table">
-      <thead>
-        <tr>
-          {value_header}
-          <th>Kind</th>
-          {updated_header}
-          <th>Allowed</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows}
-      </tbody>
-    </table>"#,
-            value_header = render_vault_sort_header("Value", VaultSortField::Value, order),
-            updated_header = render_vault_sort_header("Seen", VaultSortField::Updated, order),
+            r#"<section class="wallet-surface">
+      <div class="wallet-head">
+        <div>
+          <div class="section-title">Wallet</div>
+          <p>Choose what can pass through DAM. Everything else stays protected.</p>
+        </div>
+        {sort}
+      </div>
+      <div class="wallet-list">{items}</div>
+    </section>"#,
+            sort = sort,
+            items = items,
         ),
     )
 }
@@ -1111,20 +1168,6 @@ async fn build_connect_dashboard(
     {
         message = error;
     }
-    if matches!(state_tag, DashboardState::NeedsSetup)
-        && let Some(step) = first_non_daemon_setup_step(
-            setup_plan.as_ref(),
-            dam_diagnostics::SetupStepStatus::Blocked,
-        )
-        .or_else(|| {
-            first_non_daemon_setup_step(
-                setup_plan.as_ref(),
-                dam_diagnostics::SetupStepStatus::Needed,
-            )
-        })
-    {
-        message = step.message.clone();
-    }
 
     ConnectDashboard {
         state: state_tag,
@@ -1189,6 +1232,9 @@ fn dashboard_state(
         (Some(_), Some(report)) if report.state == dam_api::ProxyState::Protected => {
             return DashboardState::Protected;
         }
+        (Some(_), Some(report)) if report.state == dam_api::ProxyState::Bypassing => {
+            return DashboardState::Paused;
+        }
         (Some(_), _) => return DashboardState::Degraded,
         (None, _) => {}
     }
@@ -1206,15 +1252,16 @@ fn dashboard_state(
 
 fn dashboard_message(state: DashboardState) -> &'static str {
     match state {
-        DashboardState::Protected => "AI traffic is routed through DAM",
-        DashboardState::Disconnected => "Ready to connect",
-        DashboardState::Degraded => "Attention needed before one-click protection",
-        DashboardState::NeedsSetup => "Setup is needed before traffic can be protected",
+        DashboardState::Protected => "DAM is protecting your AI traffic.",
+        DashboardState::Paused => "Protection is paused. Your traffic can pass through.",
+        DashboardState::Disconnected => "Start protection for your AI apps.",
+        DashboardState::Degraded => "DAM needs your attention before it can protect traffic.",
+        DashboardState::NeedsSetup => "Press Protect once. DAM handles the rest.",
     }
 }
 
 fn connect_network_mode() -> dam_net::CaptureMode {
-    dam_net::CaptureMode::SystemProxy
+    dam_net::CaptureMode::Tun
 }
 
 fn connect_trust_mode() -> dam_trust::TrustMode {
@@ -1363,6 +1410,13 @@ async fn advance_connect_setup(
     state: &AppState,
     system_changes_confirmed: bool,
 ) -> Result<(), String> {
+    if matches!(
+        dam_daemon::daemon_status().map_err(|error| error.to_string())?,
+        dam_daemon::DaemonStatus::Connected(_)
+    ) {
+        return run_dam_connect(state).await;
+    }
+
     for _ in 0..8 {
         let plan = connect_setup_plan(state)?;
         match next_connect_setup_action(&plan) {
@@ -1405,7 +1459,9 @@ fn next_connect_setup_action(plan: &dam_diagnostics::SetupPlan) -> ConnectSetupA
             dam_diagnostics::SetupStepStatus::Needed,
         ) => ConnectSetupAction::ApplyProfile,
         (
-            dam_diagnostics::SetupStepKind::SystemProxy | dam_diagnostics::SetupStepKind::LocalCa,
+            dam_diagnostics::SetupStepKind::SystemProxy
+            | dam_diagnostics::SetupStepKind::NetworkExtension
+            | dam_diagnostics::SetupStepKind::LocalCa,
             dam_diagnostics::SetupStepStatus::Needed,
         ) => ConnectSetupAction::RunSetupCommand(step),
         (dam_diagnostics::SetupStepKind::Daemon, dam_diagnostics::SetupStepStatus::Needed) => {
@@ -1418,6 +1474,9 @@ fn next_connect_setup_action(plan: &dam_diagnostics::SetupPlan) -> ConnectSetupA
 fn system_confirmation_message(kind: dam_diagnostics::SetupStepKind) -> &'static str {
     match kind {
         dam_diagnostics::SetupStepKind::SystemProxy => "confirm system routing before connecting",
+        dam_diagnostics::SetupStepKind::NetworkExtension => {
+            "confirm network extension setup before connecting"
+        }
         dam_diagnostics::SetupStepKind::LocalCa => "confirm local trust setup before connecting",
         _ => "confirm system changes before connecting",
     }
@@ -1481,14 +1540,6 @@ async fn run_dam_command(args: Vec<String>) -> Result<(), String> {
     run_dam_command_with_timeout(args, Duration::from_secs(30)).await
 }
 
-fn system_proxy_remove_args() -> Vec<String> {
-    vec![
-        "network".to_string(),
-        "remove-system-proxy".to_string(),
-        "--yes".to_string(),
-    ]
-}
-
 async fn run_dam_command_with_timeout(args: Vec<String>, timeout: Duration) -> Result<(), String> {
     let output = tokio::time::timeout(timeout, async {
         TokioCommand::new(dam_binary()).args(&args).output().await
@@ -1519,51 +1570,8 @@ fn dam_binary() -> OsString {
     env::var_os(DAM_BIN_ENV).unwrap_or_else(|| OsString::from("dam"))
 }
 
-async fn disconnect_protection(state: &AppState) -> Result<(), String> {
-    run_dam_command_with_timeout(system_proxy_remove_args(), Duration::from_secs(180))
-        .await
-        .map_err(|error| format!("failed to restore system proxy routing: {error}"))?;
-    rollback_enabled_profiles_if_available(state)
-        .map_err(|error| format!("failed to restore enabled profile setup: {error}"))?;
-    disconnect_daemon()
-}
-
-fn rollback_enabled_profiles_if_available(state: &AppState) -> Result<(), String> {
-    let state_dir = integration_state_dir()?;
-    let profiles = dam_integrations::read_effective_enabled_integrations(&state_dir)?;
-    if profiles.is_empty() {
-        return Ok(());
-    }
-    let proxy_url = connected_proxy_url().unwrap_or_else(|| configured_proxy_url(&state.config));
-    for profile in profiles {
-        let target_path = default_integration_target_path(&profile.profile_id, &state_dir)?;
-        let inspection = dam_integrations::inspect_apply(
-            &profile.profile_id,
-            &proxy_url,
-            target_path,
-            &state_dir,
-        )?;
-        if let Some(error) = inspection.record_error {
-            return Err(format!("rollback state needs attention: {error}"));
-        }
-        if inspection.rollback_available {
-            dam_integrations::rollback_profile(&profile.profile_id, &state_dir)?;
-        }
-    }
-    Ok(())
-}
-
-fn disconnect_daemon() -> Result<(), String> {
-    match dam_daemon::daemon_status().map_err(|error| error.to_string())? {
-        dam_daemon::DaemonStatus::Disconnected => Ok(()),
-        dam_daemon::DaemonStatus::Stale(state) => {
-            dam_daemon::remove_state_if_pid(state.pid).map_err(|error| error.to_string())
-        }
-        dam_daemon::DaemonStatus::Connected(state) => {
-            dam_daemon::terminate_process(state.pid).map_err(|error| error.to_string())?;
-            dam_daemon::remove_state_if_pid(state.pid).map_err(|error| error.to_string())
-        }
-    }
+async fn pause_protection() -> Result<(), String> {
+    run_dam_command(vec!["disconnect".to_string()]).await
 }
 
 fn connected_proxy_url() -> Option<String> {
@@ -1704,11 +1712,11 @@ fn render_connect_dashboard(view: &ConnectDashboard) -> String {
     let diagnostics = render_dashboard_diagnostics(view);
 
     render_shell(
-        "DAM Connect",
+        "Protection",
         "Connect",
-        "One-click protection.",
+        "Protect your AI traffic and control what can be shared.",
         1,
-        "apps",
+        "",
         &format!(
             r#"<section class="connect-hero status-{state_class}">
       {notice}
@@ -1716,15 +1724,15 @@ fn render_connect_dashboard(view: &ConnectDashboard) -> String {
       {active_profile_warning}
       <div class="connect-status">
         <div>
-          <div class="status-label">Protection</div>
+          <div class="status-label">DAM</div>
           <div class="connect-state">{state_label}</div>
           <p>{message}</p>
         </div>
         {primary_action}
       </div>
       <dl class="connect-facts">
-        <dt>Mode</dt><dd>Protect Everything</dd>
-        <dt>Apps</dt><dd>{active_profile}</dd>
+        <dt>Default</dt><dd>Protect everything</dd>
+        <dt>Sharing</dt><dd>Only data you allow</dd>
       </dl>
       {setup_actions}
     </section>
@@ -1798,17 +1806,22 @@ fn render_settings_dashboard(notice: Option<String>, error: Option<String>) -> S
         .unwrap_or_default();
 
     render_shell(
-        "DAM Settings",
         "Settings",
-        "App routing and harness configs.",
+        "Settings",
+        "Theme and advanced controls. DAM protects everything by default.",
         enabled_profiles.len(),
-        "enabled",
+        "",
         &format!(
-            r#"<section class="connect-section settings-panel">
-      {notice}
-      {error}
-      <div class="section-title">Apps</div>
-      <div class="profile-list">{rows}</div>
+            r#"<section class="rpblc-section rpblc-section--compact settings-section settings-apps">
+      <header class="rpblc-section__header">
+        <h2 class="rpblc-section__title">Apps</h2>
+      </header>
+      <div class="rpblc-section__body rpblc-settings-section__body">
+        {notice}
+        {error}
+        <p class="settings-intro">Most people do not need to change this. DAM protects everything by default.</p>
+        <div class="settings-app-list">{rows}</div>
+      </div>
     </section>"#,
             notice = notice,
             error = error,
@@ -1818,76 +1831,108 @@ fn render_settings_dashboard(notice: Option<String>, error: Option<String>) -> S
 }
 
 fn render_settings_profile(card: &ProfileCard) -> String {
+    // Hand-written HTML mirror of RPBLC.Design AppIntegrationCard. The
+    // React shell binds the disclosure button after dangerouslySetInnerHTML.
     let apply_status = card
         .apply
         .as_ref()
         .map(|apply| integration_apply_status_tag(apply.status))
         .unwrap_or("unknown");
-    let action = if card.active {
-        ("disable_profile", "Disable", "enabled")
+    let (form_action, button_label, status_kind, status_label) = if card.active {
+        ("disable_profile", "Disable", "enabled", "On")
     } else {
-        ("enable_profile", "Enable", "disabled")
+        ("enable_profile", "Enable", "disabled", "Off")
     };
+    let action_button_class = "rpblc-button rpblc-button--secondary rpblc-button--sm";
     let settings = card
         .profile
         .settings
         .iter()
         .map(|setting| {
             format!(
-                "<div><span>{}</span><strong>{}</strong></div>",
+                "<dt>{}</dt><dd>{}</dd>",
                 escape_html(&setting.key),
                 escape_html(&setting.value)
             )
         })
         .collect::<Vec<_>>()
-        .join("\n");
-    let settings = if settings.is_empty() {
+        .join("");
+    let empty_settings = if settings.is_empty() {
         "<p class=\"quiet\">No app config is written by this profile.</p>".to_string()
     } else {
-        format!("<div class=\"settings-list\">{settings}</div>")
+        String::new()
     };
 
     format!(
-        r#"<article class="profile-option settings-profile{selected}">
-      <div class="profile-select-row">
-        <span class="profile-name">{name}</span>
-        <span class="profile-summary">{summary}</span>
-        <span class="profile-state">{state}</span>
+        r#"<article class="rpblc-app-card{selected}">
+      <header class="rpblc-app-card__header">
+        <span class="rpblc-app-card__leading">{provider_short}</span>
+        <h3 class="rpblc-app-card__name">{name}</h3>
+        <span class="rpblc-app-card__state rpblc-app-card__state--{status_kind}">{status_label}</span>
+      </header>
+      <p class="rpblc-app-card__purpose">{summary}</p>
+      <div class="rpblc-app-card__row">
+        <button class="rpblc-app-card__disclosure" type="button" aria-expanded="false" aria-controls="{details_id}">
+          <span class="rpblc-app-card__disclosure-label">Show details</span>
+          <span class="rpblc-app-card__chevron" aria-hidden="true"></span>
+        </button>
+        <form class="rpblc-app-card__action" method="post" action="/settings/integrations">
+          <input type="hidden" name="action" value="{form_action}">
+          <input type="hidden" name="profile_id" value="{profile_id}">
+          <button class="{action_button_class}" type="submit">{button_label}</button>
+        </form>
       </div>
-      <form class="settings-profile-action" method="post" action="/settings/integrations">
-        <input type="hidden" name="action" value="{action}">
-        <input type="hidden" name="profile_id" value="{profile_id}">
-        <button class="action-button" type="submit">{label}</button>
-      </form>
-      <div class="profile-more-panel settings-profile-detail">
+      <div id="{details_id}" class="rpblc-app-card__details" hidden>
         <dl>
           <dt>ID</dt><dd>{id}</dd>
           <dt>Provider</dt><dd>{provider}</dd>
           <dt>Setup</dt><dd>{apply_status}</dd>
+          {settings_inline}
         </dl>
-        {settings}
+        {extra_settings}
       </div>
     </article>"#,
-        selected = if card.active { " selected" } else { "" },
+        selected = if card.active {
+            " rpblc-app-card--selected"
+        } else {
+            ""
+        },
+        details_id = escape_html(&format!("settings-profile-details-{}", card.profile.id)),
         name = escape_html(profile_display_name(&card.profile)),
         summary = escape_html(profile_display_summary(&card.profile)),
-        state = action.2,
-        action = action.0,
-        label = action.1,
+        provider_short = escape_html(&card.profile.provider)
+            .chars()
+            .take(8)
+            .collect::<String>()
+            .to_uppercase(),
+        status_kind = status_kind,
+        status_label = status_label,
+        form_action = form_action,
+        button_label = button_label,
+        action_button_class = action_button_class,
         profile_id = escape_html(&card.profile.id),
         id = escape_html(&card.profile.id),
         provider = escape_html(&card.profile.provider),
         apply_status = escape_html(apply_status),
-        settings = settings,
+        settings_inline = settings,
+        extra_settings = empty_settings,
     )
 }
 
 fn render_primary_connect_action(view: &ConnectDashboard) -> String {
-    if view.daemon.is_some() {
+    if view.state == DashboardState::Protected {
         return concat!(
             r#"<form method="post" action="/connect/action">"#,
             r#"<input type="hidden" name="action" value="disconnect">"#,
-            r#"<button class="connect-button disconnect" type="submit">Disconnect</button></form>"#
+            r#"<button class="connect-button disconnect" type="submit">Pause</button></form>"#
+        )
+        .to_string();
+    }
+    if view.state == DashboardState::Paused {
+        return concat!(
+            r#"<form method="post" action="/connect/action">"#,
+            r#"<input type="hidden" name="action" value="connect">"#,
+            r#"<button class="connect-button" type="submit">Resume</button></form>"#
         )
         .to_string();
     }
@@ -1907,11 +1952,11 @@ fn render_primary_connect_action(view: &ConnectDashboard) -> String {
     }
     let system_confirm = if connect_requires_system_confirmation(view) {
         format!(
-            r#"<button class="connect-button" type="submit" name="{field}" value="yes" data-confirm="Allow DAM to update local network and trust settings?">Connect</button>"#,
+            r#"<button class="connect-button" type="submit" name="{field}" value="yes" data-confirm="Allow DAM to update local network and trust settings?">Protect</button>"#,
             field = CONNECT_SYSTEM_CONFIRM_FIELD
         )
     } else {
-        r#"<button class="connect-button" type="submit">Connect</button>"#.to_string()
+        r#"<button class="connect-button" type="submit">Protect</button>"#.to_string()
     };
     concat!(
         r#"<form method="post" action="/connect/action">"#,
@@ -1951,28 +1996,36 @@ fn render_setup_actions(view: &ConnectDashboard) -> String {
     let step_label = setup_step
         .map(|step| format!("Next: {}", setup_step_label(step.kind)))
         .unwrap_or_else(|| "Ready".to_string());
-    let target = view
-        .active_profile_apply
-        .as_ref()
-        .map(|apply| apply.target_path.display().to_string())
-        .unwrap_or_else(|| "local setup".to_string());
-    if rollback_button.is_empty() && setup_step.is_none() {
+    let blocked_step = first_non_daemon_setup_step(
+        view.setup_plan.as_ref(),
+        dam_diagnostics::SetupStepStatus::Blocked,
+    );
+    if rollback_button.is_empty() && blocked_step.is_none() {
         return String::new();
     }
+    if setup_step.is_some() && blocked_step.is_none() && rollback_button.is_empty() {
+        return String::new();
+    }
+    if blocked_step.is_none() {
+        return format!(
+            r#"<div class="setup-actions">{rollback_button}<span>App setup can be restored.</span></div>"#,
+            rollback_button = rollback_button,
+        );
+    }
     format!(
-        r#"<div class="setup-actions">{rollback_button}<span>{step_label}</span><span>{target}</span></div>"#,
+        r#"<div class="setup-actions">{rollback_button}<span>{step_label}</span><span>Open Details to review what needs attention.</span></div>"#,
         rollback_button = rollback_button,
         step_label = escape_html(&step_label),
-        target = escape_html(&target),
     )
 }
 
 fn setup_step_label(kind: dam_diagnostics::SetupStepKind) -> &'static str {
     match kind {
-        dam_diagnostics::SetupStepKind::ProfileApply => "Profile",
-        dam_diagnostics::SetupStepKind::SystemProxy => "Routing",
-        dam_diagnostics::SetupStepKind::LocalCa => "Trust",
-        dam_diagnostics::SetupStepKind::Daemon => "Connect",
+        dam_diagnostics::SetupStepKind::ProfileApply => "App setup",
+        dam_diagnostics::SetupStepKind::SystemProxy => "Local setup",
+        dam_diagnostics::SetupStepKind::NetworkExtension => "Network setup",
+        dam_diagnostics::SetupStepKind::LocalCa => "Trust setup",
+        dam_diagnostics::SetupStepKind::Daemon => "Start protection",
     }
 }
 
@@ -1995,9 +2048,11 @@ fn render_profile_option(card: &ProfileCard) -> String {
                 r#"<form class="profile-select-form" method="post" action="/connect/action">"#,
                 r#"<input type="hidden" name="action" value="disable_profile">"#,
                 r#"<input type="hidden" name="profile_id" value="{profile_id}">"#,
-                r#"<button class="profile-select-row" type="submit">"#,
-                r#"<span class="profile-name">{name}</span>"#,
-                r#"<span class="profile-summary">{summary}</span>"#,
+                r#"<button class="profile-select-row rpblc-dropdown__item rpblc-dropdown__item--selected" type="submit">"#,
+                r#"<span class="rpblc-dropdown__item-leading">app</span>"#,
+                r#"<span class="rpblc-dropdown__item-body">"#,
+                r#"<span class="rpblc-dropdown__item-label">{name}</span>"#,
+                r#"<span class="rpblc-dropdown__item-desc">{summary}</span></span>"#,
                 r#"<span class="profile-state">enabled</span></button></form>"#
             ),
             profile_id = escape_html(&card.profile.id),
@@ -2010,9 +2065,11 @@ fn render_profile_option(card: &ProfileCard) -> String {
                 r#"<form class="profile-select-form" method="post" action="/connect/action">"#,
                 r#"<input type="hidden" name="action" value="enable_profile">"#,
                 r#"<input type="hidden" name="profile_id" value="{profile_id}">"#,
-                r#"<button class="profile-select-row" type="submit">"#,
-                r#"<span class="profile-name">{name}</span>"#,
-                r#"<span class="profile-summary">{summary}</span>"#,
+                r#"<button class="profile-select-row rpblc-dropdown__item" type="submit">"#,
+                r#"<span class="rpblc-dropdown__item-leading">app</span>"#,
+                r#"<span class="rpblc-dropdown__item-body">"#,
+                r#"<span class="rpblc-dropdown__item-label">{name}</span>"#,
+                r#"<span class="rpblc-dropdown__item-desc">{summary}</span></span>"#,
                 r#"<span class="profile-state">{apply_status}</span></button></form>"#
             ),
             profile_id = escape_html(&card.profile.id),
@@ -2122,15 +2179,17 @@ fn render_banner(kind: &str, message: &str) -> String {
 fn dashboard_state_label(state: DashboardState) -> &'static str {
     match state {
         DashboardState::Protected => "Protected",
-        DashboardState::Disconnected => "Disconnected",
-        DashboardState::Degraded => "Needs Review",
-        DashboardState::NeedsSetup => "Needs Setup",
+        DashboardState::Paused => "Paused",
+        DashboardState::Disconnected => "Ready",
+        DashboardState::Degraded => "Needs attention",
+        DashboardState::NeedsSetup => "Ready to protect",
     }
 }
 
 fn dashboard_state_class(state: DashboardState) -> &'static str {
     match state {
         DashboardState::Protected => "protected",
+        DashboardState::Paused => "unknown",
         DashboardState::Disconnected => "unknown",
         DashboardState::Degraded => "degraded",
         DashboardState::NeedsSetup => "config_required",
@@ -2296,7 +2355,7 @@ fn render_shell_with_mode(
         ""
     };
     let tray_quit = if shell_mode.is_tray() {
-        r#"<button class="tray-quit" type="button" data-tray-quit aria-label="Quit DAM" title="Quit DAM">⏻</button>"#
+        r#"<button class="tray-quit" type="button" data-tray-quit aria-label="Quit tray" title="Quit tray">⏻</button>"#
     } else {
         ""
     };
@@ -2351,19 +2410,19 @@ fn render_shell_with_mode(
         }
         post("{connect_message}");
       }, true);
-      document.querySelectorAll("[data-tray-external='rpblc']").forEach((link) => {
-        link.addEventListener("click", (event) => {
+      document.addEventListener("click", (event) => {
+        const external = event.target.closest("[data-tray-external='rpblc']");
+        if (external) {
           event.preventDefault();
           post("{open_rpblc_message}");
-        });
-      });
-      const button = document.querySelector("[data-tray-quit]");
-      if (button) {
-        button.addEventListener("click", () => {
+          return;
+        }
+        const button = event.target.closest("[data-tray-quit]");
+        if (button) {
           button.disabled = true;
           post("{quit_message}");
-        });
-      }
+        }
+      });
     })();
   </script>"#
             .replace("{tray_post_token}", &escape_js_string(&tray_post_token))
@@ -2378,18 +2437,40 @@ fn render_shell_with_mode(
     } else {
         r#"<script>
     (() => {
-      document.querySelectorAll("[data-confirm]").forEach((button) => {
-        button.addEventListener("click", (event) => {
-          const message = button.getAttribute("data-confirm");
-          if (message && !window.confirm(message)) {
-            event.preventDefault();
-          }
-        });
+      document.addEventListener("click", (event) => {
+        const button = event.target.closest("[data-confirm]");
+        if (!button) {
+          return;
+        }
+        const message = button.getAttribute("data-confirm");
+        if (message && !window.confirm(message)) {
+          event.preventDefault();
+        }
       });
     })();
   </script>"#
             .to_string()
     };
+    let content_class = shell_content_class(active, title);
+    let count_block = if count_label.is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#"<div class="count"><strong>{count}</strong> {count_label}</div>"#,
+            count_label = escape_html(count_label),
+        )
+    };
+    let shell_props = script_json(serde_json::json!({
+        "title": title,
+        "active": active,
+        "meta": meta,
+        "count": count,
+        "countLabel": count_label,
+        "contentClass": content_class,
+        "contentHtml": content,
+        "brandUrl": RPBLC_HOME_URL,
+        "isTray": shell_mode.is_tray(),
+    }));
 
     format!(
         r#"<!doctype html>
@@ -2399,20 +2480,55 @@ fn render_shell_with_mode(
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <title>{title}</title>
+  <script>
+    (() => {{
+      try {{
+        const theme = window.localStorage.getItem("rpblc.dam.theme");
+        if (theme === "light" || theme === "dark") {{
+          document.documentElement.dataset.theme = theme;
+        }} else {{
+          delete document.documentElement.dataset.theme;
+        }}
+      }} catch (_) {{}}
+    }})();
+  </script>
   <style>
+    /* RPBLC.Design tokens — frozen contract. See RPBLC.Design/contracts/tokens-contract.md.
+       Inlined here because dam-web renders Rust→HTML at build time and cannot import CSS.
+       Status colors (--ok/--warn/--bad/--unknown) are dam-web-specific additions, not in
+       the design system. */
     :root {{
       color-scheme: dark;
+
+      /* surface */
       --bg: #0a0a08;
       --panel: #12120f;
-      --panel-strong: #181714;
       --line: #1e1d1a;
-      --line-strong: #2c2a22;
+      --line-dark: #181714;
+      --dark: #2c2a22;
       --soft: #3d3a32;
-      --muted: #78736a;
-      --text: #dedad2;
-      --bright: #faf8f2;
-      --accent: #B8965A;
-      --flash: #F5F0E8;
+      --secondary: #aba397;
+      --muted: #b8b0a5;
+      --text: #ede8de;
+      --bright: #ffffff;
+      --accent: #c4a263;
+      --accent-bright: #e0bd76;
+      --accent-strong: #b8965a;
+      /* CTA tokens — see RPBLC.Design ADR-010. Gold in dark, ink in light;
+         hover always lifts toward gold. New CTAs read --cta-*. */
+      --cta-bg: var(--accent-strong);
+      --cta-fg: var(--bg);
+      --cta-border: var(--accent-strong);
+      --cta-bg-hover: var(--bg);
+      --cta-fg-hover: var(--accent-strong);
+      --cta-border-hover: var(--accent-strong);
+      --flash-bg: #f5f0e8;
+      --flash-warm: #ede8de;
+      --nav-bg: rgba(10, 10, 8, 0.94);
+      --alarm: #b8523f;
+      --error: var(--alarm);
+
+      /* dam-web specific status (not in design system) */
       --ok: #67c58a;
       --ok-bg: rgba(103, 197, 138, .12);
       --ok-line: rgba(103, 197, 138, .58);
@@ -2425,33 +2541,157 @@ fn render_shell_with_mode(
       --unknown: #9d9588;
       --unknown-bg: rgba(157, 149, 136, .12);
       --unknown-line: rgba(157, 149, 136, .52);
+
+      /* legacy aliases — preserved so existing dam-web rules keep compiling */
+      --panel-strong: var(--line-dark);
+      --line-strong: var(--dark);
+      --flash: var(--flash-bg);
+      --primary-hover-text: var(--bg);
+
+      /* typography */
+      --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --font-sans: 'Manrope', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+      --fw-regular: 400;
+      --fw-medium: 500;
+      --fw-semibold: 600;
+      --fw-bold: 700;
+      --fw-extrabold: 800;
+
+      /* spacing */
+      --space-0: 0;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 20px;
+      --space-6: 24px;
+      --space-7: 28px;
+      --space-8: 32px;
+      --space-9: 40px;
+      --space-10: 48px;
+      --space-12: 64px;
+
+      /* motion */
+      --dur-fast: 120ms;
+      --dur-base: 200ms;
+      --dur-slow: 300ms;
+      --dur-slower: 500ms;
+      --ease-base: ease;
+      --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+
+      /* geometry */
+      --radius-0: 0;
+      --radius-1: 2px;
+      --border-1: 1px;
+      --border-2: 2px;
+      --stroke-brand: 0.0625em;
+      --stroke-brand-px: 1px;
+    }}
+
+    [data-theme='light'] {{
+      color-scheme: light;
+
+      --bg: #faf8f2;
+      --panel: #ffffff;
+      --line: #e2ddd4;
+      --line-dark: #e2ddd4;
+      --dark: #d6d2ca;
+      --soft: #c4bfb6;
+      --secondary: #6b6355;
+      --muted: #6b6355;
+      --text: #2c2a22;
+      --bright: #0a0a08;
+      --accent: #b8965a;
+      --accent-bright: #8a6a36;
+      --accent-strong: #6e5326;
+      /* Light-theme CTA flips to ink; hover blooms to gold. ADR-010. */
+      --cta-bg: var(--bright);
+      --cta-fg: var(--bg);
+      --cta-border: var(--bright);
+      --cta-bg-hover: var(--accent);
+      --cta-fg-hover: var(--bright);
+      --cta-border-hover: var(--accent);
+      --flash-bg: #f0ebe2;
+      --flash-warm: #e2ddd4;
+      --nav-bg: rgba(250, 248, 242, 0.92);
+      --alarm: #9a3a26;
+
+      --panel-strong: var(--line-dark);
+      --line-strong: var(--dark);
+      --flash: var(--flash-bg);
+      --primary-hover-text: var(--bright);
+    }}
+    @media (prefers-color-scheme: light) {{
+      :root:not([data-theme='dark']) {{
+        color-scheme: light;
+
+        --bg: #faf8f2;
+        --panel: #ffffff;
+        --line: #e2ddd4;
+        --line-dark: #e2ddd4;
+        --dark: #d6d2ca;
+        --soft: #c4bfb6;
+        --secondary: #6b6355;
+        --muted: #6b6355;
+        --text: #2c2a22;
+        --bright: #0a0a08;
+        --accent: #b8965a;
+        --accent-bright: #8a6a36;
+        --accent-strong: #6e5326;
+        --cta-bg: var(--bright);
+        --cta-fg: var(--bg);
+        --cta-border: var(--bright);
+        --cta-bg-hover: var(--accent);
+        --cta-fg-hover: var(--bright);
+        --cta-border-hover: var(--accent);
+        --flash-bg: #f0ebe2;
+        --flash-warm: #e2ddd4;
+        --nav-bg: rgba(250, 248, 242, 0.92);
+        --alarm: #9a3a26;
+
+        --panel-strong: var(--line-dark);
+        --line-strong: var(--dark);
+        --flash: var(--flash-bg);
+        --primary-hover-text: var(--bright);
+      }}
     }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
       background: var(--bg);
       color: var(--text);
-      font: 16px/1.45 Manrope, ui-sans-serif, system-ui, sans-serif;
+      font-family: var(--font-sans);
+      font-size: 16px;
+      line-height: 1.45;
+    }}
+    #dam-root {{
+      display: none;
+    }}
+    body[data-react-hydrated='true'] #dam-root {{
+      display: block;
+    }}
+    body[data-react-hydrated='true'] #dam-fallback {{
+      display: none;
     }}
     main {{
-      width: min(1240px, calc(100vw - 32px));
-      margin: 0 auto 42px;
+      width: min(1120px, calc(100vw - 40px));
+      margin: 0 auto var(--space-10);
       padding: 0;
     }}
     .brand-bar {{
       display: flex;
       justify-content: space-between;
       align-items: center;
-      gap: 18px;
+      gap: var(--space-5);
       position: sticky;
       top: 0;
       z-index: 100;
-      border-bottom: 1px solid var(--line);
-      background: rgba(10, 10, 8, .92);
+      border-bottom: var(--border-1) solid var(--line);
+      background: var(--nav-bg);
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
-      padding: 6px 24px;
-      margin: 0 calc((100vw - min(1240px, calc(100vw - 32px))) / -2) 28px;
+      padding: var(--space-2) var(--space-6);
+      margin: 0 calc((100vw - min(1120px, calc(100vw - 40px))) / -2) var(--space-8);
     }}
     .brand-home {{
       display: inline-flex;
@@ -2463,7 +2703,7 @@ fn render_shell_with_mode(
     }}
     .brand-mark {{
       display: inline-flex;
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 26px;
       line-height: 1;
       font-weight: 800;
@@ -2473,14 +2713,24 @@ fn render_shell_with_mode(
     .brand-mark .letter {{ color: var(--bright); }}
     .brand-mark .colon {{ color: var(--accent); }}
     .brand-mark .bracket {{ color: var(--soft); }}
-    .brand-copy {{
-      color: var(--muted);
-      font-size: 13px;
+    .brand-stamp {{
+      display: inline-flex;
+      flex-direction: column;
+      gap: 2px;
       line-height: 1;
+    }}
+    .brand-product {{
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: var(--fw-semibold);
+      letter-spacing: 1.2px;
+      line-height: 1;
+      text-transform: uppercase;
     }}
     .brand-out {{
       color: var(--muted);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 12px;
       text-decoration: none;
       letter-spacing: 0;
@@ -2506,6 +2756,7 @@ fn render_shell_with_mode(
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      position: relative;
       list-style: none;
       cursor: pointer;
       color: var(--muted);
@@ -2529,6 +2780,18 @@ fn render_shell_with_mode(
     .nav-more[open] summary {{
       color: var(--bright);
     }}
+    .nav-more summary.active {{
+      color: var(--accent);
+    }}
+    .nav-more summary.active::after {{
+      content: "";
+      position: absolute;
+      left: 10px;
+      right: 10px;
+      bottom: 4px;
+      height: 1px;
+      background: var(--accent);
+    }}
     .nav-more-menu {{
       position: absolute;
       right: 0;
@@ -2537,13 +2800,29 @@ fn render_shell_with_mode(
       z-index: 120;
       border: 1px solid var(--line);
       background: var(--panel);
-      box-shadow: 8px 8px 0 var(--line);
-      padding: 8px;
+      padding: 0;
     }}
     .nav-more-menu a {{
-      display: block;
-      padding: 9px 10px;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: var(--space-3);
+      min-height: 38px;
+      padding: 0 var(--space-3);
+      border-bottom: var(--border-1) solid var(--line);
+      line-height: 1.2;
       white-space: nowrap;
+    }}
+    .nav-more-menu a:last-child {{
+      border-bottom: none;
+    }}
+    .nav-more-menu a.active {{
+      box-shadow: none;
+      color: var(--accent);
+      background: rgba(184, 150, 90, .08);
+    }}
+    .nav-more-menu a.active .rpblc-dropdown__item-label {{
+      color: var(--accent);
     }}
     .tray-quit {{
       display: none;
@@ -2555,7 +2834,7 @@ fn render_shell_with_mode(
       border: 1px solid var(--line-strong);
       background: transparent;
       color: var(--muted);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 15px;
       font-weight: 700;
       letter-spacing: 0;
@@ -2587,7 +2866,7 @@ fn render_shell_with_mode(
       min-height: 36px;
       padding: 0 10px;
       text-decoration: none;
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 12px;
       line-height: 1;
       letter-spacing: 0;
@@ -2596,45 +2875,47 @@ fn render_shell_with_mode(
     nav a.active {{
       background: transparent;
       color: var(--accent);
+      box-shadow: inset 0 -1px 0 var(--accent);
     }}
     nav a:hover {{ color: var(--bright); }}
     header {{
       display: flex;
       justify-content: space-between;
-      gap: 24px;
+      gap: var(--space-6);
       align-items: end;
-      margin-bottom: 22px;
+      margin-bottom: var(--space-5);
     }}
     h1 {{
-      margin: 0 0 6px;
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: clamp(32px, 7vw, 70px);
-      line-height: .9;
+      margin: 0 0 var(--space-2);
+      font-family: var(--font-sans);
+      font-size: clamp(30px, 3.4vw, 48px);
+      font-weight: var(--fw-bold);
+      line-height: 1.02;
       letter-spacing: 0;
       color: var(--bright);
     }}
     .meta {{
       color: var(--muted);
+      max-width: 680px;
       overflow-wrap: anywhere;
     }}
     .count {{
-      border: 1px solid var(--line);
+      border: var(--border-1) solid var(--line);
       background: var(--panel);
-      padding: 14px 18px;
-      min-width: 140px;
+      padding: var(--space-3) var(--space-4);
+      min-width: 116px;
       text-align: center;
-      box-shadow: 8px 8px 0 var(--line);
     }}
     .count strong {{
       display: block;
       color: var(--accent);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 34px;
+      font-family: var(--font-mono);
+      font-size: 28px;
       line-height: 1;
     }}
     .table-wrap {{
       overflow-x: auto;
-      border: 1px solid var(--line);
+      border: var(--border-1) solid var(--line);
       background: var(--panel);
     }}
     .connect-surface {{
@@ -2648,25 +2929,27 @@ fn render_shell_with_mode(
       background: transparent;
     }}
     .connect-hero {{
-      border: 1px solid var(--line);
+      border: var(--border-1) solid var(--line);
       background: var(--panel);
-      padding: 22px;
-      margin-bottom: 18px;
-      box-shadow: 8px 8px 0 var(--line);
+      padding: var(--space-6);
+      margin-bottom: var(--space-5);
+      max-width: 900px;
     }}
     .connect-status {{
-      display: flex;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
       justify-content: space-between;
-      gap: 24px;
+      gap: var(--space-6);
       align-items: center;
-      margin-bottom: 18px;
+      margin-bottom: var(--space-6);
     }}
     .connect-state {{
-      margin: 8px 0 6px;
+      margin: var(--space-2) 0 var(--space-2);
       color: var(--bright);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: clamp(30px, 8vw, 74px);
-      line-height: .95;
+      font-family: var(--font-sans);
+      font-size: clamp(32px, 3.4vw, 44px);
+      font-weight: var(--fw-bold);
+      line-height: 1.04;
       letter-spacing: 0;
     }}
     .connect-status p {{
@@ -2674,41 +2957,44 @@ fn render_shell_with_mode(
       color: var(--muted);
     }}
     .connect-button {{
-      width: 168px;
-      height: 168px;
-      border: 2px solid var(--accent);
-      border-radius: 50%;
-      background: var(--accent);
-      color: var(--bg);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 18px;
-      font-weight: 900;
+      width: auto;
+      min-width: 168px;
+      min-height: 56px;
+      border: var(--border-1) solid var(--cta-border);
+      border-radius: var(--radius-0);
+      background: var(--cta-bg);
+      color: var(--cta-fg);
+      font-family: var(--font-mono);
+      font-size: 14px;
+      font-weight: var(--fw-bold);
       letter-spacing: 0;
       text-transform: uppercase;
       cursor: pointer;
-      box-shadow: 0 0 0 10px rgba(184, 150, 90, .12), 8px 8px 0 var(--line);
+      padding: 0 var(--space-5);
+      transition: color var(--dur-fast) var(--ease-base),
+        background var(--dur-fast) var(--ease-base),
+        border-color var(--dur-fast) var(--ease-base);
     }}
     .connect-button:hover {{
-      background: var(--flash);
-      border-color: var(--flash);
+      background: var(--cta-bg-hover);
+      border-color: var(--cta-border-hover);
+      color: var(--cta-fg-hover);
     }}
     .connect-button:disabled {{
       cursor: not-allowed;
       background: var(--panel-strong);
       color: var(--muted);
       border-color: var(--line-strong);
-      box-shadow: 8px 8px 0 var(--line);
     }}
     .connect-button.disconnect {{
       color: var(--bad);
       background: transparent;
       border-color: var(--bad);
-      box-shadow: 0 0 0 10px rgba(223, 120, 101, .10), 8px 8px 0 var(--line);
     }}
     .connect-facts {{
       grid-template-columns: 140px 1fr;
       padding-top: 16px;
-      border-top: 1px solid var(--line);
+      border-top: var(--border-1) solid var(--line);
     }}
     .setup-actions {{
       display: flex;
@@ -2721,27 +3007,31 @@ fn render_shell_with_mode(
       color: var(--muted);
       overflow-wrap: anywhere;
     }}
+    .connect-facts dd {{
+      color: var(--bright);
+      font-weight: var(--fw-semibold);
+    }}
     .setup-actions span {{
       min-width: 0;
       overflow-wrap: anywhere;
     }}
     .connect-grid {{
       display: grid;
-      grid-template-columns: minmax(0, 1.4fr) minmax(300px, .8fr);
-      gap: 18px;
+      grid-template-columns: minmax(0, 1fr) minmax(260px, .7fr);
+      gap: var(--space-5);
+      max-width: 900px;
     }}
     .connect-section {{
-      border: 1px solid var(--line);
+      border: var(--border-1) solid var(--line);
       background: var(--panel);
-      padding: 18px;
-      box-shadow: 8px 8px 0 var(--line);
+      padding: var(--space-5);
     }}
     .section-title {{
-      margin-bottom: 14px;
+      margin-bottom: var(--space-4);
       color: var(--accent);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 12px;
-      letter-spacing: 0;
+      letter-spacing: 0.08em;
       text-transform: uppercase;
     }}
     details.connect-section {{
@@ -2751,33 +3041,32 @@ fn render_shell_with_mode(
       background: transparent;
       box-shadow: none;
     }}
-    details.connect-section summary {{
+    details.connect-section > summary {{
       display: grid;
       grid-template-columns: auto minmax(0, 1fr) 18px;
       align-items: center;
-      gap: 12px;
+      gap: var(--space-3);
       list-style: none;
       cursor: pointer;
-      min-height: 40px;
-      padding: 0 12px;
-      border: 1px solid var(--line-strong);
-      background: var(--panel-strong);
-      box-shadow: 3px 3px 0 var(--line);
+      min-height: 48px;
+      padding: 0 var(--space-4);
+      border: var(--border-1) solid var(--line);
+      background: var(--panel);
       color: var(--accent);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 12px;
-      font-weight: 800;
-      letter-spacing: 0;
+      font-weight: var(--fw-semibold);
+      letter-spacing: 0.08em;
       text-transform: uppercase;
     }}
-    details.connect-section summary:hover {{
+    details.connect-section > summary:hover {{
       border-color: var(--accent);
       background: rgba(184, 150, 90, .08);
     }}
-    details.connect-section summary::-webkit-details-marker {{
+    details.connect-section > summary::-webkit-details-marker {{
       display: none;
     }}
-    details.connect-section[open] summary {{
+    details.connect-section[open] > summary {{
       border-color: var(--line-strong);
     }}
     .toggle-title {{
@@ -2787,7 +3076,7 @@ fn render_shell_with_mode(
     .toggle-value {{
       min-width: 0;
       color: var(--bright);
-      font-family: Manrope, ui-sans-serif, system-ui, sans-serif;
+      font-family: var(--font-sans);
       font-size: 13px;
       font-weight: 700;
       text-transform: none;
@@ -2824,14 +3113,458 @@ fn render_shell_with_mode(
       display: grid;
       grid-template-columns: minmax(0, 1fr) 36px;
       align-items: stretch;
-      border: 1px solid var(--line);
-      background: var(--panel-strong);
+      border: var(--border-1) solid var(--line);
+      background: transparent;
     }}
     .profile-option.selected {{
       border-color: var(--accent);
     }}
+    .rpblc-dropdown__item {{
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-3) var(--space-4);
+      border-bottom: var(--border-1) solid var(--line);
+      cursor: pointer;
+      user-select: none;
+    }}
+    .rpblc-dropdown__item:last-child {{
+      border-bottom: none;
+    }}
+    .rpblc-dropdown__item-leading {{
+      font-family: var(--font-mono);
+      font-size: 12px;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: var(--accent);
+      white-space: nowrap;
+    }}
+    .rpblc-dropdown__item-body {{
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }}
+    .rpblc-dropdown__item-label {{
+      font-family: var(--font-mono);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .rpblc-dropdown__item-desc {{
+      font-family: var(--font-mono);
+      font-size: 11px;
+      line-height: 1.25;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .rpblc-dropdown__item-mark {{
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-weight: var(--fw-bold);
+      font-size: 14px;
+      line-height: 1;
+    }}
+    .rpblc-dropdown__item--selected .rpblc-dropdown__item-label {{
+      color: var(--accent);
+    }}
+
+    /* RPBLC.Design Button */
+    .rpblc-button {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--space-2);
+      font-family: var(--font-mono);
+      font-weight: var(--fw-medium);
+      border-radius: var(--radius-0);
+      border: var(--border-1) solid transparent;
+      cursor: pointer;
+      text-decoration: none;
+      background: transparent;
+      color: var(--bright);
+      transition: color var(--dur-fast) var(--ease-base),
+        background var(--dur-fast) var(--ease-base),
+        border-color var(--dur-fast) var(--ease-base),
+        transform var(--dur-fast) var(--ease-base);
+    }}
+    .rpblc-button:focus-visible {{
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }}
+    .rpblc-button:active {{ transform: scale(0.98); }}
+    .rpblc-button:disabled,
+    .rpblc-button[aria-disabled='true'] {{
+      background: transparent !important;
+      color: var(--muted) !important;
+      border-color: var(--line) !important;
+      opacity: 1;
+      cursor: not-allowed;
+    }}
+    .rpblc-button--sm {{
+      min-height: 32px;
+      padding: var(--space-2) var(--space-3);
+      font-size: 13px;
+    }}
+    .rpblc-button--primary {{
+      background: var(--cta-bg);
+      color: var(--cta-fg);
+      border-color: var(--cta-border);
+    }}
+    .rpblc-button--primary:hover {{
+      background: var(--cta-bg-hover);
+      color: var(--cta-fg-hover);
+      border-color: var(--cta-border-hover);
+    }}
+    .rpblc-button--secondary {{
+      border-color: var(--soft);
+      color: var(--bright);
+      border-width: var(--stroke-brand-px);
+    }}
+    .rpblc-button--secondary:hover {{
+      border-color: var(--accent);
+      color: var(--accent);
+    }}
+
+    /* RPBLC.Design Section, compact density */
+    .rpblc-section {{
+      border: var(--border-1) solid var(--line);
+      background: var(--panel);
+      scroll-margin-top: 60px;
+    }}
+    .rpblc-section--compact {{
+      padding: var(--space-6);
+    }}
+    .rpblc-section__header {{
+      margin-bottom: var(--space-6);
+    }}
+    .rpblc-section--compact .rpblc-section__header {{
+      margin-bottom: var(--space-5);
+    }}
+    .rpblc-section__title {{
+      margin: 0;
+      font-family: var(--font-sans);
+      font-weight: var(--fw-bold);
+      font-size: 28px;
+      color: var(--bright);
+      line-height: 1.15;
+    }}
+    .rpblc-section--compact .rpblc-section__title {{
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: var(--fw-semibold);
+      letter-spacing: 1.6px;
+      text-transform: uppercase;
+      color: var(--accent);
+    }}
+    .rpblc-section__body {{
+      color: var(--text);
+    }}
+    .settings-section {{
+      max-width: 900px;
+    }}
+    .settings-intro {{
+      margin: 0 0 var(--space-5);
+      max-width: 640px;
+      color: var(--muted);
+    }}
+    .settings-app-list {{
+      display: grid;
+      gap: var(--space-2);
+    }}
+    .theme-settings {{
+      margin-bottom: var(--space-5);
+    }}
+
+    /* RPBLC.Design SegmentedControl */
+    .rpblc-segmented {{
+      display: inline-grid;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(0, max-content);
+      border: var(--border-1) solid var(--line);
+      background: var(--panel);
+      border-radius: var(--radius-0);
+      font-family: var(--font-mono);
+    }}
+    .settings-theme-control {{
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      width: min(100%, 320px);
+    }}
+    .rpblc-segmented__option {{
+      appearance: none;
+      -webkit-appearance: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--space-2);
+      border: 0;
+      border-right: var(--border-1) solid var(--line);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+      font-family: inherit;
+      font-weight: var(--fw-bold);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 0 var(--space-3);
+      transition: color var(--dur-fast) var(--ease-base),
+        background var(--dur-fast) var(--ease-base);
+    }}
+    .rpblc-segmented__option:last-child {{
+      border-right: 0;
+    }}
+    .rpblc-segmented--sm .rpblc-segmented__option {{
+      min-height: 32px;
+      font-size: 11px;
+    }}
+    .rpblc-segmented__option:hover:not(:disabled):not(.rpblc-segmented__option--selected) {{
+      color: var(--accent);
+      background: transparent;
+    }}
+    .rpblc-segmented__option:focus-visible {{
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }}
+    .rpblc-segmented__option--selected {{
+      background: var(--bright);
+      color: var(--bg);
+    }}
+    .rpblc-segmented__label {{
+      display: inline-block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+
+    /* RPBLC.Design AppIntegrationCard */
+    .rpblc-app-card {{
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: var(--space-2);
+      border: var(--border-1) solid var(--line);
+      background: var(--panel);
+      padding: var(--space-4) var(--space-5);
+    }}
+    .rpblc-app-card--selected {{
+      border-color: var(--accent);
+    }}
+    .rpblc-app-card__header {{
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: var(--space-3);
+      min-width: 0;
+    }}
+    .rpblc-app-card__leading {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 22px;
+      padding: 0 var(--space-2);
+      border: var(--border-1) solid var(--line);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--accent);
+      white-space: nowrap;
+    }}
+    .rpblc-app-card__name {{
+      margin: 0;
+      min-width: 0;
+      color: var(--bright);
+      font-family: var(--font-sans);
+      font-size: 15px;
+      font-weight: var(--fw-semibold);
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .rpblc-app-card__state {{
+      display: inline-flex;
+      align-items: center;
+      height: 22px;
+      padding: 0 var(--space-2);
+      border: var(--border-1) solid currentColor;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: var(--fw-bold);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }}
+    .rpblc-app-card__state--enabled {{ color: var(--accent); }}
+    .rpblc-app-card__state--disabled {{ color: var(--muted); }}
+    .rpblc-app-card__state--pending {{ color: var(--secondary); }}
+    .rpblc-app-card__state--attention {{ color: var(--alarm); }}
+    .rpblc-app-card__purpose {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }}
+    .rpblc-app-card__row {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      margin-top: var(--space-2);
+      flex-wrap: wrap;
+    }}
+    .rpblc-app-card__disclosure {{
+      appearance: none;
+      -webkit-appearance: none;
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      border: 0;
+      background: transparent;
+      padding: 0;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: color var(--dur-fast) var(--ease-base);
+    }}
+    .rpblc-app-card__disclosure:hover {{ color: var(--accent); }}
+    .rpblc-app-card__disclosure:focus-visible {{
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }}
+    .rpblc-app-card__chevron {{
+      width: 7px;
+      height: 7px;
+      border-right: 1.5px solid currentColor;
+      border-bottom: 1.5px solid currentColor;
+      transform: rotate(45deg);
+      margin-bottom: 2px;
+      transition: transform var(--dur-fast) var(--ease-base);
+    }}
+    .rpblc-app-card__chevron--open {{
+      transform: rotate(225deg);
+      margin-top: 2px;
+      margin-bottom: 0;
+    }}
+    .rpblc-app-card__action {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      margin: 0;
+    }}
+    .rpblc-app-card__details {{
+      margin-top: var(--space-3);
+      padding: var(--space-3) 0 0;
+      border-top: var(--border-1) solid var(--line);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.5;
+    }}
+    .rpblc-app-card__details[hidden] {{
+      display: none;
+    }}
+    .rpblc-app-card__details dl {{
+      display: grid;
+      grid-template-columns: minmax(96px, max-content) 1fr;
+      gap: var(--space-1) var(--space-3);
+      margin: 0;
+    }}
+    .rpblc-app-card__details dt {{
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }}
+    .rpblc-app-card__details dd {{
+      margin: 0;
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }}
+    /* Settings panels — uses RPBLC.Design Section "compact" density:
+       padding --space-6, header margin-bottom --space-5, mobile shrinks
+       one step. Scoped by .settings-panel here because dam-web inlines
+       all CSS at build time and cannot consume the React Section
+       component directly. */
     .settings-panel {{
-      padding: 18px;
+      padding: var(--space-6);
+      max-width: 900px;
+    }}
+    .settings-panel .section-title {{
+      margin: 0 0 var(--space-5);
+    }}
+    .settings-panel > .settings-intro {{
+      margin: 0 0 var(--space-5);
+      max-width: 640px;
+    }}
+    .theme-settings {{
+      margin-bottom: var(--space-6);
+      max-width: 900px;
+    }}
+    /* Theme selector — RPBLC.Design SegmentedControl styling, scoped to
+       dam-web's `.theme-choice-group` markup. The React shell renders an
+       ARIA radiogroup with roving tabindex; CSS keeps the same hairline
+       track when JavaScript hydrates. */
+    .theme-choice-group {{
+      display: inline-grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      width: min(100%, 320px);
+      border: var(--border-1) solid var(--line);
+      background: var(--panel);
+    }}
+    .theme-choice {{
+      appearance: none;
+      -webkit-appearance: none;
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 32px;
+      border: 0;
+      border-right: var(--border-1) solid var(--line);
+      background: transparent;
+      color: var(--text);
+      padding: 0 var(--space-3);
+      font: inherit;
+      cursor: pointer;
+      transition: color var(--dur-fast) var(--ease-base),
+        background var(--dur-fast) var(--ease-base);
+    }}
+    .theme-choice:last-child {{
+      border-right: 0;
+    }}
+    .theme-choice:hover:not(.selected) span {{
+      color: var(--accent);
+    }}
+    .theme-choice.selected {{
+      background: var(--bright);
+    }}
+    .theme-choice:focus-visible {{
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+    }}
+    .theme-choice span {{
+      min-width: 0;
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: var(--fw-bold);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      transition: color var(--dur-fast) var(--ease-base);
+    }}
+    .theme-choice.selected span {{
+      color: var(--bg);
     }}
     .settings-profile {{
       grid-template-columns: minmax(0, 1fr) auto;
@@ -2842,8 +3575,35 @@ fn render_shell_with_mode(
       padding: 10px 12px;
       border-left: 1px solid var(--line);
     }}
+    .settings-intro {{
+      margin: -4px 0 var(--space-4);
+      color: var(--muted);
+      max-width: 640px;
+    }}
     .settings-profile-detail {{
-      display: block;
+      grid-column: 1 / -1;
+      border-top: 1px solid var(--line);
+    }}
+    .settings-profile-detail summary {{
+      list-style: none;
+      cursor: pointer;
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: var(--fw-semibold);
+      letter-spacing: 0;
+      text-transform: uppercase;
+      padding: 10px 12px;
+    }}
+    .settings-profile-detail summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .settings-profile-detail summary:hover {{
+      color: var(--bright);
+      background: rgba(196, 162, 99, .08);
+    }}
+    .settings-profile-detail:not([open]) .profile-more-panel {{
+      display: none;
     }}
     .profile-select-form {{
       display: contents;
@@ -2851,19 +3611,11 @@ fn render_shell_with_mode(
     .profile-select-row {{
       appearance: none;
       -webkit-appearance: none;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
-      grid-template-areas:
-        "name state"
-        "summary summary";
-      align-items: center;
-      gap: 5px 12px;
       width: 100%;
       min-width: 0;
       border: 0;
       background: transparent;
       color: inherit;
-      padding: 10px 12px;
       text-align: left;
       cursor: pointer;
     }}
@@ -2877,37 +3629,12 @@ fn render_shell_with_mode(
     .profile-select-row:disabled:hover {{
       background: transparent;
     }}
-    .profile-name {{
-      grid-area: name;
-      min-width: 0;
-      color: var(--bright);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      font-size: 12px;
-      font-weight: 800;
-      line-height: 1;
-      letter-spacing: 0;
-      text-transform: uppercase;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }}
-    .profile-summary {{
-      grid-area: summary;
-      min-width: 0;
-      color: var(--muted);
-      font-size: 13px;
-      line-height: 1.2;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }}
     .profile-state {{
-      grid-area: state;
       justify-self: end;
       color: var(--accent);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 11px;
-      line-height: 1;
+      line-height: 1.2;
       text-transform: uppercase;
       white-space: nowrap;
     }}
@@ -2921,10 +3648,11 @@ fn render_shell_with_mode(
       justify-content: center;
       width: 36px;
       min-height: 100%;
+      padding: 0;
       list-style: none;
       cursor: pointer;
       color: var(--muted);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 15px;
       font-weight: 800;
       line-height: 1;
@@ -2969,7 +3697,7 @@ fn render_shell_with_mode(
     }}
     .settings-list span {{
       color: var(--muted);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 12px;
       text-transform: uppercase;
     }}
@@ -2977,6 +3705,226 @@ fn render_shell_with_mode(
       color: var(--text);
       font-weight: 500;
       overflow-wrap: anywhere;
+    }}
+    .wallet-surface {{
+      max-width: 900px;
+      border: var(--border-1) solid var(--line);
+      background: var(--panel);
+      padding: var(--space-5);
+    }}
+    .wallet-head {{
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: var(--space-5);
+      margin-bottom: var(--space-4);
+    }}
+    .wallet-head p {{
+      margin: -6px 0 0;
+      color: var(--muted);
+      max-width: 560px;
+    }}
+    .wallet-sort {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      white-space: nowrap;
+    }}
+    /* CycleButton — mirror of RPBLC.Design CycleButton. Hover lifts border
+       and label color to --accent; the value stays --bright so the hero data
+       point does not flash on hover (gesture, not selection change). */
+    .cycle-button {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--space-2);
+      min-height: 34px;
+      border: var(--border-1) solid var(--line);
+      color: var(--muted);
+      background: transparent;
+      padding: 0 var(--space-3);
+      text-decoration: none;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      font-weight: var(--fw-bold);
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      transition: color var(--dur-fast) var(--ease-base),
+        border-color var(--dur-fast) var(--ease-base);
+    }}
+    .cycle-button strong {{
+      color: var(--bright);
+      font-size: 12px;
+      font-weight: var(--fw-bold);
+      letter-spacing: 0;
+    }}
+    .cycle-button::after {{
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-right: 2px solid currentColor;
+      border-bottom: 2px solid currentColor;
+      transform: rotate(-45deg);
+      margin-left: 2px;
+    }}
+    .cycle-button:hover {{
+      border-color: var(--accent);
+      color: var(--accent);
+      background: transparent;
+    }}
+    .cycle-button:hover strong {{
+      color: var(--bright);
+    }}
+    .cycle-button:focus-visible {{
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }}
+    .wallet-sort-cycle {{
+      justify-self: start;
+    }}
+    .wallet-list {{
+      display: grid;
+      gap: var(--space-2);
+    }}
+    /* WalletCard — mirror of RPBLC.Design WalletCard. The hero is the
+       stored value; kind is a small inline badge; meta scans below in a
+       single muted row; the action sits right-aligned on desktop and
+       full-width below on mobile. Keep the brand language quiet — this is
+       a working privacy wallet, not a marketing card. */
+    .wallet-item {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: var(--space-3) var(--space-4);
+      min-height: 64px;
+      border: var(--border-1) solid var(--line);
+      background: var(--panel);
+      padding: var(--space-3) var(--space-4);
+      transition: border-color var(--dur-fast) var(--ease-base),
+        background var(--dur-fast) var(--ease-base);
+    }}
+    .wallet-item:hover {{
+      border-color: var(--soft);
+    }}
+    .wallet-item.allowed {{
+      border-color: var(--accent);
+    }}
+    .wallet-item.expired {{
+      opacity: 0.7;
+    }}
+    .wallet-main {{
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }}
+    .wallet-row {{
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-width: 0;
+    }}
+    .wallet-kind {{
+      display: inline-flex;
+      align-items: center;
+      height: 20px;
+      padding: 0 var(--space-2);
+      border: var(--border-1) solid var(--line);
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: var(--fw-bold);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }}
+    .wallet-value {{
+      display: inline-block;
+      min-width: 0;
+      color: var(--bright);
+      font-family: var(--font-sans);
+      font-size: 17px;
+      font-weight: var(--fw-semibold);
+      line-height: 1.2;
+      text-decoration: none;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    a.wallet-value:hover {{
+      color: var(--accent);
+    }}
+    .wallet-meta {{
+      display: flex;
+      gap: var(--space-2);
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 2px;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+    }}
+    .wallet-meta span + span::before {{
+      content: "·";
+      margin-right: var(--space-2);
+      color: var(--soft);
+    }}
+    .wallet-actions {{
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      min-width: 0;
+    }}
+    .wallet-details {{
+      margin-top: 8px;
+    }}
+    .wallet-details summary {{
+      list-style: none;
+      width: fit-content;
+      color: var(--muted);
+      cursor: pointer;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      text-transform: uppercase;
+    }}
+    .wallet-details summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .wallet-details summary:hover {{
+      color: var(--accent);
+    }}
+    .wallet-details dl {{
+      margin-top: 8px;
+      max-width: 720px;
+    }}
+    .wallet-history {{
+      margin-top: var(--space-4);
+    }}
+    .wallet-history summary {{
+      list-style: none;
+      cursor: pointer;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: var(--fw-semibold);
+      text-transform: uppercase;
+    }}
+    .wallet-history summary::-webkit-details-marker {{
+      display: none;
+    }}
+    .wallet-history summary:hover {{
+      color: var(--accent);
+    }}
+    .wallet-history .wallet-list {{
+      margin-top: var(--space-3);
+    }}
+    .wallet-empty {{
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, .015);
+      margin: 0;
+      padding: 36px 14px;
     }}
     .banner {{
       border: 1px solid var(--line-strong);
@@ -3007,24 +3955,28 @@ fn render_shell_with_mode(
       min-width: 1180px;
     }}
     th, td {{
-      border-bottom: 1px solid var(--line);
-      padding: 12px 14px;
+      border-bottom: var(--border-1) solid var(--line);
+      padding: var(--space-3) var(--space-4);
       text-align: left;
       vertical-align: top;
     }}
     th {{
-      background: var(--panel-strong);
+      background: var(--bg);
       color: var(--accent);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 13px;
       text-transform: uppercase;
-      letter-spacing: 0;
+      letter-spacing: 0.08em;
     }}
+    /* SortHeader — column header sort, mirror of RPBLC.Design SortHeader.
+       Paired chevrons share a hairline frame; active fills with --bright
+       (ink) so the active direction reads as a committed mark, mirroring
+       SegmentedControl. */
     .sortable-heading {{
       display: inline-flex;
-      flex-direction: column;
-      align-items: flex-start;
-      gap: 8px;
+      flex-direction: row;
+      align-items: center;
+      gap: var(--space-2);
       min-width: 0;
     }}
     .order-label {{
@@ -3032,28 +3984,46 @@ fn render_shell_with_mode(
     }}
     .order-buttons {{
       display: inline-flex;
-      gap: 6px;
+      gap: 0;
     }}
     .order-button {{
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-width: 30px;
-      height: 20px;
-      border: 1px solid var(--line-strong);
-      color: var(--accent);
+      width: 22px;
+      height: 22px;
+      border: var(--border-1) solid var(--line);
+      border-right-width: 0;
+      color: var(--muted);
       background: transparent;
       text-decoration: none;
-      font-size: 10px;
+      font-size: 0;
       line-height: 1;
       letter-spacing: 0;
-      font-weight: 800;
+      transition: color var(--dur-fast) var(--ease-base),
+        background var(--dur-fast) var(--ease-base),
+        border-color var(--dur-fast) var(--ease-base);
     }}
-    .order-button:hover,
+    .order-button:last-child {{
+      border-right-width: var(--border-1);
+    }}
+    .order-button::after {{
+      content: "";
+      width: 6px;
+      height: 6px;
+      border-left: 1.5px solid currentColor;
+      border-bottom: 1.5px solid currentColor;
+    }}
+    .order-button.asc::after {{ transform: rotate(135deg); margin-top: 2px; }}
+    .order-button.desc::after {{ transform: rotate(-45deg); margin-bottom: 2px; }}
+    .order-button:hover {{
+      color: var(--accent);
+      border-color: var(--accent);
+    }}
     .order-button.active {{
       color: var(--bg);
-      background: var(--accent);
-      border-color: var(--accent);
+      background: var(--bright);
+      border-color: var(--bright);
     }}
     td.key, td.reference {{
       color: var(--accent);
@@ -3073,16 +4043,15 @@ fn render_shell_with_mode(
     }}
     time {{
       color: var(--muted);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 12px;
       white-space: nowrap;
     }}
     .value-detail {{
-      border: 1px solid var(--line);
+      border: var(--border-1) solid var(--line);
       background: var(--panel);
-      padding: 18px;
-      margin-bottom: 18px;
-      box-shadow: 8px 8px 0 var(--line);
+      padding: var(--space-5);
+      margin-bottom: var(--space-5);
     }}
     .value-detail-head {{
       display: flex;
@@ -3115,10 +4084,9 @@ fn render_shell_with_mode(
       gap: 16px;
     }}
     .status-card {{
-      border: 1px solid var(--line);
+      border: var(--border-1) solid var(--line);
       background: var(--panel);
-      padding: 18px;
-      box-shadow: 8px 8px 0 var(--line);
+      padding: var(--space-5);
       min-height: 190px;
     }}
     .state-pill {{
@@ -3128,7 +4096,7 @@ fn render_shell_with_mode(
       margin: 10px 0 12px;
       border: 1px solid currentColor;
       padding: 7px 10px;
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 13px;
       font-weight: 800;
       letter-spacing: 0;
@@ -3150,7 +4118,7 @@ fn render_shell_with_mode(
     }}
     .status-label {{
       color: var(--accent);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 12px;
       letter-spacing: 0;
       text-transform: uppercase;
@@ -3161,7 +4129,6 @@ fn render_shell_with_mode(
       background:
         linear-gradient(135deg, var(--ok-bg), transparent 46%),
         var(--panel);
-      box-shadow: 8px 8px 0 rgba(103, 197, 138, .16);
     }}
     .status-degraded,
     .status-bypassing,
@@ -3170,7 +4137,6 @@ fn render_shell_with_mode(
       background:
         linear-gradient(135deg, var(--warn-bg), transparent 46%),
         var(--panel);
-      box-shadow: 8px 8px 0 rgba(217, 185, 95, .16);
     }}
     .status-unhealthy,
     .status-blocked,
@@ -3180,14 +4146,12 @@ fn render_shell_with_mode(
       background:
         linear-gradient(135deg, var(--bad-bg), transparent 46%),
         var(--panel);
-      box-shadow: 8px 8px 0 rgba(223, 120, 101, .16);
     }}
     .status-unknown {{
       border-color: var(--unknown-line);
       background:
         linear-gradient(135deg, var(--unknown-bg), transparent 46%),
         var(--panel);
-      box-shadow: 8px 8px 0 rgba(157, 149, 136, .14);
     }}
     .state-healthy,
     .state-protected {{
@@ -3219,7 +4183,7 @@ fn render_shell_with_mode(
     }}
     dt {{
       color: var(--muted);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 12px;
       text-transform: uppercase;
       letter-spacing: 0;
@@ -3242,7 +4206,7 @@ fn render_shell_with_mode(
     }}
     .diagnostics-list strong {{
       color: var(--accent);
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-family: var(--font-mono);
       font-size: 12px;
       text-transform: uppercase;
       letter-spacing: 0;
@@ -3257,17 +4221,17 @@ fn render_shell_with_mode(
     .action-button {{
       appearance: none;
       -webkit-appearance: none;
-      border: 1px solid var(--line-strong);
-      background: var(--panel-strong);
+      min-height: 38px;
+      border: 1px solid var(--accent);
+      background: transparent;
       color: var(--accent);
-      padding: 6px 10px;
-      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      padding: 0 14px;
+      font-family: var(--font-mono);
       font-size: 12px;
-      font-weight: 800;
+      font-weight: var(--fw-bold);
       letter-spacing: 0;
       text-transform: uppercase;
       cursor: pointer;
-      box-shadow: 3px 3px 0 var(--line);
     }}
     .action-button:hover {{
       border-color: var(--accent);
@@ -3287,9 +4251,182 @@ fn render_shell_with_mode(
       color: var(--muted);
       background: transparent;
     }}
+    /* Small variant for in-card affordances. Pair with --connect-button for
+       a primary CTA inside an app row, or .action-button for secondary. */
+    .action-button-sm {{
+      min-height: 32px;
+      padding: 0 var(--space-3);
+      font-size: 11px;
+    }}
+    .app-card-action .connect-button.action-button-sm {{
+      min-width: 0;
+      min-height: 32px;
+      padding: 0 var(--space-3);
+      font-size: 11px;
+    }}
+    /* AppIntegrationCard — mirror of RPBLC.Design AppIntegrationCard.
+       Settings list-row pattern with disclosure for technical detail. */
+    .app-card {{
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: var(--space-2);
+      border: var(--border-1) solid var(--line);
+      background: var(--panel);
+      padding: var(--space-4) var(--space-5);
+    }}
+    .app-card + .app-card {{
+      margin-top: var(--space-2);
+    }}
+    .app-card--selected {{
+      border-color: var(--accent);
+    }}
+    .app-card-head {{
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: var(--space-3);
+      min-width: 0;
+    }}
+    .app-card-leading {{
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 22px;
+      padding: 0 var(--space-2);
+      border: var(--border-1) solid var(--line);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--accent);
+      white-space: nowrap;
+    }}
+    .app-card-name {{
+      margin: 0;
+      min-width: 0;
+      color: var(--bright);
+      font-family: var(--font-sans);
+      font-size: 15px;
+      font-weight: var(--fw-semibold);
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
+    .app-card-state {{
+      display: inline-flex;
+      align-items: center;
+      height: 22px;
+      padding: 0 var(--space-2);
+      border: var(--border-1) solid currentColor;
+      font-family: var(--font-mono);
+      font-size: 10px;
+      font-weight: var(--fw-bold);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }}
+    .app-card-state-enabled {{ color: var(--accent); }}
+    .app-card-state-disabled {{ color: var(--muted); }}
+    .app-card-state-pending {{ color: var(--secondary); }}
+    .app-card-state-attention {{ color: var(--alarm); }}
+    .app-card-purpose {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+      overflow-wrap: anywhere;
+    }}
+    .app-card-row {{
+      --app-card-action-space: 112px;
+      position: relative;
+      min-height: 32px;
+      margin-top: var(--space-2);
+      padding-right: var(--app-card-action-space);
+    }}
+    .app-card-disclosure-wrap {{
+      display: block;
+      min-width: 0;
+    }}
+    .app-card-disclosure {{
+      width: fit-content;
+      list-style: none;
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      cursor: pointer;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      transition: color var(--dur-fast) var(--ease-base);
+    }}
+    .app-card-disclosure::-webkit-details-marker {{ display: none; }}
+    .app-card-disclosure:hover {{ color: var(--accent); }}
+    .app-card-disclosure:focus-visible {{
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }}
+    .app-card-disclosure-label-open {{
+      display: none;
+    }}
+    .app-card-disclosure-wrap[open] .app-card-disclosure-label-closed {{
+      display: none;
+    }}
+    .app-card-disclosure-wrap[open] .app-card-disclosure-label-open {{
+      display: inline;
+    }}
+    .app-card-chevron {{
+      width: 7px;
+      height: 7px;
+      border-right: 1.5px solid currentColor;
+      border-bottom: 1.5px solid currentColor;
+      transform: rotate(45deg);
+      transition: transform var(--dur-fast) var(--ease-base);
+    }}
+    .app-card-disclosure-wrap[open] .app-card-chevron {{
+      transform: rotate(225deg);
+    }}
+    .app-card-action {{
+      position: absolute;
+      right: 0;
+      top: 0;
+      z-index: 1;
+      display: inline-flex;
+      justify-content: flex-end;
+      margin: 0;
+    }}
+    .app-card-details {{
+      width: calc(100% + var(--app-card-action-space));
+      margin-top: var(--space-3);
+      padding-top: var(--space-3);
+      border-top: var(--border-1) solid var(--line);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.5;
+    }}
+    .app-card-details dl {{
+      display: grid;
+      grid-template-columns: minmax(96px, max-content) 1fr;
+      gap: var(--space-1) var(--space-3);
+      margin: 0;
+    }}
+    .app-card-details dt {{
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }}
+    .app-card-details dd {{
+      margin: 0;
+      color: var(--text);
+      overflow-wrap: anywhere;
+    }}
     .badge {{
       display: inline-block;
-      border: 1px solid var(--line);
+      border: var(--border-1) solid var(--line);
       padding: 3px 7px;
       margin-right: 8px;
       font-size: 12px;
@@ -3320,9 +4457,12 @@ fn render_shell_with_mode(
       margin: 0 -14px 10px;
       gap: 10px;
     }}
-    body.tray-shell .brand-copy,
     body.tray-shell .brand-out {{
       display: none;
+    }}
+    body.tray-shell .brand-product {{
+      font-size: 8px;
+      letter-spacing: 0.3px;
     }}
     body.tray-shell nav {{
       gap: 2px;
@@ -3359,14 +4499,11 @@ fn render_shell_with_mode(
       font-size: 34px;
     }}
     body.tray-shell .connect-button {{
-      width: 112px;
-      height: 112px;
+      width: auto;
+      height: 44px;
       font-size: 13px;
       justify-self: start;
-      box-shadow: 0 0 0 8px rgba(184, 150, 90, .12);
-    }}
-    body.tray-shell .connect-button.disconnect {{
-      box-shadow: 0 0 0 8px rgba(223, 120, 101, .10);
+      min-width: 112px;
     }}
     body.tray-shell .connect-facts {{
       grid-template-columns: 94px 1fr;
@@ -3392,37 +4529,130 @@ fn render_shell_with_mode(
       font-size: 12px;
     }}
     @media (max-width: 720px) {{
+      main {{ width: min(100vw - 24px, 1120px); }}
+      .brand-bar {{
+        padding: var(--space-2) var(--space-3);
+        gap: var(--space-3);
+        margin: 0 calc((100vw - min(1120px, calc(100vw - 24px))) / -2) var(--space-8);
+      }}
+      .brand-out {{ display: none; }}
+      nav a {{
+        padding: 0 7px;
+        font-size: 11px;
+      }}
       header {{ display: block; }}
       body.tray-shell header {{ display: none; }}
-      .count {{ margin-top: 18px; }}
+      h1 {{ font-size: clamp(30px, 12vw, 42px); }}
+      .count {{
+        display: inline-block;
+        margin-top: 16px;
+        min-width: 92px;
+      }}
       th, td {{ padding: 10px 8px; font-size: 13px; }}
       .diagnostics-grid,
       .component-grid,
       .connect-grid {{ grid-template-columns: 1fr; }}
+      .connect-hero {{ padding: var(--space-5); }}
+      .connect-status {{ grid-template-columns: 1fr; }}
+      .connect-button {{ width: 100%; min-height: 54px; }}
+      .connect-facts {{ grid-template-columns: 96px 1fr; }}
       .profile-state {{ display: none; }}
       .connect-status {{ display: grid; }}
-      .connect-button {{ width: 132px; height: 132px; }}
+      .rpblc-section--compact {{
+        padding: var(--space-5) var(--space-4);
+      }}
+      .rpblc-app-card__row {{
+        flex-direction: column-reverse;
+        align-items: stretch;
+      }}
+      .rpblc-app-card__action,
+      .rpblc-app-card__action > * {{
+        width: 100%;
+      }}
+      .rpblc-app-card__disclosure {{
+        align-self: flex-start;
+      }}
+      .settings-panel {{ padding: var(--space-5) var(--space-4); }}
+      .theme-choice-group {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+      .wallet-surface {{ padding: var(--space-4); }}
+      .wallet-head {{
+        display: grid;
+        gap: var(--space-3);
+      }}
+      .wallet-sort {{ justify-content: flex-start; }}
+      .wallet-item {{
+        grid-template-columns: 1fr;
+        align-items: start;
+      }}
+      .wallet-actions {{
+        justify-content: stretch;
+        width: 100%;
+      }}
+      .wallet-actions .inline-form,
+      .wallet-actions .action-button {{
+        width: 100%;
+      }}
+      .app-card-row {{
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: var(--space-3);
+        padding-right: 0;
+      }}
+      .app-card-action,
+      .app-card-action > * {{
+        width: 100%;
+      }}
+      .app-card-action {{
+        position: static;
+        order: 1;
+      }}
+      .app-card-action button {{
+        width: 100%;
+      }}
+      .app-card-disclosure-wrap {{
+        order: 2;
+      }}
+      .app-card-disclosure {{
+        align-self: flex-start;
+      }}
+      .app-card-details {{
+        width: 100%;
+      }}
+      .settings-profile {{
+        grid-template-columns: 1fr;
+      }}
+      .settings-profile-action {{
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }}
+      .settings-profile-action .action-button {{
+        width: 100%;
+      }}
     }}
   </style>
 </head>
 <body{body_class}>
-  <main>
+  <div id="dam-root"></div>
+  <main id="dam-fallback">
     <div class="brand-bar">
       <a class="brand-home" href="{brand_url}" target="_blank" rel="noopener noreferrer" aria-label="RPBLC home"{brand_tray_attrs}>
         <span class="brand-mark" aria-hidden="true"><span class="glyph bracket">[</span><span class="glyph letter">R</span><span class="glyph colon">:</span><span class="glyph bracket">]</span></span>
-        <span class="brand-copy">privacy infrastructure</span>
+        <span class="brand-stamp">
+          <span class="brand-product">DAM</span>
+        </span>
       </a>
       <nav>
         <a class="{connect_class}" href="/connect">Connect</a>
-        <a class="{settings_class}" href="/settings">Settings</a>
-        <a class="{vault_class}" href="/vault">Vault</a>
+        <a class="{vault_class}" href="/vault">Wallet</a>
         <a class="{allowed_class}" href="/allowed">Allowed</a>
         <details class="nav-more">
-          <summary aria-label="More" title="More"><span class="chevron-mark" aria-hidden="true"></span></summary>
+          <summary{more_summary_attrs} aria-label="More" title="More"><span class="chevron-mark" aria-hidden="true"></span></summary>
           <div class="nav-more-menu">
-            <a class="{insights_class}" href="/logs">Insights</a>
-            <a class="{doctor_class}" href="/doctor">Doctor</a>
-            <a class="{diagnostics_class}" href="/diagnostics">Diagnostics</a>
+            <a class="{settings_menu_class}" href="/settings"><span class="rpblc-dropdown__item-body"><span class="rpblc-dropdown__item-label">Settings</span></span></a>
+            <a class="{insights_menu_class}" href="/logs"><span class="rpblc-dropdown__item-body"><span class="rpblc-dropdown__item-label">Insights</span></span></a>
+            <a class="{doctor_menu_class}" href="/doctor"><span class="rpblc-dropdown__item-body"><span class="rpblc-dropdown__item-label">Doctor</span></span></a>
+            <a class="{diagnostics_menu_class}" href="/diagnostics"><span class="rpblc-dropdown__item-body"><span class="rpblc-dropdown__item-label">Diagnostics</span></span></a>
           </div>
         </details>
       </nav>
@@ -3436,12 +4666,14 @@ fn render_shell_with_mode(
         <h1>{title}</h1>
         <div class="meta">{meta}</div>
       </div>
-      <div class="count"><strong>{count}</strong> {count_label}</div>
+      {count_block}
     </header>
     <div class="{content_class}">
       {content}
     </div>
   </main>
+  <script id="dam-web-props" type="application/json">{shell_props}</script>
+  <script type="module" src="/assets/dam-web-ui.js"></script>
   {confirm_script}
   {tray_script}
 </body>
@@ -3454,42 +4686,84 @@ fn render_shell_with_mode(
         tray_script = tray_script,
         title = title,
         meta = meta,
-        count = count,
-        count_label = count_label,
+        count_block = count_block,
         content = content,
-        content_class = if active == "Connect" {
-            "connect-surface"
-        } else if active == "Settings" || title == "Vault Value" {
-            "content-surface"
-        } else {
-            "table-wrap"
-        },
+        content_class = content_class,
+        shell_props = shell_props,
         connect_class = if active == "Connect" { "active" } else { "" },
-        settings_class = if active == "Settings" { "active" } else { "" },
+        settings_menu_class = if active == "Settings" {
+            "rpblc-dropdown__item active"
+        } else {
+            "rpblc-dropdown__item"
+        },
         vault_class = if active == "Vault" { "active" } else { "" },
-        insights_class = if active == "Logs" { "active" } else { "" },
+        insights_menu_class = if active == "Logs" {
+            "rpblc-dropdown__item active"
+        } else {
+            "rpblc-dropdown__item"
+        },
         allowed_class = if active == "Allowed" { "active" } else { "" },
-        doctor_class = if active == "Doctor" { "active" } else { "" },
-        diagnostics_class = if active == "Diagnostics" {
-            "active"
+        doctor_menu_class = if active == "Doctor" {
+            "rpblc-dropdown__item active"
+        } else {
+            "rpblc-dropdown__item"
+        },
+        diagnostics_menu_class = if active == "Diagnostics" {
+            "rpblc-dropdown__item active"
+        } else {
+            "rpblc-dropdown__item"
+        },
+        more_summary_attrs = if matches!(active, "Settings" | "Logs" | "Doctor" | "Diagnostics") {
+            r#" class="active""#
         } else {
             ""
         },
     )
 }
 
+fn shell_content_class(active: &str, title: &str) -> &'static str {
+    if active == "Connect" {
+        "connect-surface"
+    } else if active == "Settings"
+        || active == "Vault"
+        || active == "Allowed"
+        || title == "Vault Value"
+    {
+        "content-surface"
+    } else {
+        "table-wrap"
+    }
+}
+
+fn script_json(value: serde_json::Value) -> String {
+    serde_json::to_string(&value)
+        .unwrap_or_else(|_| "{}".to_string())
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('&', "\\u0026")
+}
+
 fn render_vault_row(
     entry: &VaultEntry,
     active_consent: Option<&dam_consent::ConsentEntry>,
 ) -> String {
-    let allowed_cell = match active_consent {
+    let allowed_class = if active_consent.is_some() {
+        " allowed"
+    } else {
+        ""
+    };
+    let allowed_state = if active_consent.is_some() {
+        "Allowed"
+    } else {
+        "Protected"
+    };
+    let action = match active_consent {
         Some(consent) => format!(
             concat!(
-                "<span class=\"badge allowed\">allowed</span>",
                 "<form class=\"inline-form\" method=\"post\" action=\"/consents/revoke\">",
                 "<input type=\"hidden\" name=\"id\" value=\"{}\">",
                 "<input type=\"hidden\" name=\"return_to\" value=\"/vault\">",
-                "<button class=\"action-button danger\" type=\"submit\">Protect</button></form>"
+                "<button class=\"action-button\" type=\"submit\">Protect</button></form>"
             ),
             escape_html(&consent.id)
         ),
@@ -3507,19 +4781,25 @@ fn render_vault_row(
 
     format!(
         concat!(
-            "<tr>",
-            "<td class=\"value primary-value\"><a href=\"{}\" title=\"{}\">{}</a></td>",
-            "<td>{}</td>",
-            "<td>{}</td>",
-            "<td class=\"action-cell\">{}</td>",
-            "</tr>"
+            r#"<article class="wallet-item{allowed_class}">"#,
+            r#"<div class="wallet-main">"#,
+            r#"<div class="wallet-row">"#,
+            r#"<span class="wallet-kind">{kind}</span>"#,
+            r#"<a class="wallet-value" href="{detail_url}" title="{key}">{value}</a>"#,
+            r#"</div>"#,
+            r#"<div class="wallet-meta"><span>{allowed_state}</span><span>{seen}</span></div>"#,
+            r#"</div>"#,
+            r#"<div class="wallet-actions">{action}</div>"#,
+            r#"</article>"#
         ),
-        escape_html(&detail_url),
-        escape_html(&entry.key),
-        escape_html(&entry.value),
-        escape_html(&kind),
-        render_time(entry.updated_at),
-        allowed_cell
+        allowed_class = allowed_class,
+        kind = escape_html(&kind),
+        detail_url = escape_html(&detail_url),
+        key = escape_html(&entry.key),
+        value = escape_html(&entry.value),
+        allowed_state = allowed_state,
+        seen = render_time(entry.updated_at),
+        action = action,
     )
 }
 
@@ -3541,7 +4821,7 @@ fn render_vault_detail(
                 "<form method=\"post\" action=\"/consents/revoke\">",
                 "<input type=\"hidden\" name=\"id\" value=\"{}\">",
                 "<input type=\"hidden\" name=\"return_to\" value=\"/vault\">",
-                "<button class=\"action-button danger\" type=\"submit\">Protect</button></form>"
+                "<button class=\"action-button\" type=\"submit\">Protect</button></form>"
             ),
             escape_html(&consent.id)
         ),
@@ -3621,58 +4901,81 @@ fn render_value_audit_row(entry: &LogEntry) -> String {
     )
 }
 
-fn render_consents(entries: &[dam_consent::ConsentEntry]) -> String {
+fn render_consents(entries: &[dam_consent::ConsentEntry], vault_entries: &[VaultEntry]) -> String {
     let now = unix_now_lossy();
-    let rows = if entries.is_empty() {
-        "<tr><td class=\"empty\" colspan=\"8\">Nothing allowed through.</td></tr>".to_string()
+    let active_entries = entries
+        .iter()
+        .filter(|entry| entry.is_active_at(now))
+        .collect::<Vec<_>>();
+    let hidden_entries = entries
+        .iter()
+        .filter(|entry| !entry.is_active_at(now))
+        .collect::<Vec<_>>();
+    let items = if active_entries.is_empty() {
+        "<p class=\"empty wallet-empty\">Nothing is allowed through right now.</p>".to_string()
     } else {
-        entries
+        active_entries
             .iter()
-            .map(|entry| render_consent_row(entry, now))
+            .map(|entry| render_consent_row(entry, now, vault_entries))
             .collect::<Vec<_>>()
             .join("\n")
     };
+    let history = if hidden_entries.is_empty() {
+        String::new()
+    } else {
+        let hidden_items = hidden_entries
+            .iter()
+            .map(|entry| render_consent_row(entry, now, vault_entries))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            r#"<details class="wallet-history">
+        <summary>{count} past allowed item{suffix}</summary>
+        <div class="wallet-list">{hidden_items}</div>
+      </details>"#,
+            count = hidden_entries.len(),
+            suffix = if hidden_entries.len() == 1 { "" } else { "s" },
+            hidden_items = hidden_items,
+        )
+    };
 
     render_shell(
-        "Allowed Values",
+        "Allowed Data",
         "Allowed",
-        "Values currently allowed through DAM",
-        entries.len(),
-        "allowed",
+        "Only the data you chose to share.",
+        active_entries.len(),
+        "",
         &format!(
-            r#"<table class="data-table consents-table">
-      <thead>
-        <tr>
-          <th>ID</th>
-          <th>Status</th>
-          <th>Kind</th>
-          <th>Vault Key</th>
-          <th>Created</th>
-          <th>Expires</th>
-          <th>Source</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows}
-      </tbody>
-    </table>"#
+            r#"<section class="wallet-surface allowed-surface">
+      <div class="wallet-head">
+        <div>
+          <div class="section-title">Allowed</div>
+          <p>Only these data points can pass through. Protect any item again with one click.</p>
+        </div>
+      </div>
+      <div class="wallet-list">{items}</div>
+      {history}
+    </section>"#
         ),
     )
 }
 
 fn render_consents_disabled() -> String {
     render_shell(
-        "Allowed Values",
+        "Allowed Data",
         "Allowed",
-        "Allowed values are disabled",
+        "Allowed data is disabled",
         0,
-        "allowed",
-        "<p class=\"empty\">Allowed values are disabled in the current config.</p>",
+        "",
+        "<p class=\"empty\">Allowed data is disabled in the current config.</p>",
     )
 }
 
-fn render_consent_row(entry: &dam_consent::ConsentEntry, now: i64) -> String {
+fn render_consent_row(
+    entry: &dam_consent::ConsentEntry,
+    now: i64,
+    vault_entries: &[VaultEntry],
+) -> String {
     let status = entry.status_at(now);
     let action = if status == "active" {
         format!(
@@ -3680,29 +4983,98 @@ fn render_consent_row(entry: &dam_consent::ConsentEntry, now: i64) -> String {
                 "<form class=\"inline-form\" method=\"post\" action=\"/consents/revoke\">",
                 "<input type=\"hidden\" name=\"id\" value=\"{}\">",
                 "<input type=\"hidden\" name=\"return_to\" value=\"/allowed\">",
-                "<button class=\"action-button danger\" type=\"submit\">Protect</button></form>"
+                "<button class=\"action-button\" type=\"submit\">Protect</button></form>"
             ),
             escape_html(&entry.id)
         )
     } else {
         String::new()
     };
+    let value = consent_display_value(entry, vault_entries);
+    let status_label = match status {
+        "active" => "Allowed",
+        "expired" => "Expired",
+        "revoked" => "Protected",
+        _ => status,
+    };
+    let state_class = if status == "active" {
+        " allowed"
+    } else {
+        " expired"
+    };
+    let source = format!(
+        "{} · expires {}",
+        escape_html(&entry.created_by),
+        render_time(entry.expires_at)
+    );
+    let detail = format!(
+        concat!(
+            r#"<details class="wallet-details">"#,
+            r#"<summary>Details</summary>"#,
+            r#"<dl>"#,
+            r#"<dt>ID</dt><dd>{id}</dd>"#,
+            r#"<dt>Vault Key</dt><dd>{vault_key}</dd>"#,
+            r#"<dt>Created</dt><dd>{created}</dd>"#,
+            r#"<dt>Scope</dt><dd>{scope}</dd>"#,
+            r#"</dl></details>"#
+        ),
+        id = escape_html(&entry.id),
+        vault_key = escape_optional(&entry.vault_key),
+        created = render_time(entry.created_at),
+        scope = escape_html(&entry.scope),
+    );
 
     format!(
         concat!(
-            "<tr><td class=\"key\">{}</td><td><span class=\"badge\">{}</span></td>",
-            "<td>{}</td><td class=\"key\">{}</td><td>{}</td><td>{}</td>",
-            "<td>{}</td><td class=\"action-cell\">{}</td></tr>"
+            r#"<article class="wallet-item{state_class}">"#,
+            r#"<div class="wallet-main">"#,
+            r#"<div class="wallet-row">"#,
+            r#"<span class="wallet-kind">{kind}</span>"#,
+            r#"<span class="wallet-value">{value}</span>"#,
+            r#"</div>"#,
+            r#"<div class="wallet-meta"><span>{status_label}</span><span>{source}</span></div>"#,
+            r#"{detail}"#,
+            r#"</div>"#,
+            r#"<div class="wallet-actions">{action}</div>"#,
+            r#"</article>"#
         ),
-        escape_html(&entry.id),
-        escape_html(status),
-        escape_html(entry.kind.tag()),
-        escape_optional(&entry.vault_key),
-        render_time(entry.created_at),
-        render_time(entry.expires_at),
-        escape_html(&entry.created_by),
-        action
+        state_class = state_class,
+        kind = escape_html(entry.kind.tag()),
+        value = escape_html(&value),
+        status_label = status_label,
+        source = source,
+        detail = detail,
+        action = action,
     )
+}
+
+fn consent_display_value(
+    entry: &dam_consent::ConsentEntry,
+    vault_entries: &[VaultEntry],
+) -> String {
+    entry
+        .vault_key
+        .as_ref()
+        .and_then(|key| {
+            vault_entries
+                .iter()
+                .find(|vault_entry| vault_entry.key == *key)
+                .map(|vault_entry| vault_entry.value.clone())
+        })
+        .or_else(|| {
+            vault_entries
+                .iter()
+                .find(|vault_entry| {
+                    dam_core::Reference::parse_key(&vault_entry.key).is_some_and(|reference| {
+                        reference.kind == entry.kind
+                            && dam_consent::fingerprint(entry.kind, &vault_entry.value)
+                                == entry.value_fingerprint
+                    })
+                })
+                .map(|vault_entry| vault_entry.value.clone())
+        })
+        .or_else(|| entry.vault_key.clone())
+        .unwrap_or_else(|| format!("{} value", entry.kind.tag()))
 }
 
 fn render_log_row(entry: &LogEntry) -> String {
@@ -4349,16 +5721,15 @@ mod tests {
     }
 
     #[test]
-    fn render_vault_includes_column_order_buttons() {
+    fn render_vault_includes_sort_cycle_button() {
         let html = render_vault(&PathBuf::from("vault.db"), &[]);
 
-        assert!(html.contains("aria-label=\"Sort Value ascending\""));
-        assert!(html.contains("sortable-heading"));
-        assert!(html.contains("order-label"));
-        assert!(html.contains("href=\"/vault?sort=value&amp;dir=asc\""));
-        assert!(html.contains("href=\"/vault?sort=updated&amp;dir=desc\""));
-        assert!(html.contains("class=\"order-button active\""));
-        assert!(html.contains("Allowed"));
+        assert!(html.contains("class=\"cycle-button wallet-sort-cycle\""));
+        assert!(html.contains("aria-label=\"Sort wallet. Current: Recent. Click for Oldest.\""));
+        assert!(html.contains("href=\"/vault?sort=updated&amp;dir=asc\""));
+        assert!(html.contains("<strong>Recent</strong>"));
+        assert!(html.contains("Data Wallet"));
+        assert!(html.contains("Wallet"));
     }
 
     #[test]
@@ -4426,22 +5797,25 @@ mod tests {
 
     #[test]
     fn render_consents_includes_revoke_button_for_active_entries() {
-        let html = render_consents(&[dam_consent::ConsentEntry {
-            id: "consent_123".to_string(),
-            kind: dam_core::SensitiveType::Email,
-            value_fingerprint: "fp".to_string(),
-            vault_key: Some("email:1111111111111111111111".to_string()),
-            scope: "global".to_string(),
-            created_at: 1,
-            expires_at: unix_now_lossy() + 60,
-            revoked_at: None,
-            created_by: "test".to_string(),
-            reason: None,
-        }]);
+        let html = render_consents(
+            &[dam_consent::ConsentEntry {
+                id: "consent_123".to_string(),
+                kind: dam_core::SensitiveType::Email,
+                value_fingerprint: "fp".to_string(),
+                vault_key: Some("email:1111111111111111111111".to_string()),
+                scope: "global".to_string(),
+                created_at: 1,
+                expires_at: unix_now_lossy() + 60,
+                revoked_at: None,
+                created_by: "test".to_string(),
+                reason: None,
+            }],
+            &[],
+        );
 
         assert!(html.contains("consent_123"));
         assert!(html.contains("action=\"/consents/revoke\""));
-        assert!(html.contains("class=\"action-button danger\""));
+        assert!(html.contains("class=\"action-button\""));
         assert!(html.contains("name=\"return_to\" value=\"/allowed\""));
         assert!(html.contains("Protect"));
     }
@@ -4482,10 +5856,34 @@ mod tests {
         assert!(html.contains("rel=\"icon\" type=\"image/svg+xml\" href=\"/favicon.svg\""));
         assert!(html.contains("https://rpblc.com"));
         assert!(html.contains("RPBLC.com"));
-        assert!(html.contains("privacy infrastructure"));
-        assert!(html.contains("margin: 0 auto 42px;"));
+        assert!(!html.contains("The republic builds."));
+        assert!(html.contains("<span class=\"brand-product\">DAM</span>"));
+        assert!(!html.contains("The network of Persons who refuse to be products."));
+        assert!(html.contains("id=\"dam-root\""));
+        assert!(html.contains("id=\"dam-fallback\""));
+        assert!(html.contains("id=\"dam-web-props\" type=\"application/json\""));
+        assert!(html.contains("src=\"/assets/dam-web-ui.js\""));
+        assert!(html.contains("window.localStorage.getItem(\"rpblc.dam.theme\")"));
+        assert!(html.contains("@media (prefers-color-scheme: light)"));
+        assert!(html.contains(
+            "<a class=\"rpblc-dropdown__item\" href=\"/settings\"><span class=\"rpblc-dropdown__item-body\"><span class=\"rpblc-dropdown__item-label\">Settings</span></span></a>"
+        ));
+        assert!(html.contains("margin: 0 auto var(--space-10);"));
         assert!(html.contains("padding: 0;\n    }\n    .brand-bar"));
-        assert!(html.contains("padding: 6px 24px;"));
+        assert!(html.contains("padding: var(--space-2) var(--space-6);"));
+    }
+
+    #[test]
+    fn shell_props_json_is_script_safe() {
+        let json = script_json(serde_json::json!({
+            "contentHtml": "</script><script>alert(1)</script>",
+            "meta": "a & b",
+        }));
+
+        assert!(!json.contains("</script>"));
+        assert!(!json.contains("<script>"));
+        assert!(json.contains("\\u003c/script\\u003e"));
+        assert!(json.contains("\\u0026"));
     }
 
     #[test]
@@ -4521,7 +5919,9 @@ mod tests {
         assert!(html.contains("order-label"));
         assert!(html.contains("href=\"/logs?sort=id&amp;dir=desc\""));
         assert!(html.contains("href=\"/logs?sort=message&amp;dir=asc\""));
-        assert!(html.contains("class=\"order-button active\""));
+        assert!(html.contains("order-button"));
+        assert!(html.contains("active"));
+        assert!(html.contains("aria-current=\"true\""));
     }
 
     #[test]
@@ -4630,7 +6030,7 @@ mod tests {
         assert!(html.contains("proxy_runtime"));
         assert!(html.contains("router_config_required"));
         assert!(html.contains("href=\"/doctor\""));
-        assert!(html.contains("class=\"active\" href=\"/doctor\""));
+        assert!(html.contains("class=\"rpblc-dropdown__item active\" href=\"/doctor\""));
     }
 
     #[test]
@@ -4670,17 +6070,56 @@ mod tests {
 
         let html = render_connect_dashboard(&view);
 
-        assert!(html.contains("DAM Connect"));
-        assert!(html.contains("Choose Profile") || html.contains("Needs Setup"));
-        assert!(html.contains("class=\"connect-button\" type=\"submit\">Connect</button>"));
+        assert!(html.contains("Protection"));
+        assert!(html.contains("Ready to protect"));
+        assert!(html.contains("Press Protect once. DAM handles the rest."));
+        assert!(html.contains("class=\"connect-button\" type=\"submit\">Protect</button>"));
         assert!(html.contains("action=\"/connect/action\""));
         assert!(html.contains("Claude Code"));
         assert!(html.contains("<span class=\"toggle-title\">Apps</span>"));
         assert!(html.contains("<span class=\"toggle-value\">Claude Code</span>"));
         assert!(html.contains("<span class=\"toggle-chevron\" aria-hidden=\"true\"></span>"));
-        assert!(html.contains("Next: Profile"));
+        assert!(!html.contains("Next:"));
         assert!(html.contains("href=\"/connect\""));
         assert!(html.contains("class=\"active\" href=\"/connect\""));
+    }
+
+    #[test]
+    fn render_settings_profile_uses_app_card_contract() {
+        let view = test_connect_dashboard(
+            DashboardState::NeedsSetup,
+            Some("claude-code"),
+            Some(dam_integrations::IntegrationApplyStatus::Applied),
+        );
+        let html = render_settings_profile(&view.profiles[0]);
+
+        assert!(html.contains("class=\"rpblc-app-card rpblc-app-card--selected\""));
+        assert!(html.contains("class=\"rpblc-app-card__state rpblc-app-card__state--enabled\""));
+        assert!(html.contains("class=\"rpblc-app-card__disclosure\" type=\"button\""));
+        assert!(html.contains("aria-expanded=\"false\""));
+        assert!(html.contains("class=\"rpblc-app-card__action\" method=\"post\""));
+        assert!(html.contains("class=\"rpblc-app-card__details\" hidden"));
+        assert!(html.contains("class=\"rpblc-button rpblc-button--secondary rpblc-button--sm\""));
+    }
+
+    #[test]
+    fn render_connect_profile_option_uses_dropdown_item_contract() {
+        let view = test_connect_dashboard(
+            DashboardState::NeedsSetup,
+            Some("claude-code"),
+            Some(dam_integrations::IntegrationApplyStatus::Applied),
+        );
+        let html = render_profile_option(&view.profiles[0]);
+
+        assert!(html.contains(
+            "class=\"profile-select-row rpblc-dropdown__item rpblc-dropdown__item--selected\""
+        ));
+        assert!(html.contains("class=\"rpblc-dropdown__item-leading\""));
+        assert!(html.contains("class=\"rpblc-dropdown__item-body\""));
+        assert!(html.contains("class=\"rpblc-dropdown__item-label\""));
+        assert!(html.contains("class=\"rpblc-dropdown__item-desc\""));
+        assert!(!html.contains("class=\"profile-name\""));
+        assert!(!html.contains("class=\"profile-summary\""));
     }
 
     #[test]
@@ -4705,8 +6144,8 @@ mod tests {
         assert!(
             html.contains("data-confirm=\"Allow DAM to update local network and trust settings?\"")
         );
-        assert!(html.contains("Next: Routing"));
-        assert!(html.contains("Connect</button>"));
+        assert!(!html.contains("Next:"));
+        assert!(html.contains("Protect</button>"));
     }
 
     #[test]
@@ -4834,7 +6273,7 @@ mod tests {
         assert!(html.contains("dam-tray:open-rpblc"));
         assert!(html.contains("dam-tray:connect"));
         assert!(html.contains("class=\"tray-quit\""));
-        assert!(html.contains("aria-label=\"Quit DAM\""));
+        assert!(html.contains("aria-label=\"Quit tray\""));
         assert!(html.contains(">⏻</button>"));
         assert!(html.contains(
             "<summary aria-label=\"More\" title=\"More\"><span class=\"chevron-mark\" aria-hidden=\"true\"></span></summary>"
@@ -4844,6 +6283,25 @@ mod tests {
             "body.tray-shell nav {\n      gap: 2px;\n      margin-bottom: 0;\n      overflow: visible;"
         ));
         assert!(html.contains("dam-tray:quit"));
+    }
+
+    #[test]
+    fn render_settings_marks_more_menu_active() {
+        let html = render_shell_with_mode(
+            ShellMode::Browser,
+            "DAM Settings",
+            "Settings",
+            "meta",
+            0,
+            "enabled",
+            "<p>content</p>",
+        );
+
+        assert!(html.contains(
+            "<summary class=\"active\" aria-label=\"More\" title=\"More\"><span class=\"chevron-mark\" aria-hidden=\"true\"></span></summary>"
+        ));
+        assert!(html.contains("class=\"rpblc-dropdown__item active\" href=\"/settings\""));
+        assert!(!html.contains("<a class=\"active\" href=\"/connect\">Connect</a>"));
     }
 
     #[test]
@@ -4866,15 +6324,14 @@ mod tests {
     }
 
     #[test]
-    fn disconnect_restores_system_proxy_before_stopping_daemon() {
-        assert_eq!(
-            system_proxy_remove_args(),
-            vec![
-                "network".to_string(),
-                "remove-system-proxy".to_string(),
-                "--yes".to_string(),
-            ]
-        );
+    fn render_paused_dashboard_uses_connect_action() {
+        let view = test_connect_dashboard(DashboardState::Paused, None, None);
+        let html = render_connect_dashboard(&view);
+
+        assert!(html.contains("Paused"));
+        assert!(html.contains("name=\"action\" value=\"connect\""));
+        assert!(html.contains(">Resume</button>"));
+        assert!(!html.contains("name=\"action\" value=\"disconnect\""));
     }
 
     #[test]
@@ -5012,7 +6469,7 @@ mod tests {
                 dam_diagnostics::SetupStep {
                     kind: dam_diagnostics::SetupStepKind::ProfileApply,
                     status: profile_step_status,
-                    message: "profile setup".to_string(),
+                    message: "app selection".to_string(),
                     command: if profile_step_status == dam_diagnostics::SetupStepStatus::Needed {
                         Some(vec![
                             "dam".to_string(),

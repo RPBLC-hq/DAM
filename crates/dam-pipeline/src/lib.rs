@@ -189,9 +189,13 @@ mod tests {
     }
 
     impl VaultWriter for RecordingVault {
-        fn write(&self, record: &VaultRecord) -> Result<(), VaultWriteError> {
+        fn write_with_options(
+            &self,
+            record: &VaultRecord,
+            _options: dam_core::VaultWriteOptions,
+        ) -> Result<Reference, VaultWriteError> {
             self.records.lock().unwrap().push(record.clone());
-            Ok(())
+            Ok(record.reference.clone())
         }
     }
 

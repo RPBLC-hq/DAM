@@ -676,6 +676,8 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",
+ "uuid",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -761,6 +763,7 @@ dependencies = [
  "dam-trust",
  "dam-vault",
  "reqwest",
+ "serde_json",
  "tokio",
 ]
 

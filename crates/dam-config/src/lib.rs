@@ -314,7 +314,7 @@ impl Default for ProxyConfig {
             listen: "127.0.0.1:7828".to_string(),
             mode: ProxyMode::ReverseProxy,
             default_failure_mode: ProxyFailureMode::BypassOnError,
-            resolve_inbound: false,
+            resolve_inbound: true,
             targets: Vec::new(),
         }
     }
@@ -1325,7 +1325,7 @@ mod tests {
             ProxyFailureMode::BypassOnError
         );
         assert!(config.policy.deduplicate_replacements);
-        assert!(!config.proxy.resolve_inbound);
+        assert!(config.proxy.resolve_inbound);
         assert!(config.proxy.targets.is_empty());
     }
 

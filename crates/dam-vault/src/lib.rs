@@ -1,5 +1,9 @@
-use dam_core::{Reference, VaultReadError, VaultReader, VaultRecord, VaultWriteError, VaultWriter};
+use dam_core::{
+    Reference, SensitiveType, VaultReadError, VaultReader, VaultRecord, VaultWriteError,
+    VaultWriteOptions, VaultWriter,
+};
 use rusqlite::{Connection, OptionalExtension, params};
+use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -114,7 +118,7 @@ impl Vault {
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(entries)
+        Ok(deduplicate_entries(entries))
     }
 
     pub fn count(&self) -> VaultResult<u64> {
@@ -126,9 +130,34 @@ impl Vault {
 }
 
 impl VaultWriter for Vault {
-    fn write(&self, record: &VaultRecord) -> Result<(), VaultWriteError> {
-        self.put(&record.reference.key(), &record.value)
-            .map_err(|error| VaultWriteError::new(error.to_string()))
+    fn write_with_options(
+        &self,
+        record: &VaultRecord,
+        options: VaultWriteOptions,
+    ) -> Result<Reference, VaultWriteError> {
+        let now = now_unix_secs().map_err(|error| VaultWriteError::new(error.to_string()))?;
+        let conn = self.conn.lock().expect("vault sqlite mutex poisoned");
+
+        if options.deduplicate
+            && let Some(existing) = find_existing_reference(&conn, record.kind, &record.value)
+                .map_err(|error| VaultWriteError::new(error.to_string()))?
+        {
+            return Ok(existing);
+        }
+
+        conn.execute(
+            "
+            INSERT INTO vault_entries (key, value, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?3)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            ",
+            params![record.reference.key(), record.value, now],
+        )
+        .map_err(|error| VaultWriteError::new(error.to_string()))?;
+
+        Ok(record.reference.clone())
     }
 }
 
@@ -144,6 +173,52 @@ fn now_unix_secs() -> VaultResult<i64> {
         .duration_since(UNIX_EPOCH)
         .map_err(|_| VaultError::Clock)?;
     Ok(duration.as_secs() as i64)
+}
+
+fn find_existing_reference(
+    conn: &Connection,
+    kind: SensitiveType,
+    value: &str,
+) -> VaultResult<Option<Reference>> {
+    let pattern = format!("{}:%", kind.tag());
+    let mut stmt = conn.prepare(
+        "
+        SELECT key
+        FROM vault_entries
+        WHERE value = ?1
+          AND key LIKE ?2
+        ORDER BY created_at ASC, key ASC
+        ",
+    )?;
+    let mut rows = stmt.query(params![value, pattern])?;
+
+    while let Some(row) = rows.next()? {
+        let key: String = row.get(0)?;
+        if let Some(reference) = Reference::parse_key(&key)
+            && reference.kind == kind
+        {
+            return Ok(Some(reference));
+        }
+    }
+
+    Ok(None)
+}
+
+fn deduplicate_entries(entries: Vec<VaultEntry>) -> Vec<VaultEntry> {
+    let mut seen = HashSet::<(SensitiveType, String)>::new();
+    let mut deduplicated = Vec::with_capacity(entries.len());
+
+    for entry in entries {
+        let Some(reference) = Reference::parse_key(&entry.key) else {
+            deduplicated.push(entry);
+            continue;
+        };
+        if seen.insert((reference.kind, entry.value.clone())) {
+            deduplicated.push(entry);
+        }
+    }
+
+    deduplicated
 }
 
 #[cfg(test)]
@@ -217,6 +292,21 @@ mod tests {
     }
 
     #[test]
+    fn list_deduplicates_equal_values_per_kind() {
+        let vault = Vault::open_in_memory().unwrap();
+        let first = Reference::generate(dam_core::SensitiveType::Email);
+        let second = Reference::generate(dam_core::SensitiveType::Email);
+
+        vault.put(&first.key(), "alice@example.com").unwrap();
+        vault.put(&second.key(), "alice@example.com").unwrap();
+
+        let entries = vault.list().unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].value, "alice@example.com");
+    }
+
+    #[test]
     fn entries_persist_on_disk() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("vault.db");
@@ -246,12 +336,69 @@ mod tests {
             value: "alice@example.com".to_string(),
         };
 
-        vault.write(&record).unwrap();
+        let stored_reference = vault.write(&record).unwrap();
 
+        assert_eq!(stored_reference, reference);
         assert_eq!(
             vault.get(&reference.key()).unwrap(),
             Some("alice@example.com".to_string())
         );
+    }
+
+    #[test]
+    fn vault_writer_returns_existing_reference_for_duplicate_value() {
+        let vault = Vault::open_in_memory().unwrap();
+        let first = dam_core::Reference::generate(dam_core::SensitiveType::Email);
+        let second = dam_core::Reference::generate(dam_core::SensitiveType::Email);
+
+        let first_stored = vault
+            .write(&dam_core::VaultRecord {
+                reference: first.clone(),
+                kind: dam_core::SensitiveType::Email,
+                value: "alice@example.com".to_string(),
+            })
+            .unwrap();
+        let second_stored = vault
+            .write(&dam_core::VaultRecord {
+                reference: second.clone(),
+                kind: dam_core::SensitiveType::Email,
+                value: "alice@example.com".to_string(),
+            })
+            .unwrap();
+
+        assert_eq!(first_stored, first);
+        assert_eq!(second_stored, first);
+        assert_eq!(vault.count().unwrap(), 1);
+        assert_eq!(vault.get(&second.key()).unwrap(), None);
+    }
+
+    #[test]
+    fn vault_writer_can_store_duplicate_values_when_deduplication_is_disabled() {
+        let vault = Vault::open_in_memory().unwrap();
+        let first = dam_core::Reference::generate(dam_core::SensitiveType::Email);
+        let second = dam_core::Reference::generate(dam_core::SensitiveType::Email);
+
+        vault
+            .write(&dam_core::VaultRecord {
+                reference: first.clone(),
+                kind: dam_core::SensitiveType::Email,
+                value: "alice@example.com".to_string(),
+            })
+            .unwrap();
+        let second_stored = vault
+            .write_with_options(
+                &dam_core::VaultRecord {
+                    reference: second.clone(),
+                    kind: dam_core::SensitiveType::Email,
+                    value: "alice@example.com".to_string(),
+                },
+                dam_core::VaultWriteOptions { deduplicate: false },
+            )
+            .unwrap();
+
+        assert_eq!(second_stored, second);
+        assert_eq!(vault.count().unwrap(), 2);
+        assert_eq!(vault.list().unwrap().len(), 1);
     }
 
     #[test]

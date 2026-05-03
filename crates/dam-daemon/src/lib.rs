@@ -18,7 +18,8 @@ pub const ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
 pub const STATE_DIR_ENV: &str = "DAM_STATE_DIR";
 
 const STATE_FILE: &str = "daemon.json";
-const STATE_VERSION: u32 = 2;
+const PROTECTION_FILE: &str = "protection.state";
+const STATE_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyOptions {
@@ -98,6 +99,8 @@ pub struct DaemonState {
     pub transparent_ai_trust_readiness: Vec<dam_trust::RouteTrustReadiness>,
     #[serde(default)]
     pub transparent_ai_interception_readiness: Vec<dam_intercept::RouteTlsInterceptionReadiness>,
+    #[serde(default = "default_protection_enabled")]
+    pub protection_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,6 +108,10 @@ pub enum DaemonStatus {
     Disconnected,
     Stale(DaemonState),
     Connected(DaemonState),
+}
+
+fn default_protection_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -390,6 +397,7 @@ pub async fn serve_with_modes(
     if !addr.ip().is_loopback() {
         return Err(DaemonError::NonLoopbackListen(addr));
     }
+    set_protection_enabled(true)?;
     let interception = transparent_interception_config(&config, network_mode, trust_mode)?;
     let app = if network_mode == dam_net::CaptureMode::ExplicitProxy {
         Some(
@@ -505,6 +513,39 @@ pub fn write_state_to(path: &Path, state: &DaemonState) -> Result<(), DaemonErro
         path: path.to_path_buf(),
         source,
     })
+}
+
+pub fn protection_control_path() -> Result<PathBuf, DaemonError> {
+    state_paths().map(|paths| paths.state_dir.join(PROTECTION_FILE))
+}
+
+pub fn protection_enabled() -> Result<bool, DaemonError> {
+    let path = protection_control_path()?;
+    match fs::read_to_string(&path) {
+        Ok(value) => Ok(!value.trim().eq_ignore_ascii_case("disabled")),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(source) => Err(DaemonError::ReadState { path, source }),
+    }
+}
+
+pub fn set_protection_enabled(enabled: bool) -> Result<(), DaemonError> {
+    let paths = state_paths()?;
+    fs::create_dir_all(&paths.state_dir).map_err(|source| DaemonError::CreateStateDir {
+        path: paths.state_dir.clone(),
+        source,
+    })?;
+    let protection_path = paths.state_dir.join(PROTECTION_FILE);
+    let value = if enabled { "enabled\n" } else { "disabled\n" };
+    atomic_write(&protection_path, value.as_bytes()).map_err(|source| DaemonError::WriteState {
+        path: protection_path,
+        source,
+    })?;
+
+    if let Some(mut state) = read_state_from(&paths.state_file)? {
+        state.protection_enabled = enabled;
+        write_state_to(&paths.state_file, &state)?;
+    }
+    Ok(())
 }
 
 pub fn remove_state() -> Result<(), DaemonError> {
@@ -749,7 +790,8 @@ fn state_from_config(
     let user_consented_to_interception = trust_mode == dam_trust::TrustMode::LocalCa;
     let system_proxy_active = network_mode == dam_net::CaptureMode::SystemProxy
         && dam_net_macos::system_proxy_installed(&state_paths.state_dir);
-    let tun_active = false;
+    let tun_active = network_mode == dam_net::CaptureMode::Tun
+        && dam_net_macos::network_extension_active(&state_paths.state_dir);
     let transparent_ai_routing_readiness = dam_net::transparent_capture_readiness_for_ai_routes(
         &transparent_ai_routes,
         network_mode,
@@ -798,6 +840,7 @@ fn state_from_config(
         trust,
         transparent_ai_trust_readiness,
         transparent_ai_interception_readiness,
+        protection_enabled: protection_enabled().unwrap_or(true),
     })
 }
 
@@ -829,15 +872,18 @@ fn transparent_interception_config(
     extend_trust_scope(&mut trust, &ai_routes);
     let system_proxy_active = network_mode == dam_net::CaptureMode::SystemProxy
         && dam_net_macos::system_proxy_installed(&state_paths.state_dir);
+    let tun_active = network_mode == dam_net::CaptureMode::Tun
+        && dam_net_macos::network_extension_active(&state_paths.state_dir);
 
     Ok(dam_proxy::TransparentInterceptionConfig {
         state_dir: state_paths.state_dir,
         network_mode,
         system_proxy_active,
-        tun_active: false,
+        tun_active,
         ai_routes,
         trust,
         user_consented: trust_mode == dam_trust::TrustMode::LocalCa,
+        protection_control_path: Some(protection_control_path()?),
     })
 }
 
@@ -1093,6 +1139,7 @@ mod tests {
                 false,
                 dam_intercept::TlsInterceptionAdapter::unavailable(),
             ),
+            protection_enabled: true,
         };
 
         write_state_to(&path, &state).unwrap();

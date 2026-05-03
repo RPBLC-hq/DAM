@@ -88,6 +88,36 @@ fn duplicate_values_reuse_one_reference_by_default() {
 }
 
 #[test]
+fn duplicate_values_reuse_existing_reference_across_runs_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("vault.db");
+
+    let first = run_filter(
+        &["--db", db_path.to_str().unwrap()],
+        "email alice@example.com",
+        dir.path(),
+    );
+    let second = run_filter(
+        &["--db", db_path.to_str().unwrap()],
+        "again alice@example.com",
+        dir.path(),
+    );
+
+    assert!(first.status.success(), "{}", utf8(&first.stderr));
+    assert!(second.status.success(), "{}", utf8(&second.stderr));
+
+    let first_refs = dam_core::find_references(&utf8(&first.stdout));
+    let second_refs = dam_core::find_references(&utf8(&second.stdout));
+    assert_eq!(first_refs.len(), 1);
+    assert_eq!(second_refs.len(), 1);
+    assert_eq!(first_refs[0].reference, second_refs[0].reference);
+    assert_eq!(
+        dam_vault::Vault::open(&db_path).unwrap().count().unwrap(),
+        1
+    );
+}
+
+#[test]
 fn duplicate_value_reuse_can_be_disabled_by_config() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("vault.db");
