@@ -138,6 +138,7 @@ pub enum MacosNetworkExtensionResultState {
     Preview,
     Installed,
     AlreadyInstalled,
+    NeedsApproval,
     Removed,
     NotInstalled,
     Status,
@@ -204,10 +205,10 @@ pub fn preview_install_network_extension_for_hosts(
     let plan = install_plan_for_hosts(state_dir, ai_hosts)?;
     let record = read_record(&plan.paths)?;
     Ok(MacosNetworkExtensionResult {
-        state: if record.as_ref().is_some_and(|record| record.active) {
-            MacosNetworkExtensionResultState::AlreadyInstalled
-        } else {
-            MacosNetworkExtensionResultState::Preview
+        state: match record.as_ref().map(|record| record.active) {
+            Some(true) => MacosNetworkExtensionResultState::AlreadyInstalled,
+            Some(false) => MacosNetworkExtensionResultState::NeedsApproval,
+            None => MacosNetworkExtensionResultState::Preview,
         },
         record,
         plan,
@@ -227,7 +228,7 @@ pub fn install_network_extension_for_hosts(
     ai_hosts: &[String],
 ) -> Result<MacosNetworkExtensionResult, MacosNetworkExtensionError> {
     ensure_macos()?;
-    let plan = install_plan_for_hosts(&state_dir, ai_hosts)?;
+    let mut plan = install_plan_for_hosts(&state_dir, ai_hosts)?;
     if !plan.can_execute {
         if !plan.backend_status.active && plan.commands.is_empty() {
             return Err(MacosNetworkExtensionError::MissingHelper {
@@ -242,16 +243,35 @@ pub fn install_network_extension_for_hosts(
         });
     }
 
+    let mut needs_approval = None;
     for command in &plan.commands {
-        run_helper_command(command)?;
+        if let HelperCommandOutcome::NeedsApproval(message) = run_helper_command(command)? {
+            needs_approval = Some(message);
+            break;
+        }
     }
 
-    fs::create_dir_all(&plan.paths.directory).map_err(|source| {
-        MacosNetworkExtensionError::CreateDir {
-            path: plan.paths.directory.clone(),
-            source,
-        }
-    })?;
+    if let Some(message) = needs_approval {
+        let record = MacosNetworkExtensionStateRecord {
+            version: STATE_VERSION,
+            bundle_identifier: plan.bundle_identifier.clone(),
+            team_identifier: plan.team_identifier.clone(),
+            ai_hosts: plan.ai_hosts.clone(),
+            installed_at_unix: unix_timestamp()?,
+            active: false,
+            activation_method: "native_helper_needs_user_approval".to_string(),
+        };
+        write_state_record(&plan.paths, &record)?;
+        plan.message = message;
+        plan.backend_status = backend_status_from_record(Some(&record), plan.message.clone());
+        return Ok(MacosNetworkExtensionResult {
+            state: MacosNetworkExtensionResultState::NeedsApproval,
+            plan,
+            record: Some(record),
+            system_routes_changed: false,
+        });
+    }
+
     let record = MacosNetworkExtensionStateRecord {
         version: STATE_VERSION,
         bundle_identifier: plan.bundle_identifier.clone(),
@@ -261,9 +281,7 @@ pub fn install_network_extension_for_hosts(
         active: true,
         activation_method: "native_helper".to_string(),
     };
-    let raw =
-        serde_json::to_vec_pretty(&record).map_err(MacosNetworkExtensionError::SerializeState)?;
-    write_atomic(&plan.paths.state_path, &raw, 0o600)?;
+    write_state_record(&plan.paths, &record)?;
 
     Ok(MacosNetworkExtensionResult {
         state: MacosNetworkExtensionResultState::Installed,
@@ -342,6 +360,7 @@ fn install_plan_for_hosts(
     let bundle_identifier = bundle_identifier();
     let team_identifier = team_identifier();
     let installed = record.as_ref().is_some_and(|record| record.active);
+    let pending_approval = record.as_ref().is_some_and(|record| !record.active);
     let commands = helper_command(
         "install",
         &bundle_identifier,
@@ -353,6 +372,8 @@ fn install_plan_for_hosts(
         support == MacosNetworkExtensionSupport::Implemented && !installed && !commands.is_empty();
     let message = if installed {
         "macOS Network Extension capture is already recorded active".to_string()
+    } else if pending_approval {
+        "macOS Network Extension activation is waiting for user approval".to_string()
     } else if commands.is_empty() {
         "packaged macOS Network Extension helper is required before capture can be activated"
             .to_string()
@@ -565,9 +586,15 @@ fn helper_path() -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HelperCommandOutcome {
+    Applied,
+    NeedsApproval(String),
+}
+
 fn run_helper_command(
     command: &MacosNetworkExtensionCommand,
-) -> Result<(), MacosNetworkExtensionError> {
+) -> Result<HelperCommandOutcome, MacosNetworkExtensionError> {
     let output = Command::new(&command.program)
         .args(&command.args)
         .output()
@@ -576,7 +603,11 @@ fn run_helper_command(
             source,
         })?;
     if output.status.success() {
-        return Ok(());
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if stdout.starts_with("needs_user_approval ") {
+            return Ok(HelperCommandOutcome::NeedsApproval(stdout));
+        }
+        return Ok(HelperCommandOutcome::Applied);
     }
     Err(MacosNetworkExtensionError::HelperFailed {
         program: command.program.clone(),
@@ -584,6 +615,21 @@ fn run_helper_command(
         status: output.status.to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
     })
+}
+
+fn write_state_record(
+    paths: &MacosNetworkExtensionPaths,
+    record: &MacosNetworkExtensionStateRecord,
+) -> Result<(), MacosNetworkExtensionError> {
+    fs::create_dir_all(&paths.directory).map_err(|source| {
+        MacosNetworkExtensionError::CreateDir {
+            path: paths.directory.clone(),
+            source,
+        }
+    })?;
+    let raw =
+        serde_json::to_vec_pretty(record).map_err(MacosNetworkExtensionError::SerializeState)?;
+    write_atomic(&paths.state_path, &raw, 0o600)
 }
 
 fn read_record(
@@ -751,6 +797,7 @@ fn unix_timestamp() -> Result<u64, MacosNetworkExtensionError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
     use std::sync::{Mutex, MutexGuard};
 
     static HELPER_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -761,9 +808,13 @@ mod tests {
 
     impl HelperEnvGuard {
         fn install() -> Self {
+            Self::with_helper_path(Path::new("/usr/bin/true"))
+        }
+
+        fn with_helper_path(path: &Path) -> Self {
             let lock = HELPER_ENV_LOCK.lock().unwrap();
             unsafe {
-                env::set_var(HELPER_ENV, "/usr/bin/true");
+                env::set_var(HELPER_ENV, path);
             }
             Self { _lock: lock }
         }
@@ -807,6 +858,40 @@ mod tests {
             dam_net::CaptureBackendReadiness::Ready
         );
         assert_eq!(status.record.unwrap().ai_hosts, vec!["api.openai.com"]);
+    }
+
+    #[test]
+    fn install_records_pending_state_when_helper_needs_user_approval() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let helper = dir.path().join("helper.sh");
+        fs::write(
+            &helper,
+            "#!/bin/sh\necho 'needs_user_approval com.rpblc.dam.network-extension approve DAM Network Protection in System Settings'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let _helper = HelperEnvGuard::with_helper_path(&helper);
+        let result =
+            install_network_extension_for_hosts(dir.path(), &["api.openai.com".to_string()])
+                .unwrap();
+
+        assert_eq!(
+            result.state,
+            MacosNetworkExtensionResultState::NeedsApproval
+        );
+        assert!(network_extension_installed(dir.path()));
+        assert!(!network_extension_active(dir.path()));
+        assert_eq!(
+            result.plan.backend_status.readiness,
+            dam_net::CaptureBackendReadiness::NeedsApproval
+        );
+        assert_eq!(
+            result.record.unwrap().activation_method,
+            "native_helper_needs_user_approval"
+        );
     }
 
     #[test]

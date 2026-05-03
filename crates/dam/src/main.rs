@@ -528,6 +528,10 @@ fn network_command(args: NetworkArgs) -> Result<i32, String> {
             }
             .map_err(|error| error.to_string())?;
             print_network_extension_result(&result, json, yes)?;
+            if yes && result.state == dam_net_macos::MacosNetworkExtensionResultState::NeedsApproval
+            {
+                return Ok(75);
+            }
         }
         NetworkArgs::RemoveNetworkExtension { json, yes } => {
             let result = if yes {
@@ -2019,6 +2023,11 @@ fn render_network_extension_result(
             record.installed_at_unix
         ));
     }
+    if result.state == dam_net_macos::MacosNetworkExtensionResultState::NeedsApproval {
+        output.push_str(
+            "approval: approve DAM Network Protection in System Settings, then click Connect again\n",
+        );
+    }
     if !approved && plan.can_execute {
         output.push_str("approval: rerun with --yes to apply this Network Extension change\n");
     }
@@ -2056,6 +2065,7 @@ fn network_extension_result_state_tag(
         dam_net_macos::MacosNetworkExtensionResultState::Preview => "preview",
         dam_net_macos::MacosNetworkExtensionResultState::Installed => "installed",
         dam_net_macos::MacosNetworkExtensionResultState::AlreadyInstalled => "already_installed",
+        dam_net_macos::MacosNetworkExtensionResultState::NeedsApproval => "needs_approval",
         dam_net_macos::MacosNetworkExtensionResultState::Removed => "removed",
         dam_net_macos::MacosNetworkExtensionResultState::NotInstalled => "not_installed",
         dam_net_macos::MacosNetworkExtensionResultState::Status => "status",

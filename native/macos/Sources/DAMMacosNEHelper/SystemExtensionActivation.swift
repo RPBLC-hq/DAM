@@ -3,20 +3,33 @@ import SystemExtensions
 
 final class SystemExtensionActivation: NSObject, OSSystemExtensionRequestDelegate, @unchecked Sendable {
     private let semaphore = DispatchSemaphore(value: 0)
-    private var result: Result<String, Error>?
+    private var result: Result<ActivationOutcome, Error>?
+    private var bundleIdentifier = ""
+    private var completed = false
     private var requiredUserApproval = false
 
-    func activate(bundleIdentifier: String) throws -> String {
+    func activate(bundleIdentifier: String, timeout: TimeInterval = 10) throws -> ActivationOutcome {
+        self.bundleIdentifier = bundleIdentifier
         let request = OSSystemExtensionRequest.activationRequest(
             forExtensionWithIdentifier: bundleIdentifier,
             queue: .main
         )
         request.delegate = self
-        DispatchQueue.main.async {
+        if Thread.isMainThread {
             OSSystemExtensionManager.shared.submitRequest(request)
+        } else {
+            DispatchQueue.main.async {
+                OSSystemExtensionManager.shared.submitRequest(request)
+            }
         }
 
+        let deadline = Date().addingTimeInterval(timeout)
         while semaphore.wait(timeout: .now() + 0.1) == .timedOut {
+            if Date() >= deadline {
+                return .needsUserApproval(
+                    "needs_user_approval \(bundleIdentifier) approve DAM Network Protection in System Settings, then click Connect again"
+                )
+            }
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.1))
         }
 
@@ -40,6 +53,9 @@ final class SystemExtensionActivation: NSObject, OSSystemExtensionRequestDelegat
 
     func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
         requiredUserApproval = true
+        complete(.success(.needsUserApproval(
+            "needs_user_approval \(bundleIdentifier) approve DAM Network Protection in System Settings, then click Connect again"
+        )))
     }
 
     func request(
@@ -47,20 +63,35 @@ final class SystemExtensionActivation: NSObject, OSSystemExtensionRequestDelegat
         didFinishWithResult result: OSSystemExtensionRequest.Result
     ) {
         let approval = requiredUserApproval ? " after user approval" : ""
-        self.result = .success("system extension activation finished\(approval): \(result)")
-        semaphore.signal()
+        complete(.success(.finished("system extension activation finished\(approval): \(result)")))
     }
 
     func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {
-        result = .failure(error)
+        complete(.failure(error))
+    }
+
+    private func complete(_ result: Result<ActivationOutcome, Error>) {
+        guard !completed else {
+            return
+        }
+        completed = true
+        self.result = result
         semaphore.signal()
+    }
+
+    enum ActivationOutcome: Equatable {
+        case finished(String)
+        case needsUserApproval(String)
     }
 
     enum ActivationError: Error, CustomStringConvertible {
         case missingResult
 
         var description: String {
-            "system extension activation finished without a result"
+            switch self {
+            case .missingResult:
+                return "system extension activation finished without a result"
+            }
         }
     }
 }

@@ -43,7 +43,7 @@ dam-macos-ne-helper remove  --bundle-id com.rpblc.dam.network-extension [--team-
 dam-macos-ne-helper status  --bundle-id com.rpblc.dam.network-extension [--team-id TEAMID]
 ```
 
-`dam network install-network-extension --yes` writes active capture state only after the helper exits successfully. Without the helper, install fails closed so the UI cannot report `tun` protection when macOS is not actually capturing flows.
+`dam network install-network-extension --yes` writes active capture state only after the helper exits successfully. If `OSSystemExtensionRequest` reports that user approval is required or does not finish promptly, the helper returns a structured `needs_user_approval` result, DAM records inactive pending state, and the Connect flow stops so the UI can tell the user to approve DAM Network Protection in System Settings and retry. Without the helper, install fails closed so the UI cannot report `tun` protection when macOS is not actually capturing flows.
 
 The Network Extension provider installs a broad outbound rule so DAM can classify flows at metadata level. It returns pass-through for unknown traffic and for DAM's own signed binaries, which avoids proxy loops. For configured TCP targets, it opens a loopback connection to the daemon and synthesizes an HTTP `CONNECT host:port` preface from the flow metadata. DAM then applies its existing CONNECT/TLS and protocol-adapter readiness gates.
 

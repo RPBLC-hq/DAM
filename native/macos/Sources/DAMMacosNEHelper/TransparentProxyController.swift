@@ -10,6 +10,9 @@ struct TransparentProxyController {
             let activator = SystemExtensionActivation()
             return try activator.activate(bundleIdentifier: options.bundleIdentifier)
         }
+        if case .needsUserApproval(let message) = activation {
+            return message
+        }
         let managers = try await store.loadManagers()
         let manager = store.manager(matching: options.bundleIdentifier, in: managers) ?? NETransparentProxyManager()
         let provider = NETunnelProviderProtocol()
@@ -28,7 +31,14 @@ struct TransparentProxyController {
             try manager.connection.startVPNTunnel(options: [:])
         }
 
-        return "installed \(options.bundleIdentifier) with \(options.runtimeConfiguration.protectedHosts.count) protected hosts; \(activation)"
+        let activationMessage: String
+        switch activation {
+        case .finished(let message):
+            activationMessage = message
+        case .needsUserApproval(let message):
+            activationMessage = message
+        }
+        return "installed \(options.bundleIdentifier) with \(options.runtimeConfiguration.protectedHosts.count) protected hosts; \(activationMessage)"
     }
 
     func remove(_ options: DAMHelperOptions) async throws -> String {

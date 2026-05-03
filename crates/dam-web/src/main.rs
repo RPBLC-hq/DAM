@@ -1554,16 +1554,31 @@ async fn run_dam_command_with_timeout(args: Vec<String>, timeout: Duration) -> R
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let message = if stderr.trim().is_empty() {
-        stdout.trim()
-    } else {
-        stderr.trim()
-    };
+    let message = dam_command_failure_message(&stdout, &stderr);
     Err(if message.is_empty() {
         format!("dam command failed with {}", output.status)
     } else {
         message.chars().take(600).collect()
     })
+}
+
+fn dam_command_failure_message(stdout: &str, stderr: &str) -> String {
+    let stderr = stderr.trim();
+    if !stderr.is_empty() {
+        return stderr.to_string();
+    }
+
+    for prefix in ["approval: ", "message: "] {
+        if let Some(message) = stdout
+            .lines()
+            .find_map(|line| line.strip_prefix(prefix).map(str::trim))
+            .filter(|line| !line.is_empty())
+        {
+            return message.to_string();
+        }
+    }
+
+    stdout.trim().to_string()
 }
 
 fn dam_binary() -> OsString {
@@ -6031,6 +6046,24 @@ mod tests {
         assert!(html.contains("router_config_required"));
         assert!(html.contains("href=\"/doctor\""));
         assert!(html.contains("class=\"rpblc-dropdown__item active\" href=\"/doctor\""));
+    }
+
+    #[test]
+    fn dam_command_failure_message_prefers_actionable_approval_line() {
+        let stdout = concat!(
+            "state: needs_approval\n",
+            "message: raw helper state\n",
+            "approval: approve DAM Network Protection in System Settings, then click Connect again\n",
+        );
+
+        assert_eq!(
+            dam_command_failure_message(stdout, ""),
+            "approve DAM Network Protection in System Settings, then click Connect again"
+        );
+        assert_eq!(
+            dam_command_failure_message(stdout, "explicit failure"),
+            "explicit failure"
+        );
     }
 
     #[test]
