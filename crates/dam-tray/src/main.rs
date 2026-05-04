@@ -5,8 +5,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "macos")]
+mod macos_system_extension;
+
 const DEFAULT_WEB_PORT: u16 = 2896;
 const DEFAULT_WEB_PORT_MAX: u16 = 2916;
+const DEFAULT_MACOS_NE_BUNDLE_ID: &str = "com.rpblc.dam.network-extension";
 const DAM_BIN_ENV: &str = "DAM_BIN";
 const DAM_WEB_BIN_ENV: &str = "DAM_WEB_BIN";
 const DAM_STATE_DIR_ENV: &str = "DAM_STATE_DIR";
@@ -421,12 +425,25 @@ mod macos {
             ),
             Err(error) => {
                 eprintln!("{error}");
-                format!(
-                    "/connect?error={}",
-                    form_url_encode_component(&format!("Connect failed: {error}"))
-                )
+                let message = connect_error_message(&error);
+                format!("/connect?error={}", form_url_encode_component(&message))
             }
         }
+    }
+
+    fn connect_error_message(error: &str) -> String {
+        approval_instruction(error)
+            .map(|message| format!("Action required: {message}"))
+            .unwrap_or_else(|| format!("Connect failed: {error}"))
+    }
+
+    fn approval_instruction(error: &str) -> Option<&str> {
+        if let Some(message) = error.strip_prefix("action required: ") {
+            return Some(message);
+        }
+        error
+            .find("approve DAM Network Protection")
+            .map(|index| &error[index..])
     }
 
     fn build_tray() -> Result<tray_icon::TrayIcon, String> {
@@ -539,6 +556,7 @@ mod macos {
         data_paths: &DataPaths,
         config_path: Option<&PathBuf>,
     ) -> Result<(), String> {
+        activate_system_extension_from_app()?;
         run_dam_command(
             dam_bin,
             data_paths,
@@ -562,6 +580,21 @@ mod macos {
             &connect_args(data_paths, config_path, has_active_profile),
             "connect DAM",
         )
+    }
+
+    fn activate_system_extension_from_app() -> Result<(), String> {
+        let bundle_identifier = env::var("DAM_MACOS_NE_BUNDLE_ID")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| DEFAULT_MACOS_NE_BUNDLE_ID.to_string());
+        match crate::macos_system_extension::activate(&bundle_identifier, Duration::from_secs(20)) {
+            Ok(crate::macos_system_extension::ActivationOutcome::Ready(_)) => Ok(()),
+            Ok(crate::macos_system_extension::ActivationOutcome::NeedsApproval(message)) => {
+                Err(format!("action required: {message}"))
+            }
+            Err(error) => Err(format!("activate DAM Network Protection: {error}")),
+        }
     }
 
     fn network_install_args(config_path: Option<&PathBuf>) -> Vec<String> {
@@ -659,11 +692,7 @@ mod macos {
     fn command_error(label: &str, args: &[String], output: &std::process::Output) -> String {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let message = if stderr.trim().is_empty() {
-            stdout.trim()
-        } else {
-            stderr.trim()
-        };
+        let message = dam_command_failure_message(&stdout, &stderr);
         if message.is_empty() {
             format!(
                 "failed to {label}: dam {} exited with {}",
@@ -673,6 +702,25 @@ mod macos {
         } else {
             format!("failed to {label}: {message}")
         }
+    }
+
+    fn dam_command_failure_message(stdout: &str, stderr: &str) -> String {
+        let stderr = stderr.trim();
+        if !stderr.is_empty() {
+            return stderr.to_string();
+        }
+
+        for prefix in ["approval: ", "message: "] {
+            if let Some(message) = stdout
+                .lines()
+                .find_map(|line| line.strip_prefix(prefix).map(str::trim))
+                .filter(|line| !line.is_empty())
+            {
+                return message.to_string();
+            }
+        }
+
+        stdout.trim().to_string()
     }
 
     fn form_url_encode_component(value: &str) -> String {
@@ -895,6 +943,31 @@ mod macos {
             assert_eq!(
                 connect_result_redirect(Err("local trust".to_string())),
                 "/connect?error=Connect+failed%3A+local+trust"
+            );
+            assert_eq!(
+                connect_result_redirect(Err(
+                    "action required: approve DAM Network Protection in System Settings, then click Connect again"
+                        .to_string()
+                )),
+                "/connect?error=Action+required%3A+approve+DAM+Network+Protection+in+System+Settings%2C+then+click+Connect+again"
+            );
+        }
+
+        #[test]
+        fn native_command_error_prefers_actionable_approval_line() {
+            let stdout = concat!(
+                "state: needs_approval\n",
+                "message: raw helper state\n",
+                "approval: approve DAM Network Protection in System Settings, then click Connect again\n",
+            );
+
+            assert_eq!(
+                dam_command_failure_message(stdout, ""),
+                "approve DAM Network Protection in System Settings, then click Connect again"
+            );
+            assert_eq!(
+                dam_command_failure_message(stdout, "explicit failure"),
+                "explicit failure"
             );
         }
 

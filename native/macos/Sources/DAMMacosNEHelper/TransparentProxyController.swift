@@ -11,7 +11,7 @@ struct TransparentProxyController {
             return try activator.activate(bundleIdentifier: options.bundleIdentifier)
         }
         if case .needsUserApproval(let message) = activation {
-            return message
+            throw TransparentProxyControllerError.userApprovalRequiresAppProcess(message)
         }
         let managers = try await store.loadManagers()
         let manager = store.manager(matching: options.bundleIdentifier, in: managers) ?? NETransparentProxyManager()
@@ -76,6 +76,17 @@ struct TransparentProxyController {
             return "disconnecting"
         @unknown default:
             return "unknown"
+        }
+    }
+
+    enum TransparentProxyControllerError: Error, CustomStringConvertible {
+        case userApprovalRequiresAppProcess(String)
+
+        var description: String {
+            switch self {
+            case .userApprovalRequiresAppProcess(let message):
+                return message
+            }
         }
     }
 }

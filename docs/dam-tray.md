@@ -8,7 +8,7 @@ The macOS menu-bar item is text-only and renders `[R:]` as its native title. It 
 
 Inside the tray-hosted page, clicking the `[R:]` brand mark opens `https://rpblc.com` in the user's default browser through the native shell instead of navigating inside the WebView. The WebView navigation and IPC handlers are pinned to the hosted loopback origin, and new-window requests are denied inside the embedded view.
 
-The tray-hosted Connect button posts a native IPC event instead of letting the `dam-web` child process run privileged setup. The native shell runs the setup sequence (`dam network install-network-extension --yes`, `dam trust install-local-ca --yes`, then `dam connect --network-mode tun --trust-mode local_ca`) so macOS administrator authorization prompts can be presented from the app process.
+The tray-hosted Connect button posts a native IPC event instead of letting the `dam-web` child process run privileged setup. The native shell first submits the macOS System Extension activation request from the real `DAM.app` process and keeps pending approval requests alive until the user approves or quits the app. After activation is approved, it runs the setup sequence (`dam network install-network-extension --yes`, `dam trust install-local-ca --yes`, then `dam connect --network-mode tun --trust-mode local_ca`) so macOS authorization prompts are owned by the app rather than by the hosted `dam-web` child or a short-lived CLI helper.
 
 `dam-tray` gives the hosted `dam-web` process a random per-session POST token through `DAM_WEB_TRAY_POST_TOKEN`. Tray-mode pages attach that token to same-origin form actions so macOS WebView form submits can mutate local state even when the WebView omits browser `Origin` / `Referer` headers. Browser-hosted `dam-web` keeps the normal local-origin POST guard.
 
@@ -72,6 +72,7 @@ daemon.json
 ## Boundary
 
 - `dam-tray` owns the native shell and the hosted `dam-web` child process.
+- On macOS, `dam-tray` owns the app-process System Extension activation request for packaged Connect.
 - Starting `dam-tray` creates the menu-bar item without opening the popover.
 - Losing focus hides the popover; the app remains available from the menu-bar item.
 - The tray-hosted page renders a Quit tray button. It stops the hosted web UI and exits the tray shell without changing DAM routing, enabled app selection, explicit profile setup, protection state, or the daemon.

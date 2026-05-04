@@ -3,7 +3,7 @@
 This package contains the macOS Network Extension pieces used by DAM `tun` mode:
 
 - `DAMTransparentProxyProvider`: a transparent proxy provider that receives outbound flows, bypasses non-target traffic, and forwards configured TCP targets to the local DAM transparent proxy.
-- `dam-macos-ne-helper`: a small helper executable that installs, removes, starts, and reports the `NETransparentProxyManager` configuration for the signed DAM app bundle.
+- `dam-macos-ne-helper`: a small helper executable that installs, removes, starts, and reports the `NETransparentProxyManager` configuration after the signed DAM app has activated the System Extension.
 
 Build-time validation:
 
@@ -43,7 +43,7 @@ dam-macos-ne-helper remove  --bundle-id com.rpblc.dam.network-extension [--team-
 dam-macos-ne-helper status  --bundle-id com.rpblc.dam.network-extension [--team-id TEAMID]
 ```
 
-`dam network install-network-extension --yes` writes active capture state only after the helper exits successfully. If `OSSystemExtensionRequest` reports that user approval is required or does not finish promptly, the helper returns a structured `needs_user_approval` result, DAM records inactive pending state, and the Connect flow stops so the UI can tell the user to approve DAM Network Protection in System Settings and retry. Without the helper, install fails closed so the UI cannot report `tun` protection when macOS is not actually capturing flows.
+`dam-tray` submits `OSSystemExtensionRequest` from the real `DAM.app` process before invoking the helper. If macOS requires approval, the tray keeps that request alive while the user approves DAM Network Protection in System Settings, and the user clicks Connect again after approval. The helper fails closed if it sees approval is still required or if macOS does not register activation promptly; DAM writes active capture state only after the helper exits successfully. Without the helper, install fails closed so the UI cannot report `tun` protection when macOS is not actually capturing flows.
 
 The Network Extension provider installs a broad outbound rule so DAM can classify flows at metadata level. It returns pass-through for unknown traffic and for DAM's own signed binaries, which avoids proxy loops. For configured TCP targets, it opens a loopback connection to the daemon and synthesizes an HTTP `CONNECT host:port` preface from the flow metadata. DAM then applies its existing CONNECT/TLS and protocol-adapter readiness gates.
 

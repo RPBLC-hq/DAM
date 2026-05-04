@@ -228,7 +228,7 @@ pub fn install_network_extension_for_hosts(
     ai_hosts: &[String],
 ) -> Result<MacosNetworkExtensionResult, MacosNetworkExtensionError> {
     ensure_macos()?;
-    let mut plan = install_plan_for_hosts(&state_dir, ai_hosts)?;
+    let plan = install_plan_for_hosts(&state_dir, ai_hosts)?;
     if !plan.can_execute {
         if !plan.backend_status.active && plan.commands.is_empty() {
             return Err(MacosNetworkExtensionError::MissingHelper {
@@ -243,33 +243,8 @@ pub fn install_network_extension_for_hosts(
         });
     }
 
-    let mut needs_approval = None;
     for command in &plan.commands {
-        if let HelperCommandOutcome::NeedsApproval(message) = run_helper_command(command)? {
-            needs_approval = Some(message);
-            break;
-        }
-    }
-
-    if let Some(message) = needs_approval {
-        let record = MacosNetworkExtensionStateRecord {
-            version: STATE_VERSION,
-            bundle_identifier: plan.bundle_identifier.clone(),
-            team_identifier: plan.team_identifier.clone(),
-            ai_hosts: plan.ai_hosts.clone(),
-            installed_at_unix: unix_timestamp()?,
-            active: false,
-            activation_method: "native_helper_needs_user_approval".to_string(),
-        };
-        write_state_record(&plan.paths, &record)?;
-        plan.message = message;
-        plan.backend_status = backend_status_from_record(Some(&record), plan.message.clone());
-        return Ok(MacosNetworkExtensionResult {
-            state: MacosNetworkExtensionResultState::NeedsApproval,
-            plan,
-            record: Some(record),
-            system_routes_changed: false,
-        });
+        run_helper_command(command)?;
     }
 
     let record = MacosNetworkExtensionStateRecord {
@@ -586,15 +561,9 @@ fn helper_path() -> Option<PathBuf> {
     candidates.into_iter().find(|path| path.is_file())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum HelperCommandOutcome {
-    Applied,
-    NeedsApproval(String),
-}
-
 fn run_helper_command(
     command: &MacosNetworkExtensionCommand,
-) -> Result<HelperCommandOutcome, MacosNetworkExtensionError> {
+) -> Result<(), MacosNetworkExtensionError> {
     let output = Command::new(&command.program)
         .args(&command.args)
         .output()
@@ -605,9 +574,14 @@ fn run_helper_command(
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         if stdout.starts_with("needs_user_approval ") {
-            return Ok(HelperCommandOutcome::NeedsApproval(stdout));
+            return Err(MacosNetworkExtensionError::HelperFailed {
+                program: command.program.clone(),
+                args: command.args.join(" "),
+                status: "needs_user_approval".to_string(),
+                stderr: stdout,
+            });
         }
-        return Ok(HelperCommandOutcome::Applied);
+        return Ok(());
     }
     Err(MacosNetworkExtensionError::HelperFailed {
         program: command.program.clone(),
@@ -861,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    fn install_records_pending_state_when_helper_needs_user_approval() {
+    fn helper_needs_user_approval_fails_without_recording_pending_state() {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir().unwrap();
@@ -874,24 +848,13 @@ mod tests {
         fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
 
         let _helper = HelperEnvGuard::with_helper_path(&helper);
-        let result =
+        let error =
             install_network_extension_for_hosts(dir.path(), &["api.openai.com".to_string()])
-                .unwrap();
+                .unwrap_err();
 
-        assert_eq!(
-            result.state,
-            MacosNetworkExtensionResultState::NeedsApproval
-        );
-        assert!(network_extension_installed(dir.path()));
+        assert!(error.to_string().contains("needs_user_approval"));
+        assert!(!network_extension_installed(dir.path()));
         assert!(!network_extension_active(dir.path()));
-        assert_eq!(
-            result.plan.backend_status.readiness,
-            dam_net::CaptureBackendReadiness::NeedsApproval
-        );
-        assert_eq!(
-            result.record.unwrap().activation_method,
-            "native_helper_needs_user_approval"
-        );
     }
 
     #[test]

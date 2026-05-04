@@ -8,7 +8,7 @@ final class SystemExtensionActivation: NSObject, OSSystemExtensionRequestDelegat
     private var completed = false
     private var requiredUserApproval = false
 
-    func activate(bundleIdentifier: String, timeout: TimeInterval = 10) throws -> ActivationOutcome {
+    func activate(bundleIdentifier: String, timeout: TimeInterval = 20) throws -> ActivationOutcome {
         self.bundleIdentifier = bundleIdentifier
         let request = OSSystemExtensionRequest.activationRequest(
             forExtensionWithIdentifier: bundleIdentifier,
@@ -26,9 +26,7 @@ final class SystemExtensionActivation: NSObject, OSSystemExtensionRequestDelegat
         let deadline = Date().addingTimeInterval(timeout)
         while semaphore.wait(timeout: .now() + 0.1) == .timedOut {
             if Date() >= deadline {
-                return .needsUserApproval(
-                    "needs_user_approval \(bundleIdentifier) approve DAM Network Protection in System Settings, then click Connect again"
-                )
+                throw ActivationError.timedOut(bundleIdentifier)
             }
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.1))
         }
@@ -54,7 +52,7 @@ final class SystemExtensionActivation: NSObject, OSSystemExtensionRequestDelegat
     func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
         requiredUserApproval = true
         complete(.success(.needsUserApproval(
-            "needs_user_approval \(bundleIdentifier) approve DAM Network Protection in System Settings, then click Connect again"
+            "needs_user_approval \(bundleIdentifier) open DAM and approve DAM Network Protection in System Settings, then click Connect again"
         )))
     }
 
@@ -86,11 +84,14 @@ final class SystemExtensionActivation: NSObject, OSSystemExtensionRequestDelegat
 
     enum ActivationError: Error, CustomStringConvertible {
         case missingResult
+        case timedOut(String)
 
         var description: String {
             switch self {
             case .missingResult:
                 return "system extension activation finished without a result"
+            case .timedOut(let bundleIdentifier):
+                return "system extension activation timed out before macOS registered \(bundleIdentifier); open DAM and click Connect to request approval from the app"
             }
         }
     }
