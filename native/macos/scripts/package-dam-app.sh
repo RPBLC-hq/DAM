@@ -243,8 +243,11 @@ rm -rf "$APP"
 mkdir -p "$MACOS" "$RESOURCES" "$EXT_MACOS"
 
 cp "$NATIVE/InfoPlists/DAM.Info.plist" "$CONTENTS/Info.plist"
-cp "$NATIVE/InfoPlists/DAMTransparentProxyProvider.Info.plist" "$EXT_CONTENTS/Info.plist"
+sed "s/__TEAM_ID__/$TEAM_ID/g" "$NATIVE/InfoPlists/DAMTransparentProxyProvider.Info.plist" > "$EXT_CONTENTS/Info.plist"
+plutil -lint "$EXT_CONTENTS/Info.plist" >/dev/null
 require_plist_nonempty "$EXT_CONTENTS/Info.plist" "NSSystemExtensionUsageDescription"
+require_plist_nonempty "$EXT_CONTENTS/Info.plist" "NetworkExtension:NEMachServiceName"
+require_plist_nonempty "$EXT_CONTENTS/Info.plist" "NetworkExtension:NEProviderClasses:com.apple.networkextension.app-proxy"
 cp "$APP_PROFILE" "$CONTENTS/embedded.provisionprofile"
 cp "$EXT_PROFILE" "$EXT_CONTENTS/embedded.provisionprofile"
 

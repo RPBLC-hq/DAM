@@ -22,6 +22,16 @@
 	<string>1</string>
 	<key>NSSystemExtensionUsageDescription</key>
 	<string>DAM installs a Network Extension to capture and protect configured local network traffic.</string>
+	<key>NetworkExtension</key>
+	<dict>
+		<key>NEMachServiceName</key>
+		<string>__TEAM_ID__.com.rpblc.dam.network-extension</string>
+		<key>NEProviderClasses</key>
+		<dict>
+			<key>com.apple.networkextension.app-proxy</key>
+			<string>DAMTransparentProxyProvider.DAMTransparentProxyProvider</string>
+		</dict>
+	</dict>
 	<key>NSExtension</key>
 	<dict>
 		<key>NSExtensionPointIdentifier</key>
