@@ -666,6 +666,141 @@ async fn dam_disconnect_pauses_explicit_claude_profile_without_closing_proxy() {
     assert!(stop.status.success(), "{}", utf8(&stop.stderr));
 }
 
+#[tokio::test]
+async fn dam_connect_apply_restarts_paused_daemon_when_profile_target_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+    let home_dir = dir.path().join("home");
+    let vault_path = dir.path().join("vault.db");
+    let log_path = dir.path().join("log.db");
+    let consent_path = dir.path().join("consent.db");
+    let proxy_addr = unused_addr();
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream_url = spawn_fake_upstream(upstream_seen.clone()).await;
+    let daemon = DamDaemonGuard::new(state_dir.clone(), dir.path().to_path_buf());
+
+    ensure_binaries();
+    let initial_connect = Command::new(binary("dam"))
+        .args([
+            "connect",
+            "--listen",
+            &proxy_addr.to_string(),
+            "--upstream",
+            &upstream_url,
+            "--db",
+            vault_path.to_str().unwrap(),
+            "--log",
+            log_path.to_str().unwrap(),
+            "--consent-db",
+            consent_path.to_str().unwrap(),
+            "--network-mode",
+            "explicit_proxy",
+            "--trust-mode",
+            "disabled",
+        ])
+        .current_dir(dir.path())
+        .env("DAM_STATE_DIR", &state_dir)
+        .env("HOME", &home_dir)
+        .output()
+        .expect("run initial dam connect");
+    assert!(
+        initial_connect.status.success(),
+        "{}",
+        utf8(&initial_connect.stderr)
+    );
+
+    let paused = daemon.disconnect();
+    assert!(paused.status.success(), "{}", utf8(&paused.stderr));
+    assert!(utf8(&paused.stdout).contains("DAM protection paused"));
+
+    let profile_set = Command::new(binary("dam"))
+        .args(["profile", "set", "claude-code"])
+        .current_dir(dir.path())
+        .env("DAM_STATE_DIR", &state_dir)
+        .env("HOME", &home_dir)
+        .output()
+        .expect("run dam profile set");
+    assert!(
+        profile_set.status.success(),
+        "{}",
+        utf8(&profile_set.stderr)
+    );
+
+    let resume = Command::new(binary("dam"))
+        .args([
+            "connect",
+            "--apply",
+            "--listen",
+            &proxy_addr.to_string(),
+            "--upstream",
+            &upstream_url,
+            "--db",
+            vault_path.to_str().unwrap(),
+            "--log",
+            log_path.to_str().unwrap(),
+            "--consent-db",
+            consent_path.to_str().unwrap(),
+            "--network-mode",
+            "explicit_proxy",
+            "--trust-mode",
+            "disabled",
+        ])
+        .current_dir(dir.path())
+        .env("DAM_STATE_DIR", &state_dir)
+        .env("HOME", &home_dir)
+        .output()
+        .expect("run dam connect --apply after target change");
+    assert!(
+        resume.status.success(),
+        "stdout: {}\nstderr: {}",
+        utf8(&resume.stdout),
+        utf8(&resume.stderr)
+    );
+    assert!(utf8(&resume.stdout).contains("profile target setup changed"));
+
+    let status = Command::new(binary("dam"))
+        .args(["status", "--json"])
+        .current_dir(dir.path())
+        .env("DAM_STATE_DIR", &state_dir)
+        .env("HOME", &home_dir)
+        .output()
+        .expect("run dam status");
+    assert!(status.status.success(), "{}", utf8(&status.stderr));
+    let status_json: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_json["state"], "connected");
+    assert_eq!(status_json["daemon"]["target_name"], "anthropic");
+    assert_eq!(status_json["daemon"]["target_provider"], "anthropic");
+    assert_eq!(
+        status_json["daemon"]["proxy_targets"][0]["provider"],
+        "anthropic"
+    );
+
+    let raw_body = r#"{"messages":[{"role":"user","content":"email frank@example.com"}]}"#;
+    let proxy_base = format!("http://{proxy_addr}");
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy_base}/v1/messages"))
+        .header("x-api-key", "local-test")
+        .header("anthropic-version", "2023-06-01")
+        .body(raw_body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    assert_eq!(response_body, raw_body);
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains("frank@example.com"));
+    assert!(upstream_body.contains("[email:"));
+
+    let vault_entries = dam_vault::Vault::open(&vault_path).unwrap().list().unwrap();
+    assert_eq!(vault_entries.len(), 1);
+
+    let stop = daemon.stop();
+    assert!(stop.status.success(), "{}", utf8(&stop.stderr));
+}
+
 #[test]
 fn dam_integrations_apply_codex_api_and_rollback_from_binary() {
     let dir = tempfile::tempdir().unwrap();

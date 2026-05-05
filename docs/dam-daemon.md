@@ -14,7 +14,7 @@ dam status
 dam disconnect
 ```
 
-`dam connect` starts a background daemon process by re-running the current `dam` executable through an internal `daemon-run` command. This keeps `cargo run -p dam -- connect` and installed `dam connect` on the same path. If protection was paused with `dam disconnect`, `dam connect` resumes the existing daemon and leaves its installed routing/trust setup unchanged; changing setup requires `dam disconnect --stop` first.
+`dam connect` starts a background daemon process by re-running the current `dam` executable through an internal `daemon-run` command. This keeps `cargo run -p dam -- connect` and installed `dam connect` on the same path. If protection was paused with `dam disconnect`, `dam connect` resumes the existing daemon and leaves its installed routing/trust setup unchanged. A profile-apply connect is the exception: if the currently running daemon target set does not match the selected profile plus configured AI route targets, `dam connect --apply` preflights setup, restarts the daemon, and resumes protection with the expanded target set.
 
 The standalone service entry point also exists:
 
@@ -72,7 +72,8 @@ The state file contains non-sensitive local lifecycle information:
 - config path when one was supplied;
 - local vault/log/consent SQLite paths;
 - inbound reference resolution setting;
-- target name, provider, and upstream URL;
+- first target name, provider, and upstream URL;
+- sanitized proxy target set: target name, provider, and upstream URL for each configured proxy target;
 - network mode (`explicit_proxy`, `system_proxy`, or `tun`);
 - transparent AI routes from `dam-net` defaults plus configured `[network.ai_routes]`;
 - per-route transparent AI routing readiness from `dam-net`;
@@ -115,7 +116,7 @@ Daemon options:
 --resolve-inbound    Restore DAM references in inbound responses
 ```
 
-`--profile` and `--apply` are `dam connect` front-end options. They are resolved before daemon startup and are not accepted by the standalone `dam-daemon run` parser. When multiple app profiles are enabled, `dam connect` expands them to repeated daemon `--target name|provider|upstream` specs so one daemon can expose OpenAI-compatible and Anthropic provider routes at the same local endpoint. `--apply` additionally writes reversible app profile setup when explicitly requested.
+`--profile` and `--apply` are `dam connect` front-end options. They are resolved before daemon startup and are not accepted by the standalone `dam-daemon run` parser. The selected or enabled profile controls the first daemon target for direct app-layer requests. The daemon expands the runtime target set with every configured AI route target, so one daemon can match OpenAI-compatible, Anthropic, Codex ChatGPT-login, xAI, and config-defined transparent routes at the same local endpoint. `--apply` additionally writes reversible app profile setup when explicitly requested.
 
 `dam connect` preflights transparent setup before daemon startup. `system_proxy` mode requires DAM-managed macOS PAC routing to already be installed. `tun` mode requires macOS Network Extension capture to be active. `local_ca` trust mode requires local CA trust readiness. Missing prerequisites are reported with the next explicit `dam network ...` or `dam trust ...` command instead of starting a partially transparent daemon.
 
@@ -133,8 +134,8 @@ Daemon options:
 
 ## Current Limits
 
-- The daemon runs one local proxy endpoint and can expose multiple configured provider targets from enabled app profiles.
-- Configured `[network.ai_routes]` extend transparent AI host recognition; they do not add extra active proxy targets. The selected proxy target still determines which provider adapter/upstream receives protected traffic.
+- The daemon runs one local proxy endpoint and can expose multiple configured provider targets from enabled app profiles plus configured AI routes.
+- Configured `[network.ai_routes]` extend transparent AI host recognition and add non-secret proxy targets for route matching. The first selected proxy target still determines the default app-layer provider/upstream for direct requests.
 - It does not install system proxy settings, mutate harness configs, or start at login. The first tray/menu-bar shell lives in `dam-tray` and hosts `dam-web /connect`; it does not change daemon lifecycle behavior.
 - It records `system_proxy` and `tun` modes and routing readiness. macOS PAC and Network Extension routing are installed/removed by `dam network`; the daemon reports and consumes their state.
 - Transparent interception is HTTP/1.1 CONNECT/TLS for built-in and configured AI hosts, configured OpenAI-compatible and Anthropic targets, no HTTP/2, and no chunked request bodies. Intercepted `text/event-stream` responses are transformed chunk by chunk for inbound reference resolution when restoration is enabled.

@@ -19,7 +19,7 @@ pub const STATE_DIR_ENV: &str = "DAM_STATE_DIR";
 
 const STATE_FILE: &str = "daemon.json";
 const PROTECTION_FILE: &str = "protection.state";
-const STATE_VERSION: u32 = 3;
+const STATE_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyOptions {
@@ -73,6 +73,23 @@ impl ProxyOptions {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DaemonProxyTargetState {
+    pub name: String,
+    pub provider: String,
+    pub upstream: String,
+}
+
+impl From<&dam_config::ProxyTargetConfig> for DaemonProxyTargetState {
+    fn from(target: &dam_config::ProxyTargetConfig) -> Self {
+        Self {
+            name: target.name.clone(),
+            provider: target.provider.clone(),
+            upstream: target.upstream.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaemonState {
     pub version: u32,
     pub pid: u32,
@@ -86,6 +103,8 @@ pub struct DaemonState {
     pub target_name: Option<String>,
     pub target_provider: Option<String>,
     pub upstream: Option<String>,
+    #[serde(default)]
+    pub proxy_targets: Vec<DaemonProxyTargetState>,
     pub started_at_unix: u64,
     #[serde(default)]
     pub network_mode: dam_net::CaptureMode,
@@ -350,7 +369,31 @@ pub fn proxy_config(options: &ProxyOptions) -> Result<dam_config::DamConfig, Str
         ..dam_config::ConfigOverrides::default()
     };
 
-    dam_config::load(&overrides).map_err(|error| format!("failed to load DAM config: {error}"))
+    let mut config = dam_config::load(&overrides)
+        .map_err(|error| format!("failed to load DAM config: {error}"))?;
+    merge_ai_route_proxy_targets(&mut config);
+    Ok(config)
+}
+
+fn merge_ai_route_proxy_targets(config: &mut dam_config::DamConfig) {
+    for route in configured_ai_routes(config) {
+        let exists = config.proxy.targets.iter().any(|target| {
+            target.name == route.target_name
+                && target.provider == route.provider
+                && target.upstream == route.upstream
+        });
+        if exists {
+            continue;
+        }
+        config.proxy.targets.push(dam_config::ProxyTargetConfig {
+            name: route.target_name,
+            provider: route.provider,
+            upstream: route.upstream,
+            failure_mode: None,
+            api_key_env: None,
+            api_key: None,
+        });
+    }
 }
 
 pub async fn serve(
@@ -833,6 +876,12 @@ fn state_from_config(
         target_name: target.map(|target| target.name.clone()),
         target_provider: target.map(|target| target.provider.clone()),
         upstream: target.map(|target| target.upstream.clone()),
+        proxy_targets: config
+            .proxy
+            .targets
+            .iter()
+            .map(DaemonProxyTargetState::from)
+            .collect(),
         started_at_unix: unix_timestamp()?,
         network_mode,
         transparent_ai_routes,
@@ -1020,43 +1069,59 @@ mod tests {
         let options = ProxyOptions::default();
         let config = proxy_config(&options).unwrap();
 
-        assert_eq!(config.proxy.targets.len(), 1);
+        assert_eq!(config.proxy.targets.len(), 4);
         assert_eq!(config.proxy.targets[0].name, "openai");
         assert_eq!(config.proxy.targets[0].provider, "openai-compatible");
         assert_eq!(config.proxy.targets[0].api_key_env, None);
         assert_eq!(config.proxy.targets[0].api_key, None);
+        assert!(config.proxy.targets.iter().any(|target| {
+            target.name == "anthropic"
+                && target.provider == "anthropic"
+                && target.upstream == ANTHROPIC_UPSTREAM
+                && target.api_key_env.is_none()
+                && target.api_key.is_none()
+        }));
+        assert!(
+            config
+                .proxy
+                .targets
+                .iter()
+                .any(|target| target.name == "chatgpt-codex")
+        );
         assert!(config.proxy.enabled);
         assert!(config.log.enabled);
     }
 
     #[test]
     fn proxy_options_round_trip_multiple_targets() {
-        let mut options = ProxyOptions::default();
-        options.targets = Some(vec![
-            dam_config::ProxyTargetConfig {
-                name: "openai".to_string(),
-                provider: "openai-compatible".to_string(),
-                upstream: OPENAI_API_UPSTREAM.to_string(),
-                failure_mode: None,
-                api_key_env: None,
-                api_key: None,
-            },
-            dam_config::ProxyTargetConfig {
-                name: "anthropic".to_string(),
-                provider: "anthropic".to_string(),
-                upstream: ANTHROPIC_UPSTREAM.to_string(),
-                failure_mode: None,
-                api_key_env: None,
-                api_key: None,
-            },
-        ]);
+        let options = ProxyOptions {
+            targets: Some(vec![
+                dam_config::ProxyTargetConfig {
+                    name: "openai".to_string(),
+                    provider: "openai-compatible".to_string(),
+                    upstream: OPENAI_API_UPSTREAM.to_string(),
+                    failure_mode: None,
+                    api_key_env: None,
+                    api_key: None,
+                },
+                dam_config::ProxyTargetConfig {
+                    name: "anthropic".to_string(),
+                    provider: "anthropic".to_string(),
+                    upstream: ANTHROPIC_UPSTREAM.to_string(),
+                    failure_mode: None,
+                    api_key_env: None,
+                    api_key: None,
+                },
+            ]),
+            ..ProxyOptions::default()
+        };
 
         assert_eq!(
             parse_proxy_options(proxy_options_to_args(&options)).unwrap(),
             options
         );
         let config = proxy_config(&options).unwrap();
-        assert_eq!(config.proxy.targets.len(), 2);
+        assert_eq!(config.proxy.targets.len(), 4);
         assert_eq!(config.proxy.targets[1].provider, "anthropic");
     }
 
@@ -1117,6 +1182,11 @@ mod tests {
             target_name: Some("openai".to_string()),
             target_provider: Some("openai-compatible".to_string()),
             upstream: Some(OPENAI_API_UPSTREAM.to_string()),
+            proxy_targets: vec![DaemonProxyTargetState {
+                name: "openai".to_string(),
+                provider: "openai-compatible".to_string(),
+                upstream: OPENAI_API_UPSTREAM.to_string(),
+            }],
             started_at_unix: 42,
             network_mode: dam_net::CaptureMode::ExplicitProxy,
             transparent_ai_routes: dam_net::known_ai_routes(),

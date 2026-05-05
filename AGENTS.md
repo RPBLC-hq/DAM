@@ -35,6 +35,7 @@ Do not grow single-file libraries for non-trivial modules. When a crate adds mea
 - Keep `src/main.rs` as command wiring and process startup, not business logic.
 - Prefer small module files with narrow ownership over broad "manager" files.
 - Update the matching docs when module boundaries change so future agents can find the implementation quickly.
+- A large file should be broken down in more manageable sized files.
 
 ## Architecture Sync
 

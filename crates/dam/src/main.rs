@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     ffi::OsString,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
@@ -281,33 +282,42 @@ async fn connect(args: ConnectArgs) -> Result<i32, String> {
 
     match dam_daemon::daemon_status().map_err(|error| error.to_string())? {
         dam_daemon::DaemonStatus::Connected(state) => {
-            if state.network_mode != args.proxy.network_mode
-                || state.trust.mode != args.proxy.trust_mode
+            if !args.apply_profile_ids.is_empty()
+                && !daemon_proxy_targets_match(&state, &config.proxy.targets)
             {
-                if !state.protection_enabled {
-                    dam_daemon::set_protection_enabled(true).map_err(|error| error.to_string())?;
-                    for profile_id in &args.apply_profile_ids {
-                        let outcome = apply_connect_profile(profile_id, &state.proxy_url)?;
-                        print!("{}", render_connect_apply_outcome(&outcome));
+                ensure_connect_transparent_prerequisites(&args.proxy, &config, None)?;
+                println!("DAM profile target setup changed; restarting daemon");
+                stop_connected_daemon(&state).await?;
+            } else {
+                if state.network_mode != args.proxy.network_mode
+                    || state.trust.mode != args.proxy.trust_mode
+                {
+                    if !state.protection_enabled {
+                        dam_daemon::set_protection_enabled(true)
+                            .map_err(|error| error.to_string())?;
+                        for profile_id in &args.apply_profile_ids {
+                            let outcome = apply_connect_profile(profile_id, &state.proxy_url)?;
+                            print!("{}", render_connect_apply_outcome(&outcome));
+                        }
+                        println!(
+                            "DAM protection enabled at {} using existing network mode {} and trust mode {}",
+                            state.proxy_url, state.network_mode, state.trust.mode
+                        );
+                        return Ok(0);
                     }
-                    println!(
-                        "DAM protection enabled at {} using existing network mode {} and trust mode {}",
-                        state.proxy_url, state.network_mode, state.trust.mode
-                    );
-                    return Ok(0);
+                    return Err(format!(
+                        "DAM is already connected with network mode {} and trust mode {}; run `dam disconnect --stop` before changing setup",
+                        state.network_mode, state.trust.mode
+                    ));
                 }
-                return Err(format!(
-                    "DAM is already connected with network mode {} and trust mode {}; run `dam disconnect --stop` before changing setup",
-                    state.network_mode, state.trust.mode
-                ));
+                dam_daemon::set_protection_enabled(true).map_err(|error| error.to_string())?;
+                for profile_id in &args.apply_profile_ids {
+                    let outcome = apply_connect_profile(profile_id, &state.proxy_url)?;
+                    print!("{}", render_connect_apply_outcome(&outcome));
+                }
+                println!("DAM protection enabled at {}", state.proxy_url);
+                return Ok(0);
             }
-            dam_daemon::set_protection_enabled(true).map_err(|error| error.to_string())?;
-            for profile_id in &args.apply_profile_ids {
-                let outcome = apply_connect_profile(profile_id, &state.proxy_url)?;
-                print!("{}", render_connect_apply_outcome(&outcome));
-            }
-            println!("DAM protection enabled at {}", state.proxy_url);
-            return Ok(0);
         }
         dam_daemon::DaemonStatus::Stale(state) => {
             dam_daemon::remove_state_if_pid(state.pid).map_err(|error| error.to_string())?;
@@ -350,6 +360,61 @@ async fn connect(args: ConnectArgs) -> Result<i32, String> {
     Ok(0)
 }
 
+fn daemon_proxy_targets_match(
+    state: &dam_daemon::DaemonState,
+    requested_targets: &[dam_config::ProxyTargetConfig],
+) -> bool {
+    let current_targets: BTreeSet<_> = if state.proxy_targets.is_empty() {
+        legacy_daemon_proxy_target_set(state)
+    } else {
+        state
+            .proxy_targets
+            .iter()
+            .map(|target| {
+                (
+                    target.name.clone(),
+                    target.provider.clone(),
+                    target.upstream.clone(),
+                )
+            })
+            .collect()
+    };
+    let requested_targets = requested_targets
+        .iter()
+        .map(|target| {
+            (
+                target.name.clone(),
+                target.provider.clone(),
+                target.upstream.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+
+    current_targets == requested_targets
+}
+
+fn legacy_daemon_proxy_target_set(
+    state: &dam_daemon::DaemonState,
+) -> BTreeSet<(String, String, String)> {
+    match (
+        state.target_name.as_ref(),
+        state.target_provider.as_ref(),
+        state.upstream.as_ref(),
+    ) {
+        (Some(name), Some(provider), Some(upstream)) => {
+            BTreeSet::from([(name.clone(), provider.clone(), upstream.clone())])
+        }
+        _ => BTreeSet::new(),
+    }
+}
+
+async fn stop_connected_daemon(state: &dam_daemon::DaemonState) -> Result<(), String> {
+    dam_daemon::terminate_process(state.pid).map_err(|error| error.to_string())?;
+    wait_for_daemon_stop(state.pid, Duration::from_secs(5)).await;
+    dam_daemon::remove_state_if_pid(state.pid).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 async fn disconnect(args: DisconnectArgs) -> Result<i32, String> {
     match dam_daemon::daemon_status().map_err(|error| error.to_string())? {
         dam_daemon::DaemonStatus::Disconnected => {
@@ -367,9 +432,7 @@ async fn disconnect(args: DisconnectArgs) -> Result<i32, String> {
                 println!("DAM protection paused; daemon remains active");
                 return Ok(0);
             }
-            dam_daemon::terminate_process(state.pid).map_err(|error| error.to_string())?;
-            wait_for_daemon_stop(state.pid, Duration::from_secs(5)).await;
-            dam_daemon::remove_state_if_pid(state.pid).map_err(|error| error.to_string())?;
+            stop_connected_daemon(&state).await?;
             println!("DAM disconnected");
             Ok(0)
         }
