@@ -14,6 +14,7 @@ dam-intercept.workspace = true
 dam-integrations.workspace = true
 dam-net.workspace = true
 dam-net-macos.workspace = true
+dam-log.workspace = true
 dam-proxy.workspace = true
 dam-trust.workspace = true
 reqwest.workspace = true

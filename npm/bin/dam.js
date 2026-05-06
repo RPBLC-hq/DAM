@@ -8,7 +8,7 @@ const { spawnSync } = require("child_process");
 
 const ROOT = path.resolve(__dirname, "..", "..");
 const NATIVE_DIR = path.join(ROOT, "npm", "native");
-const TRIAL_COMMANDS = new Set(["claude", "codex"]);
+const TRIAL_COMMANDS = new Set();
 
 function main() {
   const rawArgs = process.argv.slice(2);

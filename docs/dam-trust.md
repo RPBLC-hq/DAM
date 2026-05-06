@@ -77,7 +77,7 @@ api.x.ai
 chatgpt.com
 ```
 
-When the daemon loads configured `[network.ai_routes]`, it extends the in-memory trusted AI host scope for transparent readiness with those route hosts. This keeps local CA readiness aligned with the same route registry used by routing and transparent proxy activation.
+When the daemon loads the effective `[traffic]` profile and configured `[network.ai_routes]` legacy overlays, it extends the in-memory trusted host scope for transparent readiness with those route hosts. This keeps local CA readiness aligned with the same profile-derived route registry used by routing and transparent proxy activation.
 
 This list is a transparent-protection scope, not an egress policy allowlist.
 

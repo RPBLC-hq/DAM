@@ -18,6 +18,7 @@ pub struct DamConfig {
     pub consent: ConsentConfig,
     pub policy: PolicyConfig,
     pub failure: FailureConfig,
+    pub traffic: TrafficConfig,
     pub network: NetworkConfig,
     pub web: WebConfig,
     pub proxy: ProxyConfig,
@@ -271,6 +272,32 @@ impl FromStr for LogWriteFailureMode {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrafficConfig {
+    pub profile_path: Option<PathBuf>,
+    pub profile: dam_net::TrafficProfile,
+    pub enabled_app_ids: Option<Vec<String>>,
+}
+
+impl Default for TrafficConfig {
+    fn default() -> Self {
+        Self {
+            profile_path: None,
+            profile: dam_net::llm_mvp_profile(),
+            enabled_app_ids: None,
+        }
+    }
+}
+
+impl TrafficConfig {
+    pub fn effective_profile(&self) -> dam_net::TrafficProfile {
+        self.enabled_app_ids
+            .as_ref()
+            .map(|app_ids| self.profile.with_runtime_enabled_apps(app_ids))
+            .unwrap_or_else(|| self.profile.clone())
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NetworkConfig {
     pub ai_routes: Vec<AiRouteConfig>,
@@ -314,7 +341,7 @@ impl Default for ProxyConfig {
             listen: "127.0.0.1:7828".to_string(),
             mode: ProxyMode::ReverseProxy,
             default_failure_mode: ProxyFailureMode::BypassOnError,
-            resolve_inbound: false,
+            resolve_inbound: true,
             targets: Vec::new(),
         }
     }
@@ -449,6 +476,8 @@ pub struct ConfigOverrides {
     pub log_enabled: Option<bool>,
     pub consent_sqlite_path: Option<PathBuf>,
     pub consent_enabled: Option<bool>,
+    pub traffic_profile_path: Option<PathBuf>,
+    pub traffic_enabled_app_ids: Option<Vec<String>>,
     pub web_addr: Option<String>,
     pub proxy_enabled: Option<bool>,
     pub proxy_listen: Option<String>,
@@ -477,6 +506,21 @@ pub enum ConfigError {
         path: PathBuf,
         source: toml::de::Error,
     },
+
+    #[error("failed to read traffic profile {path}: {source}")]
+    ReadTrafficProfile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse traffic profile {path}: {source}")]
+    ParseTrafficProfile {
+        path: PathBuf,
+        source: dam_net::TrafficProfileError,
+    },
+
+    #[error("invalid traffic profile {path}: {message}")]
+    InvalidTrafficProfile { path: PathBuf, message: String },
 
     #[error("invalid config value for {field}: {value} ({message})")]
     InvalidValue {
@@ -525,7 +569,7 @@ where
     }
 
     merge_env(&mut config, &env)?;
-    merge_overrides(&mut config, overrides);
+    merge_overrides(&mut config, overrides)?;
     resolve_secrets(&mut config, &env);
     validate(&config)?;
 
@@ -550,10 +594,15 @@ fn merge_file(config: &mut DamConfig, path: &Path) -> Result<(), ConfigError> {
         source,
     })?;
 
-    merge_raw(config, parsed)
+    let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+    merge_raw(config, parsed, base_dir)
 }
 
-fn merge_raw(config: &mut DamConfig, raw: RawDamConfig) -> Result<(), ConfigError> {
+fn merge_raw(
+    config: &mut DamConfig,
+    raw: RawDamConfig,
+    base_dir: &Path,
+) -> Result<(), ConfigError> {
     if let Some(vault) = raw.vault {
         if let Some(backend) = vault.backend {
             config.vault.backend = backend.parse()?;
@@ -634,6 +683,17 @@ fn merge_raw(config: &mut DamConfig, raw: RawDamConfig) -> Result<(), ConfigErro
         }
         if let Some(log_write) = failure.log_write {
             config.failure.log_write = log_write.parse()?;
+        }
+    }
+
+    if let Some(traffic) = raw.traffic {
+        if let Some(profile_path) = traffic.profile_path {
+            let profile_path = resolve_relative_path(base_dir, profile_path);
+            config.traffic.profile = load_traffic_profile(&profile_path)?;
+            config.traffic.profile_path = Some(profile_path);
+        }
+        if let Some(enabled_apps) = traffic.enabled_apps {
+            config.traffic.enabled_app_ids = Some(normalized_string_list(enabled_apps));
         }
     }
 
@@ -771,6 +831,14 @@ fn merge_env(config: &mut DamConfig, env: &BTreeMap<String, String>) -> Result<(
     if let Some(value) = env.get("DAM_FAILURE_LOG_WRITE") {
         config.failure.log_write = value.parse()?;
     }
+    if let Some(value) = env.get("DAM_TRAFFIC_PROFILE") {
+        let profile_path = PathBuf::from(value);
+        config.traffic.profile = load_traffic_profile(&profile_path)?;
+        config.traffic.profile_path = Some(profile_path);
+    }
+    if let Some(value) = env.get("DAM_TRAFFIC_ENABLED_APPS") {
+        config.traffic.enabled_app_ids = Some(parse_csv_list(value));
+    }
     if let Some(value) = env.get("DAM_WEB_ADDR") {
         config.web.addr = value.clone();
     }
@@ -811,7 +879,7 @@ fn merge_env(config: &mut DamConfig, env: &BTreeMap<String, String>) -> Result<(
     Ok(())
 }
 
-fn merge_overrides(config: &mut DamConfig, overrides: &ConfigOverrides) {
+fn merge_overrides(config: &mut DamConfig, overrides: &ConfigOverrides) -> Result<(), ConfigError> {
     if let Some(path) = &overrides.vault_sqlite_path {
         config.vault.backend = VaultBackend::Sqlite;
         config.vault.sqlite_path = path.clone();
@@ -830,6 +898,13 @@ fn merge_overrides(config: &mut DamConfig, overrides: &ConfigOverrides) {
     }
     if let Some(enabled) = overrides.consent_enabled {
         config.consent.enabled = enabled;
+    }
+    if let Some(path) = &overrides.traffic_profile_path {
+        config.traffic.profile = load_traffic_profile(path)?;
+        config.traffic.profile_path = Some(path.clone());
+    }
+    if let Some(app_ids) = &overrides.traffic_enabled_app_ids {
+        config.traffic.enabled_app_ids = Some(normalized_string_list(app_ids.clone()));
     }
     if let Some(addr) = &overrides.web_addr {
         config.web.addr = addr.clone();
@@ -863,6 +938,7 @@ fn merge_overrides(config: &mut DamConfig, overrides: &ConfigOverrides) {
             target.api_key_env = non_empty(api_key_env.clone());
         }
     }
+    Ok(())
 }
 
 fn resolve_secrets(config: &mut DamConfig, env: &BTreeMap<String, String>) {
@@ -916,6 +992,7 @@ fn validate(config: &DamConfig) -> Result<(), ConfigError> {
         )?;
     }
 
+    validate_traffic(&config.traffic)?;
     validate_network_ai_routes(&config.network.ai_routes)?;
 
     if config.web.addr.trim().is_empty() {
@@ -959,6 +1036,32 @@ fn validate(config: &DamConfig) -> Result<(), ConfigError> {
             if target.upstream.trim().is_empty() {
                 return Err(ConfigError::MissingRequired {
                     field: "proxy.targets.upstream",
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_traffic(traffic: &TrafficConfig) -> Result<(), ConfigError> {
+    let profile_path = traffic
+        .profile_path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("<builtin>"));
+    dam_net::validate_traffic_profile(&traffic.profile).map_err(|error| {
+        ConfigError::InvalidTrafficProfile {
+            path: profile_path.clone(),
+            message: error.to_string(),
+        }
+    })?;
+
+    if let Some(enabled_app_ids) = &traffic.enabled_app_ids {
+        for app_id in enabled_app_ids {
+            if traffic.profile.app(app_id).is_none() {
+                return Err(ConfigError::InvalidTrafficProfile {
+                    path: profile_path.clone(),
+                    message: format!("enabled app {app_id} does not exist in traffic profile"),
                 });
             }
         }
@@ -1053,6 +1156,46 @@ fn parse_ai_route(raw: RawAiRouteConfig) -> AiRouteConfig {
         target_name: raw.target_name.unwrap_or_default(),
         upstream: raw.upstream.unwrap_or_default(),
     }
+}
+
+fn load_traffic_profile(path: &Path) -> Result<dam_net::TrafficProfile, ConfigError> {
+    let raw = fs::read_to_string(path).map_err(|source| ConfigError::ReadTrafficProfile {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    dam_net::traffic_profile_from_json_str(&raw).map_err(|source| {
+        ConfigError::ParseTrafficProfile {
+            path: path.to_path_buf(),
+            source,
+        }
+    })
+}
+
+fn resolve_relative_path(base_dir: &Path, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        base_dir.join(path)
+    }
+}
+
+fn parse_csv_list(value: &str) -> Vec<String> {
+    normalized_string_list(value.split(',').map(str::to_string).collect())
+}
+
+fn normalized_string_list(values: Vec<String>) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for value in values {
+        let value = value.trim();
+        if !value.is_empty()
+            && !normalized
+                .iter()
+                .any(|existing: &String| existing.as_str() == value)
+        {
+            normalized.push(value.to_string());
+        }
+    }
+    normalized
 }
 
 fn proxy_target_env_is_present(env: &BTreeMap<String, String>) -> bool {
@@ -1189,6 +1332,7 @@ struct RawDamConfig {
     consent: Option<RawConsentConfig>,
     policy: Option<RawPolicyConfig>,
     failure: Option<RawFailureConfig>,
+    traffic: Option<RawTrafficConfig>,
     network: Option<RawNetworkConfig>,
     web: Option<RawWebConfig>,
     proxy: Option<RawProxyConfig>,
@@ -1244,6 +1388,13 @@ struct RawPolicyKindConfig {
 struct RawFailureConfig {
     vault_write: Option<String>,
     log_write: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawTrafficConfig {
+    profile_path: Option<PathBuf>,
+    enabled_apps: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1315,6 +1466,9 @@ mod tests {
         assert_eq!(config.consent.sqlite_path, PathBuf::from("consent.db"));
         assert_eq!(config.consent.default_ttl_seconds, 86_400);
         assert!(config.consent.mcp_write_enabled);
+        assert_eq!(config.traffic.profile.apps.len(), 4);
+        assert_eq!(config.traffic.profile.apps[0].id, "openai-api");
+        assert!(config.traffic.enabled_app_ids.is_none());
         assert!(config.network.ai_routes.is_empty());
         assert_eq!(config.web.addr, "127.0.0.1:2896");
         assert!(!config.proxy.enabled);
@@ -1325,7 +1479,7 @@ mod tests {
             ProxyFailureMode::BypassOnError
         );
         assert!(config.policy.deduplicate_replacements);
-        assert!(!config.proxy.resolve_inbound);
+        assert!(config.proxy.resolve_inbound);
         assert!(config.proxy.targets.is_empty());
     }
 
@@ -1346,6 +1500,34 @@ mod tests {
     fn config_file_values_are_loaded() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("dam.toml");
+        fs::write(
+            dir.path().join("traffic-profile.json"),
+            r#"
+            {
+              "version": 1,
+              "default_action": "bypass",
+              "apps": [
+                {
+                  "id": "mail-example",
+                  "match": {
+                    "domains": ["mail.example.com"],
+                    "ports": [443],
+                    "protocols": ["https"]
+                  },
+                  "action": "inspect",
+                  "adapter": "email_imap",
+                  "provider": "imap",
+                  "target_name": "mail-example",
+                  "upstream": "https://mail.example.com",
+                  "steps": [
+                    {"id": "detect", "kind": "detect_sensitive_data", "direction": "both"}
+                  ]
+                }
+              ]
+            }
+            "#,
+        )
+        .unwrap();
         fs::write(
             &config_path,
             r#"
@@ -1378,6 +1560,10 @@ mod tests {
                 [failure]
                 vault_write = "redact_only"
                 log_write = "warn_continue"
+
+                [traffic]
+                profile_path = "traffic-profile.json"
+                enabled_apps = ["mail-example"]
 
                 [[network.ai_routes]]
                 host = "api.enterprise-ai.example"
@@ -1429,6 +1615,18 @@ mod tests {
         assert_eq!(
             config.policy.kind_actions.get(&SensitiveType::CreditCard),
             Some(&PolicyAction::Block)
+        );
+        assert_eq!(
+            config.traffic.profile_path,
+            Some(dir.path().join("traffic-profile.json"))
+        );
+        assert_eq!(
+            config.traffic.enabled_app_ids,
+            Some(vec!["mail-example".to_string()])
+        );
+        assert_eq!(
+            dam_net::ai_routes_from_profile(&config.traffic.effective_profile())[0].host,
+            "mail.example.com"
         );
         assert_eq!(config.network.ai_routes.len(), 1);
         assert_eq!(
@@ -1493,6 +1691,7 @@ mod tests {
                 ("DAM_CONSENT_DEFAULT_TTL_SECONDS", "7200"),
                 ("DAM_CONSENT_MCP_WRITE_ENABLED", "false"),
                 ("DAM_POLICY_DEDUPLICATE_REPLACEMENTS", "false"),
+                ("DAM_TRAFFIC_ENABLED_APPS", "anthropic-api, chatgpt-codex"),
                 ("DAM_PROXY_ENABLED", "true"),
                 ("DAM_PROXY_LISTEN", "127.0.0.1:8828"),
                 ("DAM_PROXY_DEFAULT_FAILURE_MODE", "block_on_error"),
@@ -1511,6 +1710,13 @@ mod tests {
         assert_eq!(config.consent.default_ttl_seconds, 7200);
         assert!(!config.consent.mcp_write_enabled);
         assert!(!config.policy.deduplicate_replacements);
+        assert_eq!(
+            config.traffic.enabled_app_ids,
+            Some(vec![
+                "anthropic-api".to_string(),
+                "chatgpt-codex".to_string()
+            ])
+        );
         assert!(config.proxy.enabled);
         assert_eq!(config.proxy.listen, "127.0.0.1:8828");
         assert_eq!(

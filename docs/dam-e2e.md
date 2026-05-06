@@ -14,7 +14,7 @@ Current E2E coverage:
 - `dam-proxy` through a fake OpenAI-like upstream, proving raw sensitive values are redacted before upstream receives the request and resolved before the local client receives the response.
 - `dam-proxy` inbound resolution setting coverage in module tests, including `--no-resolve-inbound`.
 - `dam-proxy -> dam-vault -> dam-log -> dam-resolve` restoration of the protected upstream payload.
-- `dam codex` ChatGPT-login fail-closed behavior, `dam codex --api` custom-provider wiring, and `dam claude` launcher wiring with fake tool executables.
+- removed legacy tool launcher commands are not exposed by the `dam` CLI.
 - Persisted log privacy checks for raw sensitive values.
 
 ## How It Runs

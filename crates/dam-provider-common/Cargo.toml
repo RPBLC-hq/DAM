@@ -1,0 +1,13 @@
+[package]
+name = "dam-provider-common"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+axum.workspace = true
+futures-util.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

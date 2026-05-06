@@ -156,11 +156,22 @@ impl DamDaemonGuard {
             .output()
             .expect("run dam disconnect")
     }
+
+    fn stop(&self) -> Output {
+        ensure_binaries();
+
+        Command::new(binary("dam"))
+            .args(["disconnect", "--stop"])
+            .current_dir(&self.current_dir)
+            .env("DAM_STATE_DIR", &self.state_dir)
+            .output()
+            .expect("run dam disconnect --stop")
+    }
 }
 
 impl Drop for DamDaemonGuard {
     fn drop(&mut self) {
-        let _ = self.disconnect();
+        let _ = self.stop();
     }
 }
 
@@ -204,143 +215,25 @@ fn assert_logs_do_not_contain(log_path: &Path, forbidden: &[&str]) {
     }
 }
 
-#[cfg(unix)]
 #[test]
-fn dam_codex_launcher_fails_closed_until_transport_is_protected() {
-    let dir = tempfile::tempdir().unwrap();
-    let vault_path = dir.path().join("vault.db");
-
+fn dam_tool_launchers_are_removed_from_cli() {
     ensure_binaries();
-    let output = Command::new(binary("dam"))
-        .args(["codex", "--db", vault_path.to_str().unwrap(), "--no-log"])
-        .current_dir(dir.path())
-        .output()
-        .expect("run dam codex launcher");
 
-    assert!(!output.status.success(), "dam codex should fail closed");
-    let stderr = utf8(&output.stderr);
-    assert!(stderr.contains("backend-api/codex/responses"), "{stderr}");
-    assert!(stderr.contains("would not protect the prompt"), "{stderr}");
-}
+    for command in ["codex", "claude"] {
+        let output = Command::new(binary("dam"))
+            .arg(command)
+            .output()
+            .expect("run removed dam tool command");
 
-#[cfg(unix)]
-#[test]
-fn dam_codex_api_launcher_sets_dam_model_provider() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = tempfile::tempdir().unwrap();
-    let bin_dir = dir.path().join("bin");
-    std::fs::create_dir(&bin_dir).unwrap();
-    let fake_codex = bin_dir.join("codex");
-    std::fs::write(
-        &fake_codex,
-        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$DAM_FAKE_CODEX_ARGS\"\n",
-    )
-    .unwrap();
-    let mut permissions = std::fs::metadata(&fake_codex).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&fake_codex, permissions).unwrap();
-
-    let addr = unused_addr();
-    let args_path = dir.path().join("codex-args.txt");
-    let vault_path = dir.path().join("vault.db");
-    let path = format!(
-        "{}:{}",
-        bin_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-
-    ensure_binaries();
-    let output = Command::new(binary("dam"))
-        .args([
-            "codex",
-            "--api",
-            "--listen",
-            &addr.to_string(),
-            "--upstream",
-            "http://127.0.0.1:9",
-            "--db",
-            vault_path.to_str().unwrap(),
-            "--no-log",
-            "--",
-            "-m",
-            "gpt-5.5",
-        ])
-        .current_dir(dir.path())
-        .env("PATH", path)
-        .env("OPENAI_API_KEY", "sk-test")
-        .env("DAM_FAKE_CODEX_ARGS", &args_path)
-        .output()
-        .expect("run dam codex launcher");
-
-    assert!(output.status.success(), "{}", utf8(&output.stderr));
-    let codex_args = std::fs::read_to_string(args_path).unwrap();
-    assert!(codex_args.contains("model_provider=\"dam_openai\"\n"));
-    assert!(codex_args.contains(&format!(
-        "model_providers.dam_openai.base_url=\"http://{addr}/v1\"\n"
-    )));
-    assert!(codex_args.contains("model_providers.dam_openai.env_key=\"OPENAI_API_KEY\"\n"));
-    assert!(codex_args.contains("model_providers.dam_openai.supports_websockets=false\n"));
-    assert!(codex_args.contains("-m\n"));
-    assert!(codex_args.contains("gpt-5.5\n"));
-}
-
-#[cfg(unix)]
-#[test]
-fn dam_claude_launcher_passes_anthropic_base_url_to_claude() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = tempfile::tempdir().unwrap();
-    let bin_dir = dir.path().join("bin");
-    std::fs::create_dir(&bin_dir).unwrap();
-    let fake_claude = bin_dir.join("claude");
-    std::fs::write(
-        &fake_claude,
-        "#!/bin/sh\nprintf '%s\\n' \"$ANTHROPIC_BASE_URL\" > \"$DAM_FAKE_CLAUDE_ENV\"\nprintf '%s\\n' \"$@\" > \"$DAM_FAKE_CLAUDE_ARGS\"\n",
-    )
-    .unwrap();
-    let mut permissions = std::fs::metadata(&fake_claude).unwrap().permissions();
-    permissions.set_mode(0o755);
-    std::fs::set_permissions(&fake_claude, permissions).unwrap();
-
-    let addr = unused_addr();
-    let args_path = dir.path().join("claude-args.txt");
-    let env_path = dir.path().join("claude-env.txt");
-    let vault_path = dir.path().join("vault.db");
-    let path = format!(
-        "{}:{}",
-        bin_dir.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
-
-    ensure_binaries();
-    let output = Command::new(binary("dam"))
-        .args([
-            "claude",
-            "--listen",
-            &addr.to_string(),
-            "--upstream",
-            "http://127.0.0.1:9",
-            "--db",
-            vault_path.to_str().unwrap(),
-            "--no-log",
-            "--",
-            "--model",
-            "sonnet",
-        ])
-        .current_dir(dir.path())
-        .env("PATH", path)
-        .env("DAM_FAKE_CLAUDE_ARGS", &args_path)
-        .env("DAM_FAKE_CLAUDE_ENV", &env_path)
-        .output()
-        .expect("run dam claude launcher");
-
-    assert!(output.status.success(), "{}", utf8(&output.stderr));
-    let claude_env = std::fs::read_to_string(env_path).unwrap();
-    assert_eq!(claude_env.trim(), format!("http://{addr}"));
-    let claude_args = std::fs::read_to_string(args_path).unwrap();
-    assert!(claude_args.contains("--model\n"));
-    assert!(claude_args.contains("sonnet\n"));
+        assert!(!output.status.success(), "dam {command} should fail");
+        let stderr = utf8(&output.stderr);
+        assert!(
+            stderr.contains(&format!("unknown command: {command}")),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("one-shot"), "{stderr}");
+        assert!(!stderr.contains("fail closed"), "{stderr}");
+    }
 }
 
 #[test]
@@ -366,6 +259,10 @@ fn dam_connect_status_disconnect_tracks_profile_target() {
             log_path.to_str().unwrap(),
             "--consent-db",
             consent_path.to_str().unwrap(),
+            "--network-mode",
+            "explicit_proxy",
+            "--trust-mode",
+            "disabled",
         ])
         .current_dir(dir.path())
         .env("DAM_STATE_DIR", &state_dir)
@@ -423,7 +320,7 @@ fn dam_connect_status_disconnect_tracks_profile_target() {
     );
     assert_eq!(status_json["daemon"]["upstream"], "https://api.x.ai");
 
-    let disconnect_output = daemon.disconnect();
+    let disconnect_output = daemon.stop();
     assert!(
         disconnect_output.status.success(),
         "{}",
@@ -482,6 +379,10 @@ fn dam_connect_profile_apply_writes_claude_settings_and_starts_daemon() {
             log_path.to_str().unwrap(),
             "--consent-db",
             consent_path.to_str().unwrap(),
+            "--network-mode",
+            "explicit_proxy",
+            "--trust-mode",
+            "disabled",
         ])
         .current_dir(dir.path())
         .env("DAM_STATE_DIR", &state_dir)
@@ -502,10 +403,9 @@ fn dam_connect_profile_apply_writes_claude_settings_and_starts_daemon() {
 
     let settings: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
-    assert_eq!(
-        settings["env"]["ANTHROPIC_BASE_URL"],
-        format!("http://{addr}")
-    );
+    assert_eq!(settings["env"]["HTTPS_PROXY"], format!("http://{addr}"));
+    assert_eq!(settings["env"]["HTTP_PROXY"], format!("http://{addr}"));
+    assert!(settings["env"]["ANTHROPIC_BASE_URL"].is_null());
 
     let status = Command::new(binary("dam"))
         .arg("status")
@@ -531,17 +431,306 @@ fn dam_connect_profile_apply_writes_claude_settings_and_starts_daemon() {
     assert!(rollback.status.success(), "{}", utf8(&rollback.stderr));
     assert!(!settings_path.exists());
 
+    let disconnect = daemon.stop();
+    assert!(disconnect.status.success(), "{}", utf8(&disconnect.stderr));
+}
+
+#[tokio::test]
+async fn dam_disconnect_pauses_explicit_claude_profile_without_closing_proxy() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+    let home_dir = dir.path().join("home");
+    let vault_path = dir.path().join("vault.db");
+    let log_path = dir.path().join("log.db");
+    let consent_path = dir.path().join("consent.db");
+    let proxy_addr = unused_addr();
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream_url = spawn_fake_upstream(upstream_seen.clone()).await;
+    let daemon = DamDaemonGuard::new(state_dir.clone(), dir.path().to_path_buf());
+
+    ensure_binaries();
+    let profile_set = Command::new(binary("dam"))
+        .args(["profile", "set", "claude-code"])
+        .current_dir(dir.path())
+        .env("DAM_STATE_DIR", &state_dir)
+        .env("HOME", &home_dir)
+        .output()
+        .expect("run dam profile set");
+    assert!(
+        profile_set.status.success(),
+        "{}",
+        utf8(&profile_set.stderr)
+    );
+
+    let connect_output = Command::new(binary("dam"))
+        .args([
+            "connect",
+            "--apply",
+            "--listen",
+            &proxy_addr.to_string(),
+            "--upstream",
+            &upstream_url,
+            "--db",
+            vault_path.to_str().unwrap(),
+            "--log",
+            log_path.to_str().unwrap(),
+            "--consent-db",
+            consent_path.to_str().unwrap(),
+            "--network-mode",
+            "explicit_proxy",
+            "--trust-mode",
+            "disabled",
+        ])
+        .current_dir(dir.path())
+        .env("DAM_STATE_DIR", &state_dir)
+        .env("HOME", &home_dir)
+        .output()
+        .expect("run dam connect --apply");
+    assert!(
+        connect_output.status.success(),
+        "{}",
+        utf8(&connect_output.stderr)
+    );
+
     let disconnect = daemon.disconnect();
     assert!(disconnect.status.success(), "{}", utf8(&disconnect.stderr));
+    assert!(utf8(&disconnect.stdout).contains("DAM protection paused"));
+
+    let proxy_base = format!("http://{proxy_addr}");
+    let health: serde_json::Value = reqwest::get(format!("{proxy_base}/health"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(health["state"], "bypassing");
+
+    let raw_body = r#"{"messages":[{"role":"user","content":"email eve@example.com"}]}"#;
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy_base}/v1/messages"))
+        .header("x-api-key", "local-test")
+        .header("anthropic-version", "2023-06-01")
+        .body(raw_body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&response_body).unwrap(),
+        serde_json::from_str::<serde_json::Value>(raw_body).unwrap()
+    );
+    assert_eq!(upstream_seen.lock().unwrap().as_deref(), Some(raw_body));
+
+    let status = Command::new(binary("dam"))
+        .arg("status")
+        .current_dir(dir.path())
+        .env("DAM_STATE_DIR", &state_dir)
+        .env("HOME", &home_dir)
+        .output()
+        .expect("run dam status after pause");
+    assert!(status.status.success(), "{}", utf8(&status.stderr));
+    let status_stdout = utf8(&status.stdout);
+    assert!(status_stdout.contains("state: bypassing"));
+    assert!(status_stdout.contains("protection: bypassing"));
+
+    let resume = Command::new(binary("dam"))
+        .args([
+            "connect",
+            "--listen",
+            &proxy_addr.to_string(),
+            "--db",
+            vault_path.to_str().unwrap(),
+            "--log",
+            log_path.to_str().unwrap(),
+            "--consent-db",
+            consent_path.to_str().unwrap(),
+            "--network-mode",
+            "tun",
+            "--trust-mode",
+            "local_ca",
+        ])
+        .current_dir(dir.path())
+        .env("DAM_STATE_DIR", &state_dir)
+        .env("HOME", &home_dir)
+        .output()
+        .expect("run dam connect after pause");
+    assert!(
+        resume.status.success(),
+        "stdout: {}\nstderr: {}",
+        utf8(&resume.stdout),
+        utf8(&resume.stderr)
+    );
+    assert!(utf8(&resume.stdout).contains("DAM protection enabled"));
+
+    let resumed_health: serde_json::Value = reqwest::get(format!("{proxy_base}/health"))
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(resumed_health["state"], "protected");
+
+    let rollback = Command::new(binary("dam"))
+        .args(["integrations", "rollback", "claude-code"])
+        .current_dir(dir.path())
+        .env("DAM_STATE_DIR", &state_dir)
+        .env("HOME", &home_dir)
+        .output()
+        .expect("run dam integrations rollback");
+    assert!(rollback.status.success(), "{}", utf8(&rollback.stderr));
+
+    let stop = daemon.stop();
+    assert!(stop.status.success(), "{}", utf8(&stop.stderr));
+}
+
+#[tokio::test]
+async fn dam_connect_apply_restarts_paused_daemon_when_profile_target_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+    let home_dir = dir.path().join("home");
+    let vault_path = dir.path().join("vault.db");
+    let log_path = dir.path().join("log.db");
+    let consent_path = dir.path().join("consent.db");
+    let proxy_addr = unused_addr();
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream_url = spawn_fake_upstream(upstream_seen.clone()).await;
+    let daemon = DamDaemonGuard::new(state_dir.clone(), dir.path().to_path_buf());
+
+    ensure_binaries();
+    let initial_connect = Command::new(binary("dam"))
+        .args([
+            "connect",
+            "--listen",
+            &proxy_addr.to_string(),
+            "--upstream",
+            &upstream_url,
+            "--db",
+            vault_path.to_str().unwrap(),
+            "--log",
+            log_path.to_str().unwrap(),
+            "--consent-db",
+            consent_path.to_str().unwrap(),
+            "--network-mode",
+            "explicit_proxy",
+            "--trust-mode",
+            "disabled",
+        ])
+        .current_dir(dir.path())
+        .env("DAM_STATE_DIR", &state_dir)
+        .env("HOME", &home_dir)
+        .output()
+        .expect("run initial dam connect");
+    assert!(
+        initial_connect.status.success(),
+        "{}",
+        utf8(&initial_connect.stderr)
+    );
+
+    let paused = daemon.disconnect();
+    assert!(paused.status.success(), "{}", utf8(&paused.stderr));
+    assert!(utf8(&paused.stdout).contains("DAM protection paused"));
+
+    let profile_set = Command::new(binary("dam"))
+        .args(["profile", "set", "claude-code"])
+        .current_dir(dir.path())
+        .env("DAM_STATE_DIR", &state_dir)
+        .env("HOME", &home_dir)
+        .output()
+        .expect("run dam profile set");
+    assert!(
+        profile_set.status.success(),
+        "{}",
+        utf8(&profile_set.stderr)
+    );
+
+    let resume = Command::new(binary("dam"))
+        .args([
+            "connect",
+            "--apply",
+            "--listen",
+            &proxy_addr.to_string(),
+            "--upstream",
+            &upstream_url,
+            "--db",
+            vault_path.to_str().unwrap(),
+            "--log",
+            log_path.to_str().unwrap(),
+            "--consent-db",
+            consent_path.to_str().unwrap(),
+            "--network-mode",
+            "explicit_proxy",
+            "--trust-mode",
+            "disabled",
+        ])
+        .current_dir(dir.path())
+        .env("DAM_STATE_DIR", &state_dir)
+        .env("HOME", &home_dir)
+        .output()
+        .expect("run dam connect --apply after target change");
+    assert!(
+        resume.status.success(),
+        "stdout: {}\nstderr: {}",
+        utf8(&resume.stdout),
+        utf8(&resume.stderr)
+    );
+    assert!(utf8(&resume.stdout).contains("profile target setup changed"));
+
+    let status = Command::new(binary("dam"))
+        .args(["status", "--json"])
+        .current_dir(dir.path())
+        .env("DAM_STATE_DIR", &state_dir)
+        .env("HOME", &home_dir)
+        .output()
+        .expect("run dam status");
+    assert!(status.status.success(), "{}", utf8(&status.stderr));
+    let status_json: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status_json["state"], "connected");
+    assert_eq!(status_json["daemon"]["target_name"], "anthropic");
+    assert_eq!(status_json["daemon"]["target_provider"], "anthropic");
+    assert_eq!(
+        status_json["daemon"]["proxy_targets"][0]["provider"],
+        "anthropic"
+    );
+
+    let raw_body = r#"{"messages":[{"role":"user","content":"email frank@example.com"}]}"#;
+    let proxy_base = format!("http://{proxy_addr}");
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy_base}/v1/messages"))
+        .header("x-api-key", "local-test")
+        .header("anthropic-version", "2023-06-01")
+        .body(raw_body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&response_body).unwrap(),
+        serde_json::from_str::<serde_json::Value>(raw_body).unwrap()
+    );
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains("frank@example.com"));
+    assert!(upstream_body.contains("[email:"));
+
+    let vault_entries = dam_vault::Vault::open(&vault_path).unwrap().list().unwrap();
+    assert_eq!(vault_entries.len(), 1);
+
+    let stop = daemon.stop();
+    assert!(stop.status.success(), "{}", utf8(&stop.stderr));
 }
 
 #[test]
 fn dam_integrations_apply_codex_api_and_rollback_from_binary() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
-    let config_path = dir.path().join("codex.toml");
-    let original_config = "approval_policy = \"never\"\n";
-    std::fs::write(&config_path, original_config).unwrap();
+    let env_path = dir.path().join("codex.env");
+    let original_env = "export EXISTING=1\n";
+    std::fs::write(&env_path, original_env).unwrap();
 
     ensure_binaries();
     let dry_run = Command::new(binary("dam"))
@@ -551,7 +740,7 @@ fn dam_integrations_apply_codex_api_and_rollback_from_binary() {
             "codex-api",
             "--dry-run",
             "--target-path",
-            config_path.to_str().unwrap(),
+            env_path.to_str().unwrap(),
             "--proxy-url",
             "http://127.0.0.1:9000",
         ])
@@ -562,10 +751,7 @@ fn dam_integrations_apply_codex_api_and_rollback_from_binary() {
 
     assert!(dry_run.status.success(), "{}", utf8(&dry_run.stderr));
     assert!(utf8(&dry_run.stdout).contains("dry run complete; no files changed"));
-    assert_eq!(
-        std::fs::read_to_string(&config_path).unwrap(),
-        original_config
-    );
+    assert_eq!(std::fs::read_to_string(&env_path).unwrap(), original_env);
 
     let apply = Command::new(binary("dam"))
         .args([
@@ -574,7 +760,7 @@ fn dam_integrations_apply_codex_api_and_rollback_from_binary() {
             "codex-api",
             "--write",
             "--target-path",
-            config_path.to_str().unwrap(),
+            env_path.to_str().unwrap(),
             "--proxy-url",
             "http://127.0.0.1:9000",
         ])
@@ -586,12 +772,11 @@ fn dam_integrations_apply_codex_api_and_rollback_from_binary() {
     assert!(apply.status.success(), "{}", utf8(&apply.stderr));
     assert!(utf8(&apply.stdout).contains("integration profile applied"));
 
-    let config = std::fs::read_to_string(&config_path).unwrap();
-    assert!(config.contains("approval_policy = \"never\""));
-    assert!(config.contains("model_provider = \"dam_openai\""));
-    assert!(config.contains("[model_providers.dam_openai]"));
-    assert!(config.contains("base_url = \"http://127.0.0.1:9000/v1\""));
-    assert!(config.contains("supports_websockets = false"));
+    let env = std::fs::read_to_string(&env_path).unwrap();
+    assert!(env.contains("# DAM integration profile: codex-api"));
+    assert!(env.contains("export HTTPS_PROXY=http://127.0.0.1:9000"));
+    assert!(env.contains("export HTTP_PROXY=http://127.0.0.1:9000"));
+    assert!(!env.contains("dam_openai"));
 
     let rollback = Command::new(binary("dam"))
         .args(["integrations", "rollback", "codex-api"])
@@ -602,10 +787,7 @@ fn dam_integrations_apply_codex_api_and_rollback_from_binary() {
 
     assert!(rollback.status.success(), "{}", utf8(&rollback.stderr));
     assert!(utf8(&rollback.stdout).contains("integration profile rolled back"));
-    assert_eq!(
-        std::fs::read_to_string(&config_path).unwrap(),
-        original_config
-    );
+    assert_eq!(std::fs::read_to_string(&env_path).unwrap(), original_env);
 }
 
 #[test]
@@ -639,10 +821,9 @@ fn dam_integrations_apply_claude_code_settings_and_rollback_from_binary() {
     let settings: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
     assert_eq!(settings["env"]["FOO"], "bar");
-    assert_eq!(
-        settings["env"]["ANTHROPIC_BASE_URL"],
-        "http://127.0.0.1:9000"
-    );
+    assert_eq!(settings["env"]["HTTPS_PROXY"], "http://127.0.0.1:9000");
+    assert_eq!(settings["env"]["HTTP_PROXY"], "http://127.0.0.1:9000");
+    assert!(settings["env"]["ANTHROPIC_BASE_URL"].is_null());
 
     let rollback = Command::new(binary("dam"))
         .args(["integrations", "rollback", "claude-code"])
@@ -792,7 +973,7 @@ async fn web_reads_vault_and_logs_populated_by_filter() {
         .text()
         .await
         .unwrap();
-    assert!(vault_html.contains("DAM Vault"));
+    assert!(vault_html.contains("Vault"));
     assert!(vault_html.contains("alice@example.com"));
     assert!(vault_html.contains("123-45-6789"));
 

@@ -2,6 +2,9 @@ use axum::{
     body::{Body, Bytes},
     http::{HeaderMap, Method, Response, Uri, header},
 };
+use dam_provider_common::{
+    ProviderByteStream, transform_event_stream_text_body, transform_json_string_body,
+};
 use futures_util::TryStreamExt;
 use reqwest::Url;
 use std::time::Duration;
@@ -35,6 +38,7 @@ pub struct ForwardRequest<'a> {
     pub headers: HeaderMap,
     pub body: Bytes,
     pub target_api_key: Option<&'a str>,
+    pub transform_streaming_response: bool,
 }
 
 impl AnthropicProvider {
@@ -51,10 +55,10 @@ impl AnthropicProvider {
     pub async fn forward<F>(
         &self,
         request: ForwardRequest<'_>,
-        transform_non_streaming_body: F,
+        transform_response_body: F,
     ) -> Result<Response<Body>, AnthropicProviderError>
     where
-        F: FnOnce(Bytes) -> Bytes,
+        F: Fn(Bytes) -> Bytes + Clone + Send + Sync + 'static,
     {
         let url = upstream_url(request.upstream, &request.uri)?;
         let method = reqwest::Method::from_bytes(request.method.as_str().as_bytes())
@@ -72,6 +76,7 @@ impl AnthropicProvider {
             }
             upstream_request = upstream_request.header(name, value);
         }
+        upstream_request = upstream_request.header(header::ACCEPT_ENCODING, "identity");
 
         if let Some(api_key) = request.target_api_key {
             upstream_request = upstream_request.header("x-api-key", api_key);
@@ -98,6 +103,12 @@ impl AnthropicProvider {
             let stream = response
                 .bytes_stream()
                 .map_err(|error| std::io::Error::other(error.without_url().to_string()));
+            let stream: ProviderByteStream = if request.transform_streaming_response {
+                let transform = transform_response_body.clone();
+                transform_event_stream_text_body(stream, transform)
+            } else {
+                Box::pin(stream)
+            };
 
             return builder
                 .body(Body::from_stream(stream))
@@ -108,7 +119,11 @@ impl AnthropicProvider {
             .bytes()
             .await
             .map_err(|error| AnthropicProviderError::Response(error.without_url().to_string()))?;
-        let response_body = transform_non_streaming_body(response_body);
+        let response_body = transform_non_streaming_response_body(
+            &response_headers,
+            response_body,
+            transform_response_body,
+        );
 
         let mut builder = Response::builder().status(status);
         for (name, value) in response_headers.iter() {
@@ -164,6 +179,7 @@ fn should_skip_request_header(
                 | "keep-alive"
                 | "proxy-authorization"
                 | "proxy-authenticate"
+                | "accept-encoding"
         )
         || (target_sets_api_key && matches!(normalized.as_str(), "x-api-key" | "authorization"))
 }
@@ -209,6 +225,21 @@ fn is_streaming_response(headers: &HeaderMap) -> bool {
         })
 }
 
+fn transform_non_streaming_response_body<F>(
+    _headers: &HeaderMap,
+    body: Bytes,
+    transform: F,
+) -> Bytes
+where
+    F: Fn(Bytes) -> Bytes + Clone,
+{
+    if let Some(transformed) = transform_json_string_body(body.clone(), transform.clone()) {
+        return transformed;
+    }
+
+    transform(body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +251,7 @@ mod tests {
         response::{IntoResponse, Response},
         routing::post,
     };
+    use futures_util::stream;
     use std::sync::{Arc, Mutex};
     use tokio::net::TcpListener;
 
@@ -278,17 +310,37 @@ mod tests {
         .await
     }
 
+    async fn spawn_json_response_upstream() -> String {
+        async fn json_response() -> Response {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"content":"\\[email:abc123\\]","metadata":{"safe":"ok"}}"#,
+                ))
+                .unwrap()
+        }
+
+        spawn_app(Router::new().route("/v1/messages", post(json_response))).await
+    }
+
     async fn spawn_sse_upstream(seen_body: Arc<Mutex<Option<String>>>) -> String {
         async fn sse(State(seen_body): State<Arc<Mutex<Option<String>>>>, body: Bytes) -> Response {
             let body_text =
                 String::from_utf8(body.to_vec()).expect("upstream body should be utf-8");
             *seen_body.lock().unwrap() = Some(body_text.clone());
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "text/event-stream")],
-                format!("event: response.output_text.delta\ndata: {body_text}\n\n"),
-            )
-                .into_response()
+            let event = format!("event: response.output_text.delta\ndata: {body_text}\n\n");
+            let split_at = event.find("token").unwrap_or(event.len());
+            let chunks = stream::iter([
+                Ok::<_, std::io::Error>(Bytes::from(event[..split_at].to_string())),
+                Ok(Bytes::from(event[split_at..].to_string())),
+            ]);
+
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .body(Body::from_stream(chunks))
+                .unwrap()
         }
 
         spawn_app(
@@ -331,6 +383,7 @@ mod tests {
                     headers: HeaderMap::new(),
                     body: Bytes::from_static(b"raw [email:abc]"),
                     target_api_key: None,
+                    transform_streaming_response: false,
                 },
                 |_| Bytes::from_static(b"resolved body"),
             )
@@ -342,6 +395,36 @@ mod tests {
             Some("raw [email:abc]")
         );
         assert_eq!(response_body(response).await, "resolved body");
+    }
+
+    #[tokio::test]
+    async fn non_streaming_json_response_transforms_string_values() {
+        let upstream = spawn_json_response_upstream().await;
+        let provider = AnthropicProvider::new().unwrap();
+
+        let response = provider
+            .forward(
+                ForwardRequest {
+                    upstream: &upstream,
+                    method: Method::POST,
+                    uri: Uri::from_static("/v1/messages"),
+                    headers: HeaderMap::new(),
+                    body: Bytes::from_static(b"{}"),
+                    target_api_key: None,
+                    transform_streaming_response: false,
+                },
+                |chunk| {
+                    let text = String::from_utf8(chunk.to_vec()).unwrap();
+                    Bytes::from(text.replace(r"\[email:abc123\]", "banana@example.test"))
+                },
+            )
+            .await
+            .unwrap();
+
+        let body = response_body(response).await;
+        assert!(body.contains("banana@example.test"));
+        assert!(!body.contains(r"\\[email:abc123\\]"));
+        assert!(body.contains(r#""safe":"ok""#));
     }
 
     #[tokio::test]
@@ -365,6 +448,7 @@ mod tests {
                     headers,
                     body: Bytes::from_static(b"{}"),
                     target_api_key: Some("upstream-secret"),
+                    transform_streaming_response: false,
                 },
                 |body| body,
             )
@@ -402,6 +486,7 @@ mod tests {
                     headers,
                     body: Bytes::from_static(b"{}"),
                     target_api_key: None,
+                    transform_streaming_response: false,
                 },
                 |body| body,
             )
@@ -430,6 +515,7 @@ mod tests {
         headers.insert("trailer", "x-trailer".parse().unwrap());
         headers.insert("upgrade", "websocket".parse().unwrap());
         headers.insert("proxy-authorization", "Basic local".parse().unwrap());
+        headers.insert(header::ACCEPT_ENCODING, "gzip".parse().unwrap());
         headers.insert("x-keep-me", "ok".parse().unwrap());
 
         provider
@@ -441,6 +527,7 @@ mod tests {
                     headers,
                     body: Bytes::from_static(b"{}"),
                     target_api_key: None,
+                    transform_streaming_response: false,
                 },
                 |body| body,
             )
@@ -453,6 +540,12 @@ mod tests {
                 .iter()
                 .any(|(name, value)| { name.eq_ignore_ascii_case("x-keep-me") && value == "ok" })
         );
+        let accept_encoding_values = headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("accept-encoding"))
+            .map(|(_, value)| value.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(accept_encoding_values, ["identity"]);
         for blocked in [
             "connection",
             "x-drop-me",
@@ -485,6 +578,7 @@ mod tests {
                     headers: HeaderMap::new(),
                     body: Bytes::from_static(b"stream token"),
                     target_api_key: None,
+                    transform_streaming_response: false,
                 },
                 |_| panic!("streaming response body should not be transformed"),
             )
@@ -500,5 +594,43 @@ mod tests {
         );
         assert_eq!(seen_body.lock().unwrap().as_deref(), Some("stream token"));
         assert!(response_body(response).await.contains("stream token"));
+    }
+
+    #[tokio::test]
+    async fn event_stream_response_uses_chunk_transform_when_enabled() {
+        let seen_body = Arc::new(Mutex::new(None::<String>));
+        let upstream = spawn_sse_upstream(seen_body.clone()).await;
+        let provider = AnthropicProvider::new().unwrap();
+
+        let response = provider
+            .forward(
+                ForwardRequest {
+                    upstream: &upstream,
+                    method: Method::POST,
+                    uri: Uri::from_static("/v1/responses"),
+                    headers: HeaderMap::new(),
+                    body: Bytes::from_static(b"stream token"),
+                    target_api_key: None,
+                    transform_streaming_response: true,
+                },
+                |chunk| {
+                    let text = String::from_utf8(chunk.to_vec()).unwrap();
+                    Bytes::from(text.replace("stream token", "resolved token"))
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        assert_eq!(seen_body.lock().unwrap().as_deref(), Some("stream token"));
+        let body = response_body(response).await;
+        assert!(body.contains("resolved token"));
+        assert!(!body.contains("stream token"));
     }
 }

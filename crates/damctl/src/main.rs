@@ -891,7 +891,9 @@ fn network_inspect_ai_routes(
         ..dam_config::ConfigOverrides::default()
     })
     .map_err(|error| error.to_string())?;
-    Ok(dam_net::ai_routes_with_overlays(
+    let profile = config.traffic.effective_profile();
+    Ok(dam_net::ai_routes_with_profile_and_overlays(
+        &profile,
         config.network.ai_routes.iter().map(|route| {
             dam_net::AiRoute::custom(
                 &route.host,
@@ -1201,6 +1203,10 @@ fn render_daemon_inspect_report(report: &DaemonInspectReport) -> String {
         output.push_str(&format!("listen: {}\n", state.listen));
         output.push_str(&format!("proxy: {}\n", state.proxy_url));
         output.push_str(&format!("network_mode: {}\n", state.network_mode));
+        output.push_str(&format!(
+            "protection_enabled: {}\n",
+            state.protection_enabled
+        ));
         output.push_str(&format!(
             "transparent_ai_routes: {}\n",
             state.transparent_ai_routes.len()
@@ -2522,7 +2528,7 @@ mod tests {
         assert!(output.stdout.contains("transparent_ai_routes: 4"));
         assert!(output.stdout.contains("routing_routes: 4"));
         assert!(output.stdout.contains(
-            "routing_route openai: not_transparent_mode - explicit proxy mode only protects clients configured to use DAM"
+            "routing_route openai: ready - explicit proxy routing is active for clients configured to use DAM"
         ));
         assert!(output.stdout.contains("trust_mode: disabled"));
         assert!(output.stdout.contains("local_ca_installed: false"));
@@ -2535,7 +2541,7 @@ mod tests {
         );
         assert!(output.stdout.contains("interception_routes: 4"));
         assert!(output.stdout.contains(
-            "interception_route openai: not_transparent_mode - transparent interception is inactive in explicit proxy mode"
+            "interception_route openai: needs_user_consent - TLS interception requires explicit user approval"
         ));
         assert!(output.stdout.contains("provider: openai-compatible"));
         assert!(output.stdout.contains("upstream: https://api.openai.com"));
@@ -2986,6 +2992,8 @@ mod tests {
         dam_daemon::DaemonState {
             version: 1,
             pid,
+            executable_path: Some(PathBuf::from("/usr/local/bin/dam")),
+            executable_sha256: Some("abc123".to_string()),
             listen: "127.0.0.1:7828".to_string(),
             proxy_url: "http://127.0.0.1:7828".to_string(),
             config_path: Some(PathBuf::from("dam.toml")),
@@ -2996,6 +3004,7 @@ mod tests {
             target_name: Some("openai".to_string()),
             target_provider: Some("openai-compatible".to_string()),
             upstream: Some("https://api.openai.com".to_string()),
+            proxy_targets: Vec::new(),
             started_at_unix: 1_700_000_000,
             network_mode: dam_net::CaptureMode::ExplicitProxy,
             transparent_ai_routes: dam_net::known_ai_routes(),
@@ -3018,6 +3027,7 @@ mod tests {
                 false,
                 dam_intercept::TlsInterceptionAdapter::unavailable(),
             ),
+            protection_enabled: true,
         }
     }
 }

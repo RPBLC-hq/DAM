@@ -411,6 +411,7 @@ dependencies = [
  "dam-diagnostics",
  "dam-integrations",
  "dam-intercept",
+ "dam-log",
  "dam-net",
  "dam-net-macos",
  "dam-proxy",
@@ -436,7 +437,9 @@ name = "dam-config"
 version = "0.1.0"
 dependencies = [
  "dam-core",
+ "dam-net",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "toml",
@@ -477,6 +480,7 @@ dependencies = [
  "dam-trust",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -590,6 +594,8 @@ name = "dam-net"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -629,9 +635,20 @@ name = "dam-provider-anthropic"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "dam-provider-common",
  "futures-util",
  "reqwest",
  "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "dam-provider-common"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "serde_json",
  "tokio",
 ]
 
@@ -640,6 +657,7 @@ name = "dam-provider-openai"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "dam-provider-common",
  "futures-util",
  "reqwest",
  "thiserror 2.0.18",
@@ -676,6 +694,8 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",
+ "uuid",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -713,6 +733,7 @@ dependencies = [
 name = "dam-tray"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "tao",
  "tray-icon",
  "wry",
@@ -761,6 +782,7 @@ dependencies = [
  "dam-trust",
  "dam-vault",
  "reqwest",
+ "serde_json",
  "tokio",
 ]
 

@@ -38,19 +38,29 @@ pub struct ResolveTextResult {
     pub plan: ResolvePlan,
 }
 
+#[derive(Clone, Copy, Default)]
+pub struct ProtectTextContext<'a> {
+    pub reference_vault: Option<&'a dyn VaultReader>,
+    pub consent_store: Option<&'a dam_consent::ConsentStore>,
+    pub event_sink: Option<&'a dyn EventSink>,
+}
+
 pub fn protect_text(
     input: &str,
     operation_id: &str,
     policy: &dyn PolicyEngine,
     vault: &dyn VaultWriter,
-    consent_store: Option<&dam_consent::ConsentStore>,
-    event_sink: Option<&dyn EventSink>,
+    context: ProtectTextContext<'_>,
     options: ReplacementPlanOptions,
 ) -> Result<ProtectTextResult, PipelineError> {
+    let protected_input =
+        expand_allowed_references(input, context.consent_store, context.reference_vault)?
+            .unwrap_or_else(|| input.to_string());
+    let input = protected_input.as_str();
     let detections = dam_detect::detect(input);
     let base_decisions = policy.decide_all(&detections);
     let (decisions, consent_matches) =
-        dam_consent::apply_consents_to_decisions(&base_decisions, consent_store)?;
+        dam_consent::apply_consents_to_decisions(&base_decisions, context.consent_store)?;
 
     if decisions
         .iter()
@@ -58,7 +68,7 @@ pub fn protect_text(
     {
         let plan = blocked_plan_from_decisions(&decisions);
         record_filter_events(
-            event_sink,
+            context.event_sink,
             operation_id,
             &decisions,
             &plan,
@@ -77,7 +87,7 @@ pub fn protect_text(
     let plan =
         dam_core::build_replacement_plan_from_decisions_with_options(&decisions, vault, options);
     record_filter_events(
-        event_sink,
+        context.event_sink,
         operation_id,
         &decisions,
         &plan,
@@ -93,6 +103,50 @@ pub fn protect_text(
         plan,
         consent_matches,
     })
+}
+
+fn expand_allowed_references(
+    input: &str,
+    consent_store: Option<&dam_consent::ConsentStore>,
+    vault: Option<&dyn VaultReader>,
+) -> Result<Option<String>, PipelineError> {
+    let (Some(consent_store), Some(vault)) = (consent_store, vault) else {
+        return Ok(None);
+    };
+
+    let references = dam_core::find_references(input);
+    if references.is_empty() {
+        return Ok(None);
+    }
+
+    let mut replacements = Vec::<dam_core::ResolveReplacement>::new();
+    for reference_match in references {
+        let Ok(Some(value)) = vault.read(&reference_match.reference) else {
+            continue;
+        };
+        if consent_store
+            .active_for_value(reference_match.reference.kind, &value)?
+            .is_some()
+        {
+            replacements.push(dam_core::ResolveReplacement {
+                span: reference_match.span,
+                text: value,
+                reference: reference_match.reference,
+            });
+        }
+    }
+
+    if replacements.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(dam_core::apply_resolve_plan(
+        input,
+        &ResolvePlan {
+            replacements,
+            ..ResolvePlan::default()
+        },
+    )))
 }
 
 pub fn resolve_text(
@@ -189,9 +243,13 @@ mod tests {
     }
 
     impl VaultWriter for RecordingVault {
-        fn write(&self, record: &VaultRecord) -> Result<(), VaultWriteError> {
+        fn write_with_options(
+            &self,
+            record: &VaultRecord,
+            _options: dam_core::VaultWriteOptions,
+        ) -> Result<Reference, VaultWriteError> {
             self.records.lock().unwrap().push(record.clone());
-            Ok(())
+            Ok(record.reference.clone())
         }
     }
 
@@ -241,8 +299,11 @@ mod tests {
             "op-test",
             &policy,
             &vault,
-            None,
-            Some(&sink),
+            ProtectTextContext {
+                reference_vault: Some(&vault),
+                event_sink: Some(&sink),
+                ..ProtectTextContext::default()
+            },
             ReplacementPlanOptions::default(),
         )
         .unwrap();
@@ -275,8 +336,11 @@ mod tests {
             "op-test",
             &policy,
             &vault,
-            None,
-            Some(&sink),
+            ProtectTextContext {
+                reference_vault: Some(&vault),
+                event_sink: Some(&sink),
+                ..ProtectTextContext::default()
+            },
             ReplacementPlanOptions::default(),
         )
         .unwrap();
@@ -309,8 +373,11 @@ mod tests {
             "op-test",
             &policy,
             &vault,
-            Some(&consent_store),
-            Some(&sink),
+            ProtectTextContext {
+                reference_vault: Some(&vault),
+                consent_store: Some(&consent_store),
+                event_sink: Some(&sink),
+            },
             ReplacementPlanOptions::default(),
         )
         .unwrap();
@@ -318,6 +385,58 @@ mod tests {
         assert_eq!(result.output.unwrap(), "email alice@example.com");
         assert_eq!(result.consent_matches.len(), 1);
         assert!(vault.records.lock().unwrap().is_empty());
+        assert!(sink.events.lock().unwrap().iter().any(|event| {
+            event.event_type == LogEventType::Consent
+                && event
+                    .action
+                    .as_deref()
+                    .is_some_and(|action| action.starts_with("allow:"))
+        }));
+    }
+
+    #[test]
+    fn protect_text_applies_active_consent_to_allowed_reference_history() {
+        let vault = RecordingVault::default();
+        let sink = RecordingSink::default();
+        let reference = Reference::generate(SensitiveType::Email);
+        vault
+            .write(&VaultRecord {
+                reference: reference.clone(),
+                kind: SensitiveType::Email,
+                value: "alice@example.com".to_string(),
+            })
+            .unwrap();
+        let consent_store = dam_consent::ConsentStore::open_in_memory().unwrap();
+        consent_store
+            .grant(&dam_consent::GrantConsent {
+                kind: SensitiveType::Email,
+                value: "alice@example.com".to_string(),
+                vault_key: Some(reference.key()),
+                ttl_seconds: 60,
+                created_by: "test".to_string(),
+                reason: None,
+            })
+            .unwrap();
+        let policy = dam_policy::StaticPolicy::new(PolicyAction::Tokenize);
+        let input = format!("email {}", reference.display());
+
+        let result = protect_text(
+            &input,
+            "op-test",
+            &policy,
+            &vault,
+            ProtectTextContext {
+                reference_vault: Some(&vault),
+                consent_store: Some(&consent_store),
+                event_sink: Some(&sink),
+            },
+            ReplacementPlanOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(result.output.unwrap(), "email alice@example.com");
+        assert_eq!(result.consent_matches.len(), 1);
+        assert_eq!(vault.records.lock().unwrap().len(), 1);
         assert!(sink.events.lock().unwrap().iter().any(|event| {
             event.event_type == LogEventType::Consent
                 && event
@@ -347,6 +466,30 @@ mod tests {
         assert_eq!(result.plan.resolved_count(), 1);
         assert!(sink.events.lock().unwrap().iter().any(|event| {
             event.event_type == LogEventType::Resolve && event.action.as_deref() == Some("resolved")
+        }));
+    }
+
+    #[test]
+    fn resolve_text_restores_markdown_escaped_references_and_logs() {
+        let vault = RecordingVault::default();
+        let sink = RecordingSink::default();
+        let reference = Reference::generate(SensitiveType::Email);
+        vault
+            .write(&VaultRecord {
+                reference: reference.clone(),
+                kind: SensitiveType::Email,
+                value: "alice@example.com".to_string(),
+            })
+            .unwrap();
+        let input = format!(r#"email \{}"#, reference.display());
+
+        let result = resolve_text(&input, "op-test", &vault, Some(&sink));
+
+        assert_eq!(result.output.unwrap(), "email alice@example.com");
+        assert_eq!(result.plan.resolved_count(), 1);
+        assert!(sink.events.lock().unwrap().iter().any(|event| {
+            event.event_type == LogEventType::VaultRead
+                && event.reference.as_ref() == Some(&reference)
         }));
     }
 

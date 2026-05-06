@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>DAM Network Protection</string>
+	<key>CFBundleExecutable</key>
+	<string>DAMTransparentProxyProvider</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.rpblc.dam.network-extension</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>DAMTransparentProxyProvider</string>
+	<key>CFBundlePackageType</key>
+	<string>SYSX</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>NSSystemExtensionUsageDescription</key>
+	<string>DAM installs a Network Extension to capture and protect configured local network traffic.</string>
+	<key>NetworkExtension</key>
+	<dict>
+		<key>NEMachServiceName</key>
+		<string>__APP_GROUP_ID__.network-extension</string>
+		<key>NEProviderClasses</key>
+		<dict>
+			<key>com.apple.networkextension.app-proxy</key>
+			<string>DAMTransparentProxyProvider.DAMTransparentProxyProvider</string>
+		</dict>
+	</dict>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.networkextension.app-proxy</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>DAMTransparentProxyProvider.DAMTransparentProxyProvider</string>
+	</dict>
+</dict>
+</plist>

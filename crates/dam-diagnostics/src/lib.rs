@@ -55,6 +55,7 @@ impl SetupPlanState {
 pub enum SetupStepKind {
     ProfileApply,
     SystemProxy,
+    NetworkExtension,
     LocalCa,
     Daemon,
 }
@@ -64,6 +65,7 @@ impl SetupStepKind {
         match self {
             Self::ProfileApply => "profile_apply",
             Self::SystemProxy => "system_proxy",
+            Self::NetworkExtension => "network_extension",
             Self::LocalCa => "local_ca",
             Self::Daemon => "daemon",
         }
@@ -135,9 +137,6 @@ pub async fn doctor_report(
         .components
         .push(proxy_runtime_component(config, options, &mut report.diagnostics).await);
     add_setup_plan_component(config, options, &mut report);
-    report.components.push(claude_launcher_component());
-    report.components.push(codex_api_launcher_component());
-    report.components.push(codex_chatgpt_component());
     report.state = aggregate_state(&report.components);
 
     report
@@ -243,7 +242,7 @@ fn profile_setup_step(
         return SetupStep {
             kind: SetupStepKind::ProfileApply,
             status: SetupStepStatus::Skipped,
-            message: "no enabled profiles; default endpoint can be used".to_string(),
+            message: "no enabled profiles; default transparent routes can be used".to_string(),
             command: None,
             requires_confirmation: false,
             changes_system: false,
@@ -256,6 +255,24 @@ fn profile_setup_step(
         .map(|profile| profile.profile_id.as_str())
         .collect::<Vec<_>>();
     for enabled_profile in enabled_profiles {
+        if dam_integrations::profile(
+            &enabled_profile.profile_id,
+            dam_integrations::DEFAULT_PROXY_URL,
+        )
+        .is_none()
+        {
+            return SetupStep {
+                kind: SetupStepKind::ProfileApply,
+                status: SetupStepStatus::Blocked,
+                message: format!(
+                    "enabled profile {} is not a known integration profile",
+                    enabled_profile.profile_id
+                ),
+                command: None,
+                requires_confirmation: false,
+                changes_system: false,
+            };
+        }
         let target_path = match dam_integrations::default_apply_path(
             &enabled_profile.profile_id,
             integration_state_dir,
@@ -334,27 +351,33 @@ fn profile_setup_step(
     }
 
     if any_needs_apply {
-        SetupStep {
+        return SetupStep {
             kind: SetupStepKind::ProfileApply,
             status: SetupStepStatus::Needed,
-            message: format!("enabled profiles need setup: {}", profile_ids.join(", ")),
+            message: format!(
+                "enabled CLI profiles need explicit proxy fallback setup: {}",
+                profile_ids.join(", ")
+            ),
             command: Some(vec![
                 "dam".to_string(),
                 "connect".to_string(),
                 "--apply".to_string(),
             ]),
-            requires_confirmation: true,
-            changes_system: false,
-        }
-    } else {
-        SetupStep {
-            kind: SetupStepKind::ProfileApply,
-            status: SetupStepStatus::Done,
-            message: format!("enabled profiles are applied: {}", profile_ids.join(", ")),
-            command: None,
             requires_confirmation: false,
             changes_system: false,
-        }
+        };
+    }
+
+    SetupStep {
+        kind: SetupStepKind::ProfileApply,
+        status: SetupStepStatus::Done,
+        message: format!(
+            "enabled CLI profiles have explicit proxy fallback setup: {}",
+            profile_ids.join(", ")
+        ),
+        command: None,
+        requires_confirmation: false,
+        changes_system: false,
     }
 }
 
@@ -372,14 +395,36 @@ fn system_proxy_setup_step(
             requires_confirmation: false,
             changes_system: false,
         },
-        dam_net::CaptureMode::Tun => SetupStep {
-            kind: SetupStepKind::SystemProxy,
-            status: SetupStepStatus::Blocked,
-            message: "TUN routing is not implemented in this local build".to_string(),
-            command: None,
-            requires_confirmation: false,
-            changes_system: true,
-        },
+        dam_net::CaptureMode::Tun => {
+            if dam_net_macos::network_extension_active(state_dir) {
+                return SetupStep {
+                    kind: SetupStepKind::NetworkExtension,
+                    status: SetupStepStatus::Done,
+                    message: "macOS Network Extension capture is active".to_string(),
+                    command: None,
+                    requires_confirmation: false,
+                    changes_system: false,
+                };
+            }
+            let mut command = vec![
+                "dam".to_string(),
+                "network".to_string(),
+                "install-network-extension".to_string(),
+            ];
+            if let Some(config_path) = config_path {
+                command.push("--config".to_string());
+                command.push(config_path.display().to_string());
+            }
+            command.push("--yes".to_string());
+            SetupStep {
+                kind: SetupStepKind::NetworkExtension,
+                status: SetupStepStatus::Needed,
+                message: "macOS Network Extension capture needs to be installed".to_string(),
+                command: Some(command),
+                requires_confirmation: true,
+                changes_system: true,
+            }
+        }
         dam_net::CaptureMode::SystemProxy => {
             if dam_net_macos::system_proxy_installed(state_dir) {
                 return SetupStep {
@@ -1243,41 +1288,6 @@ fn proxy_state_tag(state: dam_api::ProxyState) -> &'static str {
     }
 }
 
-fn claude_launcher_component() -> dam_api::ComponentHealth {
-    dam_api::ComponentHealth {
-        component: "launcher_claude".to_string(),
-        state: dam_api::HealthState::Healthy,
-        message: "dam claude uses Anthropic base-URL routing with caller auth passthrough"
-            .to_string(),
-    }
-}
-
-fn codex_api_launcher_component() -> dam_api::ComponentHealth {
-    if std::env::var_os("OPENAI_API_KEY").is_some() {
-        dam_api::ComponentHealth {
-            component: "launcher_codex_api".to_string(),
-            state: dam_api::HealthState::Healthy,
-            message: "dam codex --api can use OPENAI_API_KEY through caller auth passthrough"
-                .to_string(),
-        }
-    } else {
-        dam_api::ComponentHealth {
-            component: "launcher_codex_api".to_string(),
-            state: dam_api::HealthState::Degraded,
-            message: "dam codex --api requires OPENAI_API_KEY in the Codex environment".to_string(),
-        }
-    }
-}
-
-fn codex_chatgpt_component() -> dam_api::ComponentHealth {
-    dam_api::ComponentHealth {
-        component: "launcher_codex_chatgpt".to_string(),
-        state: dam_api::HealthState::Healthy,
-        message: "dam codex ChatGPT-login mode fails closed until its model transport is protected"
-            .to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1434,7 +1444,7 @@ mod tests {
     }
 
     #[test]
-    fn setup_plan_reports_active_profile_needs_apply() {
+    fn setup_plan_requires_explicit_proxy_fallback_for_enabled_cli_profile() {
         let dir = tempfile::tempdir().unwrap();
         let state_dir = dir.path().join("state");
         let integration_state_dir = state_dir.join("integrations");
@@ -1464,7 +1474,11 @@ mod tests {
                 "--apply".to_string()
             ])
         );
-        assert!(step.requires_confirmation);
+        assert!(!step.requires_confirmation);
+        assert!(
+            step.message
+                .contains("enabled CLI profiles need explicit proxy fallback setup")
+        );
     }
 
     #[test]
@@ -1495,6 +1509,43 @@ mod tests {
                 "dam".to_string(),
                 "network".to_string(),
                 "install-system-proxy".to_string(),
+                "--config".to_string(),
+                "dam.example.toml".to_string(),
+                "--yes".to_string()
+            ])
+        );
+        assert!(step.requires_confirmation);
+        assert!(step.changes_system);
+    }
+
+    #[test]
+    fn setup_plan_reports_network_extension_setup_when_tun_requested() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = proxy_config("https://api.openai.com", "openai-compatible");
+
+        let plan = setup_plan(
+            &config,
+            &SetupPlanOptions {
+                state_dir: Some(dir.path().join("state")),
+                config_path: Some(PathBuf::from("dam.example.toml")),
+                network_mode: dam_net::CaptureMode::Tun,
+                ..SetupPlanOptions::default()
+            },
+        )
+        .unwrap();
+
+        let step = plan
+            .steps
+            .iter()
+            .find(|step| step.kind == SetupStepKind::NetworkExtension)
+            .unwrap();
+        assert_eq!(step.status, SetupStepStatus::Needed);
+        assert_eq!(
+            step.command,
+            Some(vec![
+                "dam".to_string(),
+                "network".to_string(),
+                "install-network-extension".to_string(),
                 "--config".to_string(),
                 "dam.example.toml".to_string(),
                 "--yes".to_string()

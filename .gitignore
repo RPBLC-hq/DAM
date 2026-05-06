@@ -1,5 +1,7 @@
 /target/
+native/macos/.build/
 /.dam/
+node_modules/
 *.db
 *.db-shm
 *.db-wal

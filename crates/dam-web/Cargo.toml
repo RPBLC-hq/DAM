@@ -18,4 +18,5 @@ dam-net.workspace = true
 dam-trust.workspace = true
 dam-vault.workspace = true
 reqwest.workspace = true
+serde_json.workspace = true
 tokio.workspace = true

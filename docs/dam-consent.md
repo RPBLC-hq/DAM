@@ -1,8 +1,8 @@
 # dam-consent
 
-`dam-consent` stores exact-value passthrough grants.
+`dam-consent` stores canonical-value passthrough grants.
 
-A consent lets a detected value pass through unredacted until its TTL expires or it is revoked. Consent overrides `tokenize` and `redact` policy decisions. It does not override `block`.
+A consent lets a detected value pass through unredacted until its TTL expires or it is revoked. Consent overrides `tokenize` and `redact` policy decisions. It does not override `block`. For token kinds with normalization, matching uses the same canonical value used by replacement planning; current email canonicalization removes detector-supported whitespace inside the address and lowercases the domain.
 
 Consent records do not store raw sensitive values. Matching uses:
 
@@ -16,7 +16,7 @@ When a consent is granted from the vault UI or MCP server, the caller provides t
 email:ANJFsZtLfEA9WeP3bZS8Nw
 ```
 
-The stable vault key is preferred over bracket display references because inbound reference resolution may turn `[email:...]` back into the local value before an agent sees it.
+The stable vault key is preferred over bracket display references because inbound reference resolution may turn `[email:...]` back into the local value before an agent sees it. In proxy flows, active consent also lets `dam-pipeline` expand a previously tokenized outbound DAM reference for that same canonical value before detection/redaction runs. This prevents chat history such as `[email:...]` from being re-sent to a model after the user has explicitly allowed the underlying value.
 
 ## Config
 
@@ -42,9 +42,10 @@ DAM_CONSENT_MCP_WRITE_ENABLED
 
 ## Behavior
 
-- Active consent changes matching detections to `allow`.
+- Active consent changes matching canonical detections to `allow`.
+- Active consent applies to previously tokenized outbound DAM references when the configured vault can read the stored value and the stored value still has active consent.
 - Expired or revoked consent does not affect policy.
-- Revoking a consent id revokes all unrevoked grants for the same `kind + value_fingerprint + scope`, so duplicate vault rows for the same exact value cannot keep passthrough alive.
+- Revoking a consent id revokes all unrevoked grants for the same `kind + value_fingerprint + scope`, so duplicate vault rows for the same canonical value cannot keep passthrough alive.
 - Consent emits a non-sensitive `consent` log event when it allows a value.
 - The SQLite store keeps `id`, `kind`, `value_fingerprint`, optional `vault_key`, TTL timestamps, source, and optional reason.
 

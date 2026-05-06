@@ -5,8 +5,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "macos")]
+mod macos_system_extension;
+
 const DEFAULT_WEB_PORT: u16 = 2896;
 const DEFAULT_WEB_PORT_MAX: u16 = 2916;
+const DEFAULT_MACOS_NE_BUNDLE_ID: &str = "com.rpblc.dam.network-extension";
 const DAM_BIN_ENV: &str = "DAM_BIN";
 const DAM_WEB_BIN_ENV: &str = "DAM_WEB_BIN";
 const DAM_STATE_DIR_ENV: &str = "DAM_STATE_DIR";
@@ -245,6 +249,8 @@ mod macos {
     const POPOVER_HEIGHT: f64 = 720.0;
     const POPOVER_MARGIN: f64 = 8.0;
     const RPBLC_HOME_URL: &str = "https://rpblc.com";
+    const MACOS_NETWORK_EXTENSION_APPROVAL_SETTINGS_URL: &str =
+        "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension";
     const TRAY_OPEN_RPBLC_MESSAGE: &str = "dam-tray:open-rpblc";
     const TRAY_CONNECT_MESSAGE: &str = "dam-tray:connect";
     const TRAY_QUIT_MESSAGE: &str = "dam-tray:quit";
@@ -348,9 +354,6 @@ mod macos {
         let dam_bin_for_connect = dam_bin.clone();
         let data_paths_for_connect = data_paths.clone();
         let config_path_for_connect = cli.config_path.clone();
-        let dam_bin_for_quit = dam_bin.clone();
-        let data_paths_for_quit = data_paths.clone();
-
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Wait;
 
@@ -396,9 +399,6 @@ mod macos {
                     }
                 }
                 Event::UserEvent(UserEvent::QuitRequested) => {
-                    if let Err(error) = disconnect_dam(&dam_bin_for_quit, &data_paths_for_quit) {
-                        eprintln!("{error}");
-                    }
                     web_child.stop();
                     *control_flow = ControlFlow::Exit;
                 }
@@ -427,12 +427,25 @@ mod macos {
             ),
             Err(error) => {
                 eprintln!("{error}");
-                format!(
-                    "/connect?error={}",
-                    form_url_encode_component(&format!("Connect failed: {error}"))
-                )
+                let message = connect_error_message(&error);
+                format!("/connect?error={}", form_url_encode_component(&message))
             }
         }
+    }
+
+    fn connect_error_message(error: &str) -> String {
+        approval_instruction(error)
+            .map(|message| format!("Action required: {message}"))
+            .unwrap_or_else(|| format!("Connect failed: {error}"))
+    }
+
+    fn approval_instruction(error: &str) -> Option<&str> {
+        if let Some(message) = error.strip_prefix("action required: ") {
+            return Some(message);
+        }
+        error
+            .find("approve DAM Network Protection")
+            .map(|index| &error[index..])
     }
 
     fn build_tray() -> Result<tray_icon::TrayIcon, String> {
@@ -545,11 +558,12 @@ mod macos {
         data_paths: &DataPaths,
         config_path: Option<&PathBuf>,
     ) -> Result<(), String> {
+        activate_system_extension_from_app()?;
         run_dam_command(
             dam_bin,
             data_paths,
             &network_install_args(config_path),
-            "install system proxy routing",
+            "install Network Extension routing",
         )?;
         run_dam_command(
             dam_bin,
@@ -570,10 +584,42 @@ mod macos {
         )
     }
 
+    fn activate_system_extension_from_app() -> Result<(), String> {
+        let bundle_identifier = env::var("DAM_MACOS_NE_BUNDLE_ID")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| DEFAULT_MACOS_NE_BUNDLE_ID.to_string());
+        match crate::macos_system_extension::activate(&bundle_identifier, Duration::from_secs(20)) {
+            Ok(crate::macos_system_extension::ActivationOutcome::Ready(_)) => Ok(()),
+            Ok(crate::macos_system_extension::ActivationOutcome::NeedsApproval(message)) => {
+                open_network_extension_approval_settings();
+                Err(format!("action required: {message}"))
+            }
+            Ok(crate::macos_system_extension::ActivationOutcome::NeedsReboot(message)) => {
+                Err(format!("action required: {message}"))
+            }
+            Err(error) => Err(format!("activate DAM Network Protection: {error}")),
+        }
+    }
+
+    fn open_network_extension_approval_settings() {
+        if open_in_browser(MACOS_NETWORK_EXTENSION_APPROVAL_SETTINGS_URL).is_ok() {
+            return;
+        }
+        let _ = Command::new("open")
+            .arg("-b")
+            .arg("com.apple.systempreferences")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
     fn network_install_args(config_path: Option<&PathBuf>) -> Vec<String> {
         let mut args = vec![
             "network".to_string(),
-            "install-system-proxy".to_string(),
+            "install-network-extension".to_string(),
             "--yes".to_string(),
         ];
         if let Some(config_path) = config_path {
@@ -602,7 +648,7 @@ mod macos {
             "--consent-db".to_string(),
             data_paths.consent_path.display().to_string(),
             "--network-mode".to_string(),
-            "system_proxy".to_string(),
+            "tun".to_string(),
             "--trust-mode".to_string(),
             "local_ca".to_string(),
         ]);
@@ -665,11 +711,7 @@ mod macos {
     fn command_error(label: &str, args: &[String], output: &std::process::Output) -> String {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let message = if stderr.trim().is_empty() {
-            stdout.trim()
-        } else {
-            stderr.trim()
-        };
+        let message = dam_command_failure_message(&stdout, &stderr);
         if message.is_empty() {
             format!(
                 "failed to {label}: dam {} exited with {}",
@@ -679,6 +721,25 @@ mod macos {
         } else {
             format!("failed to {label}: {message}")
         }
+    }
+
+    fn dam_command_failure_message(stdout: &str, stderr: &str) -> String {
+        let stderr = stderr.trim();
+        if !stderr.is_empty() {
+            return stderr.to_string();
+        }
+
+        for prefix in ["approval: ", "message: "] {
+            if let Some(message) = stdout
+                .lines()
+                .find_map(|line| line.strip_prefix(prefix).map(str::trim))
+                .filter(|line| !line.is_empty())
+            {
+                return message.to_string();
+            }
+        }
+
+        stdout.trim().to_string()
     }
 
     fn form_url_encode_component(value: &str) -> String {
@@ -723,98 +784,6 @@ mod macos {
             .next()
             .filter(|authority| !authority.is_empty());
         authority == Some(allowed_authority)
-    }
-
-    fn network_remove_args() -> Vec<String> {
-        vec![
-            "network".to_string(),
-            "remove-system-proxy".to_string(),
-            "--yes".to_string(),
-        ]
-    }
-
-    fn disconnect_dam(dam_bin: &PathBuf, data_paths: &DataPaths) -> Result<(), String> {
-        run_dam_command(
-            dam_bin,
-            data_paths,
-            &network_remove_args(),
-            "restore system proxy routing",
-        )?;
-        for profile_id in profiles_with_rollback(dam_bin, data_paths)? {
-            run_dam_command(
-                dam_bin,
-                data_paths,
-                &[
-                    "integrations".to_string(),
-                    "rollback".to_string(),
-                    profile_id,
-                ],
-                "restore active profile setup",
-            )?;
-        }
-        let status = Command::new(dam_bin)
-            .arg("disconnect")
-            .env(DAM_STATE_DIR_ENV, &data_paths.state_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .status()
-            .map_err(|error| format!("failed to run `dam disconnect`: {error}"))?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("`dam disconnect` exited with {status}"))
-        }
-    }
-
-    fn profiles_with_rollback(
-        dam_bin: &PathBuf,
-        data_paths: &DataPaths,
-    ) -> Result<Vec<String>, String> {
-        let output = Command::new(dam_bin)
-            .arg("profile")
-            .arg("status")
-            .env(DAM_STATE_DIR_ENV, &data_paths.state_dir)
-            .stdin(Stdio::null())
-            .output()
-            .map_err(|error| format!("failed to inspect active profile: {error}"))?;
-        if !output.status.success() {
-            return Err(command_error(
-                "inspect active profile",
-                &["profile".to_string(), "status".to_string()],
-                &output,
-            ));
-        }
-        Ok(parse_profiles_with_rollback(&String::from_utf8_lossy(
-            &output.stdout,
-        )))
-    }
-
-    fn parse_profiles_with_rollback(output: &str) -> Vec<String> {
-        let profiles = output
-            .lines()
-            .filter_map(|line| line.strip_prefix("rollback_profile: "))
-            .map(str::trim)
-            .filter(|profile| !profile.is_empty())
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
-        if !profiles.is_empty() {
-            return profiles;
-        }
-        let profile = output
-            .lines()
-            .find_map(|line| line.strip_prefix("active_profile: "))
-            .map(str::trim)
-            .filter(|profile| !profile.is_empty() && *profile != "none");
-        let rollback_available = output
-            .lines()
-            .find_map(|line| line.strip_prefix("rollback: "))
-            .map(str::trim)
-            == Some("available");
-        match (profile, rollback_available) {
-            (Some(profile), true) => vec![profile.to_string()],
-            _ => Vec::new(),
-        }
     }
 
     fn generate_tray_post_token() -> Result<String, String> {
@@ -971,46 +940,8 @@ mod macos {
                 "--consent-db",
                 "/tmp/dam-state/consent.db"
             ));
-            assert!(arg_pair_exists(&args, "--network-mode", "system_proxy"));
+            assert!(arg_pair_exists(&args, "--network-mode", "tun"));
             assert!(arg_pair_exists(&args, "--trust-mode", "local_ca"));
-        }
-
-        #[test]
-        fn native_disconnect_removes_system_proxy_before_daemon_stop() {
-            assert_eq!(
-                network_remove_args(),
-                vec![
-                    "network".to_string(),
-                    "remove-system-proxy".to_string(),
-                    "--yes".to_string(),
-                ]
-            );
-        }
-
-        #[test]
-        fn native_disconnect_rolls_back_applied_enabled_profiles() {
-            assert_eq!(
-                parse_profiles_with_rollback(
-                    "active_profile: claude-code\napply_state: applied\nrollback: available\n"
-                ),
-                vec!["claude-code".to_string()]
-            );
-            assert_eq!(
-                parse_profiles_with_rollback(
-                    "active_profile: claude-code\napply_state: needs_apply\nrollback: unavailable\n"
-                ),
-                Vec::<String>::new()
-            );
-            assert_eq!(
-                parse_profiles_with_rollback("active_profile: none\n"),
-                Vec::<String>::new()
-            );
-            assert_eq!(
-                parse_profiles_with_rollback(
-                    "enabled_profiles: codex-api, claude-code\nrollback_profile: codex-api\nrollback_profile: claude-code\n"
-                ),
-                vec!["codex-api".to_string(), "claude-code".to_string()]
-            );
         }
 
         #[test]
@@ -1031,6 +962,31 @@ mod macos {
             assert_eq!(
                 connect_result_redirect(Err("local trust".to_string())),
                 "/connect?error=Connect+failed%3A+local+trust"
+            );
+            assert_eq!(
+                connect_result_redirect(Err(
+                    "action required: approve DAM Network Protection in System Settings, then click Connect/Resume again"
+                        .to_string()
+                )),
+                "/connect?error=Action+required%3A+approve+DAM+Network+Protection+in+System+Settings%2C+then+click+Connect%2FResume+again"
+            );
+        }
+
+        #[test]
+        fn native_command_error_prefers_actionable_approval_line() {
+            let stdout = concat!(
+                "state: needs_approval\n",
+                "message: raw helper state\n",
+                "approval: approve DAM Network Protection in System Settings, then click Connect/Resume again\n",
+            );
+
+            assert_eq!(
+                dam_command_failure_message(stdout, ""),
+                "approve DAM Network Protection in System Settings, then click Connect/Resume again"
+            );
+            assert_eq!(
+                dam_command_failure_message(stdout, "explicit failure"),
+                "explicit failure"
             );
         }
 

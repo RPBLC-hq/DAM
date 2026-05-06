@@ -28,6 +28,8 @@ rcgen.workspace = true
 tokio-rustls.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+uuid.workspace = true
+webpki-roots.workspace = true
 
 [dev-dependencies]
 reqwest.workspace = true

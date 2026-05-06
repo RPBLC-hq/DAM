@@ -8,11 +8,11 @@ The macOS menu-bar item is text-only and renders `[R:]` as its native title. It 
 
 Inside the tray-hosted page, clicking the `[R:]` brand mark opens `https://rpblc.com` in the user's default browser through the native shell instead of navigating inside the WebView. The WebView navigation and IPC handlers are pinned to the hosted loopback origin, and new-window requests are denied inside the embedded view.
 
-The tray-hosted Connect button posts a native IPC event instead of letting the `dam-web` child process run privileged setup. The native shell runs the setup sequence (`dam network install-system-proxy --yes`, `dam trust install-local-ca --yes`, then `dam connect --network-mode system_proxy --trust-mode local_ca`) so macOS administrator authorization prompts can be presented from the app process.
+The tray-hosted Connect button posts a native IPC event instead of letting the `dam-web` child process run privileged setup. The native shell first refreshes the installed System Extension state with `systemextensionsctl`, then submits the macOS System Extension activation request from the real `DAM.app` process when activation is not already pending or enabled. It keeps pending approval requests alive until the user approves or quits the app. While macOS reports `activated waiting for user`, Resume opens System Settings when possible and shows the approval action instead of retrying a stale activation request. When macOS says activation will complete after reboot, the tray reports a reboot-required action and stops before Network Extension install. After activation is approved, it runs the setup sequence (`dam network install-network-extension --yes`, `dam trust install-local-ca --yes`, then `dam connect --network-mode tun --trust-mode local_ca`) so macOS authorization prompts are owned by the app rather than by the hosted `dam-web` child or a short-lived CLI helper. The helper configures `NETransparentProxyManager` only; it does not submit a second System Extension activation request.
 
 `dam-tray` gives the hosted `dam-web` process a random per-session POST token through `DAM_WEB_TRAY_POST_TOKEN`. Tray-mode pages attach that token to same-origin form actions so macOS WebView form submits can mutate local state even when the WebView omits browser `Origin` / `Referer` headers. Browser-hosted `dam-web` keeps the normal local-origin POST guard.
 
-It does not implement protection logic. Connect, disconnect, app/profile selection, setup sequencing, vault/log viewing, consent, and diagnostics continue to live in `dam`, `dam-daemon`, `dam-diagnostics`, `dam-integrations`, and `dam-web`. Native Quit restores DAM-managed macOS system-proxy routing and rolls back enabled profile setup before it disconnects the daemon and exits.
+It does not implement protection logic. Connect, pause, app/profile selection, setup sequencing, vault/log viewing, consent, and diagnostics continue to live in `dam`, `dam-daemon`, `dam-diagnostics`, `dam-integrations`, and `dam-web`. Native Quit exits the tray shell and stops only the hosted `dam-web` child. It does not restore DAM-managed routing, change enabled app selection, roll back explicit profile setup, or stop the daemon, so active clients keep their local DAM endpoint.
 
 ## Usage
 
@@ -72,9 +72,10 @@ daemon.json
 ## Boundary
 
 - `dam-tray` owns the native shell and the hosted `dam-web` child process.
+- On macOS, `dam-tray` owns the app-process System Extension activation request for packaged Connect.
 - Starting `dam-tray` creates the menu-bar item without opening the popover.
 - Losing focus hides the popover; the app remains available from the menu-bar item.
-- The tray-hosted page renders a Quit DAM button. It restores DAM-managed macOS system-proxy routing, rolls back enabled profile setup, runs `dam disconnect`, then stops the hosted web UI and exits the tray shell.
+- The tray-hosted page renders a Quit tray button. It stops the hosted web UI and exits the tray shell without changing DAM routing, enabled app selection, explicit profile setup, protection state, or the daemon.
 - Non-macOS platforms currently return a clear unsupported-platform message; users can run `dam-web` directly until native shells are added.
 
 ## Packaging Notes
@@ -85,6 +86,7 @@ A click-and-play package must include at least:
 dam-tray
 dam-web
 dam
+signed macOS Network Extension helper/app bundle for tun mode
 ```
 
 The tray binary discovers explicit `--dam-web-bin` / `--dam-bin` paths first, then `DAM_WEB_BIN` / `DAM_BIN`, then sibling binaries next to `dam-tray`, then `PATH`.

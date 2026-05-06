@@ -9,7 +9,7 @@ It does not decrypt traffic, run a TLS proxy, install routes, or generate certif
 Readiness states:
 
 ```text
-not_transparent_mode  explicit proxy mode is active; no transparent interception
+not_transparent_mode  route capture is inactive for this mode
 needs_routing         system proxy or TUN routing is not active
 needs_user_consent    interception was not explicitly approved
 needs_trust           local TLS trust prerequisites are not ready
