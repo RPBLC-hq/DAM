@@ -1,0 +1,56 @@
+{
+  "id": "codex-api",
+  "name": "Codex API-key mode",
+  "summary": "Route Codex API-key OpenAI HTTPS traffic through DAM.",
+  "provider": "openai-compatible",
+  "traffic_app_ids": ["openai-api"],
+  "connect_args": [
+    "--openai",
+    "--network-mode",
+    "tun",
+    "--trust-mode",
+    "local_ca"
+  ],
+  "settings": [
+    {
+      "key": "HTTPS_PROXY",
+      "value": "{{proxy_url}}",
+      "description": "HTTPS proxy for explicit-proxy fallback"
+    },
+    {
+      "key": "HTTP_PROXY",
+      "value": "{{proxy_url}}",
+      "description": "HTTP proxy for explicit-proxy fallback"
+    }
+  ],
+  "commands": [
+    {
+      "label": "Start DAM for Codex API-key mode",
+      "command": [
+        "dam",
+        "connect",
+        "--openai",
+        "--network-mode",
+        "tun",
+        "--trust-mode",
+        "local_ca"
+      ]
+    },
+    {
+      "label": "Run Codex through explicit-proxy fallback",
+      "command": [
+        "env",
+        "{{https_proxy_env}}={{proxy_url}}",
+        "{{http_proxy_env}}={{proxy_url}}",
+        "codex"
+      ]
+    }
+  ],
+  "notes": [
+    "Codex must keep its normal OpenAI API-key configuration; DAM does not write a custom Codex provider or base URL.",
+    "Tray/web Connect installs Network Extension capture first; proxy env fallback is retained for source builds and unsupported environments.",
+    "Codex ChatGPT-login mode uses the codex-chatgpt profile so chatgpt.com WebSocket traffic is routed through the WebSocket protocol adapter.",
+    "{{codex_api_key_env}} stays owned by Codex or the user's shell; DAM forwards caller auth headers."
+  ],
+  "automation": "connect_preset"
+}

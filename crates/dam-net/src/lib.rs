@@ -3,9 +3,11 @@ use std::{fmt, str::FromStr};
 use serde::{Deserialize, Serialize};
 
 mod capture;
+mod profile;
 mod protocol;
 
 pub use capture::*;
+pub use profile::*;
 pub use protocol::*;
 
 pub const OPENAI_COMPATIBLE_PROVIDER: &str = "openai-compatible";
@@ -147,12 +149,13 @@ pub struct TransparentRouteCaptureReadiness {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum TrafficProtocol {
     Http,
     Https,
     WebSocket,
+    #[default]
     Unknown,
 }
 
@@ -183,13 +186,14 @@ impl TrafficObservation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AiTrafficKind {
     OpenAiApi,
     AnthropicApi,
     XaiApi,
     ChatGptCodexBackend,
+    #[default]
     Custom,
 }
 
@@ -261,49 +265,25 @@ pub fn classify_ai_host_with_routes(host: &str, routes: &[AiRoute]) -> Option<Ai
 }
 
 pub fn known_ai_routes() -> Vec<AiRoute> {
-    vec![
-        AiRoute::new(
-            AiTrafficKind::OpenAiApi,
-            "api.openai.com",
-            OPENAI_COMPATIBLE_PROVIDER,
-            "openai",
-            "https://api.openai.com",
-        ),
-        AiRoute::new(
-            AiTrafficKind::AnthropicApi,
-            "api.anthropic.com",
-            ANTHROPIC_PROVIDER,
-            "anthropic",
-            "https://api.anthropic.com",
-        ),
-        AiRoute::new(
-            AiTrafficKind::XaiApi,
-            "api.x.ai",
-            OPENAI_COMPATIBLE_PROVIDER,
-            "xai",
-            "https://api.x.ai",
-        ),
-        AiRoute::new(
-            AiTrafficKind::ChatGptCodexBackend,
-            "chatgpt.com",
-            OPENAI_COMPATIBLE_PROVIDER,
-            "chatgpt-codex",
-            "https://chatgpt.com",
-        ),
-    ]
+    ai_routes_from_profile(&llm_mvp_profile())
 }
 
-pub fn known_ai_hosts() -> Vec<&'static str> {
-    vec![
-        "api.openai.com",
-        "api.anthropic.com",
-        "api.x.ai",
-        "chatgpt.com",
-    ]
+pub fn known_ai_hosts() -> Vec<String> {
+    known_ai_routes()
+        .into_iter()
+        .map(|route| route.host)
+        .collect()
 }
 
 pub fn ai_routes_with_overlays(overlays: impl IntoIterator<Item = AiRoute>) -> Vec<AiRoute> {
-    let mut routes = known_ai_routes();
+    ai_routes_with_profile_and_overlays(&llm_mvp_profile(), overlays)
+}
+
+pub fn ai_routes_with_profile_and_overlays(
+    profile: &TrafficProfile,
+    overlays: impl IntoIterator<Item = AiRoute>,
+) -> Vec<AiRoute> {
+    let mut routes = ai_routes_from_profile(profile);
     for overlay in overlays {
         let overlay = overlay.normalized();
         if overlay.host.is_empty() {
@@ -431,7 +411,7 @@ pub fn transparent_route_capture_readiness(
     }
 }
 
-fn normalize_host(host: &str) -> String {
+pub(crate) fn normalize_host(host: &str) -> String {
     let trimmed = host.trim().trim_end_matches('.');
     let without_scheme = trimmed
         .strip_prefix("https://")

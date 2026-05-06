@@ -9,7 +9,7 @@ It implements `dam-core::VaultWriter` and `dam-core::VaultReader`.
 Persist mappings:
 
 ```text
-reference key -> original value
+reference key -> value supplied by dam-core
 ```
 
 Example key:
@@ -18,7 +18,7 @@ Example key:
 email:7B2HkqFn9xR4mWpD3nYvKt
 ```
 
-When `VaultWriter` is called with deduplication enabled, the local vault reuses an existing reference for the same exact `(kind, value)` instead of storing another row. `list()` also collapses duplicate `(kind, value)` rows so the wallet presents one controllable card per value even if an older database already contains duplicates.
+When `VaultWriter` is called with deduplication enabled, the local vault reuses an existing reference for the same exact `(kind, value)` instead of storing another row and refreshes that row's `updated_at` timestamp so the wallet reflects the most recently seen value. `dam-core` owns any kind-specific canonicalization before the write; current email values arrive with detector-supported internal whitespace removed and the domain lowercased. `list()` also collapses duplicate `(kind, value)` rows so the wallet presents one controllable card per value even if an older database already contains duplicates.
 
 ## SQLite Schema
 

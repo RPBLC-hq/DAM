@@ -20,6 +20,8 @@ pub struct IntegrationProfile {
     pub name: String,
     pub summary: String,
     pub provider: String,
+    #[serde(default)]
+    pub traffic_app_ids: Vec<String>,
     pub connect_args: Vec<String>,
     pub settings: Vec<IntegrationSetting>,
     pub commands: Vec<IntegrationCommand>,
@@ -171,14 +173,13 @@ struct IntegrationBackupFile {
 }
 
 pub fn profiles(proxy_url: &str) -> Vec<IntegrationProfile> {
-    vec![
-        openai_compatible(proxy_url),
-        anthropic(proxy_url),
-        claude_code(proxy_url),
-        codex_api(proxy_url),
-        codex_chatgpt(proxy_url),
-        xai_compatible(proxy_url),
-    ]
+    PROFILE_JSONS
+        .iter()
+        .map(|raw| {
+            parse_profile_json(raw, proxy_url)
+                .expect("bundled DAM integration profile JSON must be valid")
+        })
+        .collect()
 }
 
 pub fn profile(id: &str, proxy_url: &str) -> Option<IntegrationProfile> {
@@ -188,14 +189,57 @@ pub fn profile(id: &str, proxy_url: &str) -> Option<IntegrationProfile> {
 }
 
 pub fn profile_ids() -> Vec<&'static str> {
-    vec![
-        "openai-compatible",
-        "anthropic",
-        "claude-code",
-        "codex-api",
-        "codex-chatgpt",
-        "xai-compatible",
-    ]
+    PROFILE_IDS.to_vec()
+}
+
+const PROFILE_IDS: &[&str] = &[
+    "openai-compatible",
+    "anthropic",
+    "claude-code",
+    "codex-api",
+    "codex-chatgpt",
+    "xai-compatible",
+];
+
+const PROFILE_JSONS: &[&str] = &[
+    include_str!("../profiles/openai-compatible.json"),
+    include_str!("../profiles/anthropic.json"),
+    include_str!("../profiles/claude-code.json"),
+    include_str!("../profiles/codex-api.json"),
+    include_str!("../profiles/codex-chatgpt.json"),
+    include_str!("../profiles/xai-compatible.json"),
+];
+
+fn parse_profile_json(raw: &str, proxy_url: &str) -> Result<IntegrationProfile, String> {
+    let profile = serde_json::from_str::<IntegrationProfile>(raw)
+        .map_err(|error| format!("failed to parse integration profile JSON: {error}"))?;
+    Ok(render_profile_templates(profile, proxy_url))
+}
+
+fn render_profile_templates(
+    mut profile: IntegrationProfile,
+    proxy_url: &str,
+) -> IntegrationProfile {
+    for setting in &mut profile.settings {
+        setting.value = render_template(&setting.value, proxy_url);
+    }
+    for command in &mut profile.commands {
+        for arg in &mut command.command {
+            *arg = render_template(arg, proxy_url);
+        }
+    }
+    for note in &mut profile.notes {
+        *note = render_template(note, proxy_url);
+    }
+    profile
+}
+
+fn render_template(value: &str, proxy_url: &str) -> String {
+    value
+        .replace("{{proxy_url}}", proxy_url.trim_end_matches('/'))
+        .replace("{{https_proxy_env}}", HTTPS_PROXY_ENV)
+        .replace("{{http_proxy_env}}", HTTP_PROXY_ENV)
+        .replace("{{codex_api_key_env}}", CODEX_API_KEY_ENV)
 }
 
 pub fn active_profile_path(integration_state_dir: &Path) -> PathBuf {
@@ -727,112 +771,6 @@ pub fn profile_state_dir(state_dir: &Path, profile_id: &str) -> PathBuf {
     state_dir.join("profiles").join(profile_id)
 }
 
-fn openai_compatible(proxy_url: &str) -> IntegrationProfile {
-    IntegrationProfile {
-        id: "openai-compatible".to_string(),
-        name: "Generic OpenAI-compatible harness".to_string(),
-        summary: "Route normal OpenAI-compatible HTTPS traffic through DAM.".to_string(),
-        provider: "openai-compatible".to_string(),
-        connect_args: interception_connect_args(vec!["--openai".to_string()]),
-        settings: proxy_env_settings(proxy_url),
-        commands: vec![IntegrationCommand {
-            label: "Start DAM for OpenAI-compatible traffic".to_string(),
-            command: vec![
-                "dam".to_string(),
-                "connect".to_string(),
-                "--openai".to_string(),
-                "--network-mode".to_string(),
-                "tun".to_string(),
-                "--trust-mode".to_string(),
-                "local_ca".to_string(),
-            ],
-        }],
-        notes: vec![
-            "Keep provider credentials owned by the harness. DAM forwards caller auth headers."
-                .to_string(),
-            "Tray/web Connect installs Network Extension capture first; HTTPS_PROXY / HTTP_PROXY remains the explicit-proxy fallback for source builds and unsupported environments.".to_string(),
-        ],
-        automation: AutomationLevel::ConnectPreset,
-    }
-}
-
-fn anthropic(proxy_url: &str) -> IntegrationProfile {
-    IntegrationProfile {
-        id: "anthropic".to_string(),
-        name: "Generic Anthropic-compatible harness".to_string(),
-        summary: "Route normal Anthropic HTTPS traffic through DAM.".to_string(),
-        provider: "anthropic".to_string(),
-        connect_args: interception_connect_args(vec!["--anthropic".to_string()]),
-        settings: proxy_env_settings(proxy_url),
-        commands: vec![IntegrationCommand {
-            label: "Start DAM for Anthropic traffic".to_string(),
-            command: vec![
-                "dam".to_string(),
-                "connect".to_string(),
-                "--anthropic".to_string(),
-                "--network-mode".to_string(),
-                "tun".to_string(),
-                "--trust-mode".to_string(),
-                "local_ca".to_string(),
-            ],
-        }],
-        notes: vec![
-            "Keep provider credentials owned by the harness. DAM forwards caller auth headers."
-                .to_string(),
-            "Tray/web Connect installs Network Extension capture first; HTTPS_PROXY / HTTP_PROXY remains the explicit-proxy fallback for source builds and unsupported environments.".to_string(),
-        ],
-        automation: AutomationLevel::ConnectPreset,
-    }
-}
-
-fn claude_code(proxy_url: &str) -> IntegrationProfile {
-    IntegrationProfile {
-        id: "claude-code".to_string(),
-        name: "Claude Code".to_string(),
-        summary: "Route Claude Code's normal Anthropic HTTPS traffic through DAM.".to_string(),
-        provider: "anthropic".to_string(),
-        connect_args: vec![
-            "--anthropic".to_string(),
-            "--network-mode".to_string(),
-            "tun".to_string(),
-            "--trust-mode".to_string(),
-            "local_ca".to_string(),
-        ],
-        settings: proxy_env_settings(proxy_url),
-        commands: vec![
-            IntegrationCommand {
-                label: "Start DAM for Claude Code".to_string(),
-                command: vec![
-                    "dam".to_string(),
-                    "connect".to_string(),
-                    "--anthropic".to_string(),
-                    "--network-mode".to_string(),
-                    "tun".to_string(),
-                    "--trust-mode".to_string(),
-                    "local_ca".to_string(),
-                ],
-            },
-            IntegrationCommand {
-                label: "Run Claude Code through explicit-proxy fallback".to_string(),
-                command: vec![
-                    "env".to_string(),
-                    format!("{HTTPS_PROXY_ENV}={}", proxy_url.trim_end_matches('/')),
-                    format!("{HTTP_PROXY_ENV}={}", proxy_url.trim_end_matches('/')),
-                    "claude".to_string(),
-                ],
-            },
-        ],
-        notes: vec![
-            "Claude Code keeps its normal Anthropic API endpoint; Network Extension capture is primary and explicit proxy remains a fallback for source builds and unsupported environments.".to_string(),
-            "`dam integrations apply claude-code` writes fallback proxy env settings to Claude Code settings JSON with a rollback record.".to_string(),
-            "Use `--target-path .claude/settings.local.json` for a project-local Claude Code setting instead of the default user setting.".to_string(),
-            "The apply step removes the old DAM-owned ANTHROPIC_BASE_URL override so Claude talks to the real Anthropic host.".to_string(),
-            "Claude Code keeps provider authentication; DAM only receives and forwards the request headers.".to_string(),
-        ],
-        automation: AutomationLevel::ConnectPreset,
-    }
-}
-
 fn proxy_env_settings(proxy_url: &str) -> Vec<IntegrationSetting> {
     let proxy_url = proxy_url.trim_end_matches('/').to_string();
     vec![
@@ -846,144 +784,6 @@ fn proxy_env_settings(proxy_url: &str) -> Vec<IntegrationSetting> {
             value: proxy_url,
             description: "HTTP proxy for explicit-proxy fallback".to_string(),
         },
-    ]
-}
-
-fn codex_api(proxy_url: &str) -> IntegrationProfile {
-    IntegrationProfile {
-        id: "codex-api".to_string(),
-        name: "Codex API-key mode".to_string(),
-        summary: "Route Codex API-key OpenAI HTTPS traffic through DAM.".to_string(),
-        provider: "openai-compatible".to_string(),
-        connect_args: interception_connect_args(vec!["--openai".to_string()]),
-        settings: proxy_env_settings(proxy_url),
-        commands: vec![
-            IntegrationCommand {
-                label: "Start DAM for Codex API-key mode".to_string(),
-                command: vec![
-                    "dam".to_string(),
-                    "connect".to_string(),
-                    "--openai".to_string(),
-                    "--network-mode".to_string(),
-                    "tun".to_string(),
-                    "--trust-mode".to_string(),
-                    "local_ca".to_string(),
-                ],
-            },
-            IntegrationCommand {
-                label: "Run Codex through explicit-proxy fallback".to_string(),
-                command: proxy_env_command("codex", proxy_url),
-            },
-        ],
-        notes: vec![
-            "Codex must keep its normal OpenAI API-key configuration; DAM does not write a custom Codex provider or base URL.".to_string(),
-            "Tray/web Connect installs Network Extension capture first; proxy env fallback is retained for source builds and unsupported environments.".to_string(),
-            "Codex ChatGPT-login mode uses the codex-chatgpt profile so chatgpt.com WebSocket traffic is routed through the WebSocket protocol adapter.".to_string(),
-            format!("{CODEX_API_KEY_ENV} stays owned by Codex or the user's shell; DAM forwards caller auth headers."),
-        ],
-        automation: AutomationLevel::ConnectPreset,
-    }
-}
-
-fn codex_chatgpt(proxy_url: &str) -> IntegrationProfile {
-    IntegrationProfile {
-        id: "codex-chatgpt".to_string(),
-        name: "Codex ChatGPT-login mode".to_string(),
-        summary: "Route Codex ChatGPT-login WebSocket traffic through DAM.".to_string(),
-        provider: "openai-compatible".to_string(),
-        connect_args: interception_connect_args(vec![
-            "--target-name".to_string(),
-            "chatgpt-codex".to_string(),
-            "--provider".to_string(),
-            "openai-compatible".to_string(),
-            "--upstream".to_string(),
-            "https://chatgpt.com".to_string(),
-        ]),
-        settings: proxy_env_settings(proxy_url),
-        commands: vec![
-            IntegrationCommand {
-                label: "Start DAM for Codex ChatGPT-login mode".to_string(),
-                command: vec![
-                    "dam".to_string(),
-                    "connect".to_string(),
-                    "--target-name".to_string(),
-                    "chatgpt-codex".to_string(),
-                    "--provider".to_string(),
-                    "openai-compatible".to_string(),
-                    "--upstream".to_string(),
-                    "https://chatgpt.com".to_string(),
-                    "--network-mode".to_string(),
-                    "tun".to_string(),
-                    "--trust-mode".to_string(),
-                    "local_ca".to_string(),
-                ],
-            },
-            IntegrationCommand {
-                label: "Run Codex through explicit-proxy fallback".to_string(),
-                command: proxy_env_command("codex", proxy_url),
-            },
-        ],
-        notes: vec![
-            "Codex keeps its normal ChatGPT login and session flow; DAM captures configured chatgpt.com traffic through Network Extension routing.".to_string(),
-            "The MVP WebSocket adapter protects unfragmented text frames and forwards non-text frames without mutation.".to_string(),
-            "Explicit proxy env fallback is retained for source builds and unsupported environments, but Network Extension capture is the primary path for ChatGPT-login traffic.".to_string(),
-        ],
-        automation: AutomationLevel::ConnectPreset,
-    }
-}
-
-fn xai_compatible(proxy_url: &str) -> IntegrationProfile {
-    IntegrationProfile {
-        id: "xai-compatible".to_string(),
-        name: "xAI OpenAI-compatible harness".to_string(),
-        summary: "Route normal xAI HTTPS traffic through DAM.".to_string(),
-        provider: "openai-compatible".to_string(),
-        connect_args: interception_connect_args(vec![
-            "--target-name".to_string(),
-            "xai".to_string(),
-            "--provider".to_string(),
-            "openai-compatible".to_string(),
-            "--upstream".to_string(),
-            "https://api.x.ai".to_string(),
-        ]),
-        settings: proxy_env_settings(proxy_url),
-        commands: vec![IntegrationCommand {
-            label: "Start DAM with xAI upstream".to_string(),
-            command: vec![
-                "dam".to_string(),
-                "connect".to_string(),
-                "--profile".to_string(),
-                "xai-compatible".to_string(),
-                "--network-mode".to_string(),
-                "tun".to_string(),
-                "--trust-mode".to_string(),
-                "local_ca".to_string(),
-            ],
-        }],
-        notes: vec![
-            "The harness still owns provider credentials. Configure its xAI API key through the harness's normal secret mechanism.".to_string(),
-            "This profile selects the upstream target while keeping the harness on the normal xAI endpoint through DAM proxy routing.".to_string(),
-        ],
-        automation: AutomationLevel::ConnectPreset,
-    }
-}
-
-fn interception_connect_args(mut args: Vec<String>) -> Vec<String> {
-    args.extend([
-        "--network-mode".to_string(),
-        "tun".to_string(),
-        "--trust-mode".to_string(),
-        "local_ca".to_string(),
-    ]);
-    args
-}
-
-fn proxy_env_command(program: &str, proxy_url: &str) -> Vec<String> {
-    vec![
-        "env".to_string(),
-        format!("{HTTPS_PROXY_ENV}={}", proxy_url.trim_end_matches('/')),
-        format!("{HTTP_PROXY_ENV}={}", proxy_url.trim_end_matches('/')),
-        program.to_string(),
     ]
 }
 
@@ -1220,6 +1020,7 @@ mod tests {
         assert!(profile.connect_args.contains(&"tun".to_string()));
         assert!(profile.connect_args.contains(&"--trust-mode".to_string()));
         assert!(profile.connect_args.contains(&"local_ca".to_string()));
+        assert_eq!(profile.traffic_app_ids, vec!["openai-api"]);
         assert_eq!(profile.settings[0].key, HTTPS_PROXY_ENV);
         assert_eq!(profile.settings[0].value, DEFAULT_PROXY_URL);
         assert_eq!(profile.settings[1].key, HTTP_PROXY_ENV);
@@ -1239,6 +1040,7 @@ mod tests {
         assert!(profile.connect_args.contains(&"tun".to_string()));
         assert!(profile.connect_args.contains(&"--trust-mode".to_string()));
         assert!(profile.connect_args.contains(&"local_ca".to_string()));
+        assert_eq!(profile.traffic_app_ids, vec!["anthropic-api"]);
         assert_eq!(profile.settings[0].key, HTTPS_PROXY_ENV);
         assert_eq!(profile.settings[0].value, DEFAULT_PROXY_URL);
         assert_eq!(profile.settings[1].key, HTTP_PROXY_ENV);
@@ -1258,6 +1060,7 @@ mod tests {
         assert!(profile.connect_args.contains(&"tun".to_string()));
         assert!(profile.connect_args.contains(&"--trust-mode".to_string()));
         assert!(profile.connect_args.contains(&"local_ca".to_string()));
+        assert_eq!(profile.traffic_app_ids, vec!["anthropic-api"]);
         assert_eq!(profile.settings[0].key, HTTPS_PROXY_ENV);
         assert_eq!(profile.settings[0].value, "http://127.0.0.1:7828");
         assert_eq!(profile.settings[1].key, HTTP_PROXY_ENV);
@@ -1289,6 +1092,7 @@ mod tests {
             ]
         );
         assert_eq!(profile.settings[0].key, HTTPS_PROXY_ENV);
+        assert_eq!(profile.traffic_app_ids, vec!["xai-api"]);
     }
 
     #[test]
@@ -1298,6 +1102,7 @@ mod tests {
 
         assert_eq!(profile.settings[0].key, HTTPS_PROXY_ENV);
         assert_eq!(profile.settings[1].key, HTTP_PROXY_ENV);
+        assert_eq!(profile.traffic_app_ids, vec!["openai-api"]);
         assert!(command.contains(&format!("{HTTPS_PROXY_ENV}={DEFAULT_PROXY_URL}")));
         assert!(command.contains(&format!("{HTTP_PROXY_ENV}={DEFAULT_PROXY_URL}")));
         assert!(!command.iter().any(|arg| arg.contains("dam_openai")));
@@ -1325,6 +1130,7 @@ mod tests {
         );
         assert!(profile.summary.contains("WebSocket"));
         assert_eq!(profile.settings[0].key, HTTPS_PROXY_ENV);
+        assert_eq!(profile.traffic_app_ids, vec!["chatgpt-codex"]);
     }
 
     #[test]

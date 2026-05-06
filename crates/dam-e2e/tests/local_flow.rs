@@ -215,108 +215,25 @@ fn assert_logs_do_not_contain(log_path: &Path, forbidden: &[&str]) {
     }
 }
 
-#[cfg(unix)]
 #[test]
-fn dam_codex_launcher_fails_closed_without_custom_launcher_injection() {
-    let dir = tempfile::tempdir().unwrap();
-    let vault_path = dir.path().join("vault.db");
-
+fn dam_tool_launchers_are_removed_from_cli() {
     ensure_binaries();
-    let output = Command::new(binary("dam"))
-        .args(["codex", "--db", vault_path.to_str().unwrap(), "--no-log"])
-        .current_dir(dir.path())
-        .output()
-        .expect("run dam codex launcher");
 
-    assert!(!output.status.success(), "dam codex should fail closed");
-    let stderr = utf8(&output.stderr);
-    assert!(
-        stderr.contains("ChatGPT-login one-shot mode is disabled"),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains("dam connect --profile codex-chatgpt"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("--network-mode tun"), "{stderr}");
-}
+    for command in ["codex", "claude"] {
+        let output = Command::new(binary("dam"))
+            .arg(command)
+            .output()
+            .expect("run removed dam tool command");
 
-#[cfg(unix)]
-#[test]
-fn dam_codex_api_launcher_fails_closed_without_custom_provider() {
-    let dir = tempfile::tempdir().unwrap();
-    let addr = unused_addr();
-    let vault_path = dir.path().join("vault.db");
-
-    ensure_binaries();
-    let output = Command::new(binary("dam"))
-        .args([
-            "codex",
-            "--api",
-            "--listen",
-            &addr.to_string(),
-            "--upstream",
-            "http://127.0.0.1:9",
-            "--db",
-            vault_path.to_str().unwrap(),
-            "--no-log",
-            "--",
-            "-m",
-            "gpt-5.5",
-        ])
-        .current_dir(dir.path())
-        .env("OPENAI_API_KEY", "sk-test")
-        .output()
-        .expect("run dam codex launcher");
-
-    assert!(
-        !output.status.success(),
-        "dam codex --api should fail closed"
-    );
-    let stderr = utf8(&output.stderr);
-    assert!(
-        stderr.contains("custom model provider or base URL"),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains("dam connect --profile codex-api"),
-        "{stderr}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn dam_claude_launcher_fails_closed_without_base_url_rewrite() {
-    let dir = tempfile::tempdir().unwrap();
-    let addr = unused_addr();
-    let vault_path = dir.path().join("vault.db");
-
-    ensure_binaries();
-    let output = Command::new(binary("dam"))
-        .args([
-            "claude",
-            "--listen",
-            &addr.to_string(),
-            "--upstream",
-            "http://127.0.0.1:9",
-            "--db",
-            vault_path.to_str().unwrap(),
-            "--no-log",
-            "--",
-            "--model",
-            "sonnet",
-        ])
-        .current_dir(dir.path())
-        .output()
-        .expect("run dam claude launcher");
-
-    assert!(!output.status.success(), "dam claude should fail closed");
-    let stderr = utf8(&output.stderr);
-    assert!(stderr.contains("rewriting ANTHROPIC_BASE_URL"), "{stderr}");
-    assert!(
-        stderr.contains("dam connect --profile claude-code"),
-        "{stderr}"
-    );
+        assert!(!output.status.success(), "dam {command} should fail");
+        let stderr = utf8(&output.stderr);
+        assert!(
+            stderr.contains(&format!("unknown command: {command}")),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("one-shot"), "{stderr}");
+        assert!(!stderr.contains("fail closed"), "{stderr}");
+    }
 }
 
 #[test]
@@ -601,7 +518,10 @@ async fn dam_disconnect_pauses_explicit_claude_profile_without_closing_proxy() {
         .await
         .unwrap();
 
-    assert_eq!(response_body, raw_body);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&response_body).unwrap(),
+        serde_json::from_str::<serde_json::Value>(raw_body).unwrap()
+    );
     assert_eq!(upstream_seen.lock().unwrap().as_deref(), Some(raw_body));
 
     let status = Command::new(binary("dam"))
@@ -789,7 +709,10 @@ async fn dam_connect_apply_restarts_paused_daemon_when_profile_target_changes() 
         .await
         .unwrap();
 
-    assert_eq!(response_body, raw_body);
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&response_body).unwrap(),
+        serde_json::from_str::<serde_json::Value>(raw_body).unwrap()
+    );
     let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
     assert!(!upstream_body.contains("frank@example.com"));
     assert!(upstream_body.contains("[email:"));

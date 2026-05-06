@@ -11,31 +11,32 @@ DAM is designed for macOS, Linux, and Windows. Platform-specific routing, trust,
 ## Modules
 
 - [dam-core](dam-core.md): shared contracts, reference generation, replacement planning, policy actions, log event shape.
-- [dam](dam.md): local UX entry point for `connect/status/disconnect`, integration profiles, fail-closed legacy one-shot launchers, and the npm wrapper.
+- [dam](dam.md): local UX entry point for `connect/status/logs/disconnect`, integration profiles, and the npm wrapper.
 - [dam-api](dam-api.md): shared JSON/report/status DTOs for CLIs, proxy status, health, and future automation.
 - [dam-config](dam-config.md): layered runtime config for defaults, TOML, env, and CLI overrides.
-- [dam-consent](dam-consent.md): exact-value passthrough grants with TTL and revocation.
+- [dam-consent](dam-consent.md): canonical-value passthrough grants with TTL and revocation.
 - [dam-daemon](dam-daemon.md): background local proxy lifecycle, pause/resume protection state, state file, and `dam connect/status/disconnect` support.
 - [dam-diagnostics](dam-diagnostics.md): shared local readiness checks for `damctl doctor` and `dam-web /doctor`.
 - [dam-intercept](dam-intercept.md): guarded TLS interception activation contract for transparent AI routes.
-- [dam-integrations](dam-integrations.md): known local harness profiles, enabled app state, and legacy active profile state for `dam integrations`, `dam profile`, and `dam connect --profile`.
+- [dam-integrations](dam-integrations.md): JSON local harness profiles, enabled app state, and legacy active profile state for `dam integrations`, `dam profile`, and `dam connect --profile`.
 - [damctl](damctl.md): local status and config diagnostics CLI.
 - [dam-detect](dam-detect.md): pure rule-based sensitive value detection.
 - [dam-e2e](dam-e2e.md): process-level end-to-end tests across the local binaries.
 - [dam-policy](dam-policy.md): maps detections to `tokenize`, `redact`, `allow`, or `block`.
 - [dam-pipeline](dam-pipeline.md): shared text processing orchestration for detect, policy, consent, vault/log events, redaction, and inbound reference resolution.
-- [dam-provider-anthropic](dam-provider-anthropic.md): Anthropic upstream forwarding, `x-api-key` auth/header handling, and SSE passthrough for proxy flows.
-- [dam-provider-openai](dam-provider-openai.md): OpenAI-compatible upstream forwarding, auth/header handling, and SSE passthrough for proxy flows.
+- [dam-provider-common](dam-provider-common.md): shared provider adapter utilities for JSON/JSON-lines string-value, raw stream, and provider-aware SSE text-delta transforms.
+- [dam-provider-anthropic](dam-provider-anthropic.md): Anthropic upstream forwarding, `x-api-key` auth/header handling, JSON/JSON-lines response transforms, and SSE text-delta response transforms for proxy flows.
+- [dam-provider-openai](dam-provider-openai.md): OpenAI-compatible upstream forwarding, auth/header handling, JSON/JSON-lines response transforms, and SSE text-delta response transforms for proxy flows.
 - [dam-router](dam-router.md): proxy target selection, provider classification, auth mode, and failure-mode decisions.
 - [dam-vault](dam-vault.md): local SQLite `VaultWriter` and `VaultReader` implementation.
 - [dam-log](dam-log.md): local SQLite `EventSink` implementation.
-- [dam-net](dam-net.md): network capture-mode vocabulary, routing readiness, capture backend status, protocol adapter status, and selected AI host classification.
+- [dam-net](dam-net.md): network capture-mode vocabulary, generic traffic profile contracts, routing readiness, capture backend status, protocol adapter status, and profile-derived host classification.
 - [dam-net-macos](dam-net-macos.md): macOS PAC system-proxy install/remove plus Network Extension capture planning/status for `tun`.
 - [dam-trust](dam-trust.md): TLS trust-mode vocabulary, local CA artifacts, leaf issuance, macOS trust install/remove, readiness contracts, and trusted AI host scope for transparent protection.
 - [dam-redact](dam-redact.md): pure replacement application.
 - [dam-filter](dam-filter.md): CLI pipeline wiring detection, policy, vault, logs, and redaction.
 - [dam-resolve](dam-resolve.md): CLI pipeline for resolving `[kind:id]` references through `VaultReader`.
-- [dam-proxy](dam-proxy.md): app-layer LLM proxy plus daemon-gated HTTP/1.1 CONNECT/TLS and WebSocket runtime for ready transparent AI routes.
+- [dam-proxy](dam-proxy.md): generic mediation runtime with MVP LLM HTTP/WebSocket adapters plus daemon-gated HTTP/1.1 CONNECT/TLS for ready profile routes.
 - [dam-web](dam-web.md): local web UI for setup-plan-driven Connect/app controls, Settings, protected values, Allowed values, log events, and diagnostics.
 - [dam-tray](dam-tray.md): native desktop shell that hosts the Connect surface from the local web UI.
 - [dam-mcp](dam-mcp.md): MCP tools for agent-managed consent operations.
@@ -44,9 +45,10 @@ DAM is designed for macOS, Linux, and Windows. Platform-specific routing, trust,
 
 ```text
 input text
+  -> dam-pipeline expands actively allowed DAM references when VaultReader is available
   -> dam-detect
   -> dam-policy
-  -> dam-consent active exact-value overrides
+  -> dam-consent active canonical-value overrides
   -> dam-core replacement plan
   -> dam-vault only for tokenize decisions
   -> dam-redact
@@ -59,7 +61,7 @@ dam-core also builds non-sensitive log events
   -> dam-log when enabled
 ```
 
-Replacement planning deduplicates repeated equal values by default, and compatible vault writers reuse an existing canonical reference for the same stored value. Set `policy.deduplicate_replacements = false` to issue a distinct reference per occurrence when repeated-reference equality is too revealing.
+Replacement planning deduplicates repeated equal canonical values by default, and compatible vault writers reuse an existing canonical reference for the same stored value. Current email canonicalization removes detector-supported whitespace inside the address and lowercases the domain before storage/deduplication. Set `policy.deduplicate_replacements = false` to issue a distinct reference per occurrence when repeated-reference equality is too revealing.
 
 ## Resolve Pipeline
 
@@ -84,9 +86,10 @@ LLM request
   -> dam-proxy
   -> dam-router
   -> dam-pipeline
+  -> dam-vault through VaultReader for actively allowed references
   -> dam-detect
   -> dam-policy
-  -> dam-consent active exact-value overrides
+  -> dam-consent active canonical-value overrides
   -> dam-core replacement plan
   -> dam-vault only for tokenize decisions
   -> dam-redact
@@ -104,32 +107,32 @@ provider response
   -> LLM client
 ```
 
-Proxy defaults are directional: outbound requests are redacted before the provider sees them; inbound responses are not redetected or redacted. Inbound DAM reference resolution is enabled by default so known local references are restored before the client sees the response. Set `proxy.resolve_inbound = false` to leave references unresolved. `text/event-stream` responses are transformed chunk by chunk when restoration is enabled so streaming transport stays intact; provider-aware SSE parsing remains parked.
+Proxy defaults are directional: outbound requests are redacted before the provider sees them; inbound responses are not redetected or redacted. Active consent applies to canonical detected values and, in proxy flows with a vault reader, previously tokenized outbound DAM references for that same allowed value. Inbound HTTP DAM reference resolution is enabled by default so known local references are restored before the client sees the response. Set `proxy.resolve_inbound = false` to leave references unresolved. JSON-shaped responses are transformed string-by-string, including newline-delimited JSON, so provider-escaped references can resolve safely. `text/event-stream` responses are transformed when restoration is enabled; provider-aware SSE text-delta parsing handles references split across OpenAI-compatible or Anthropic JSON delta events, while raw streams still use tail-buffered transformation. The Codex ChatGPT-login WebSocket MVP protects unfragmented client text frames and currently passes server-to-client frames through without local reference resolution.
 
-`dam-pipeline`, `dam-provider-openai`, `dam-provider-anthropic`, and `dam-router` have been extracted from the first compact proxy implementation.
+`dam-pipeline`, `dam-provider-common`, `dam-provider-openai`, `dam-provider-anthropic`, and `dam-router` have been extracted from the first compact proxy implementation.
 
 ## Control And Diagnostics
 
 ```text
-dam claude / dam codex / dam codex --api
-  -> fail closed
-  -> no provider base URL or Codex provider override
-
 dam connect
   -> background daemon process
   -> dam-proxy
-  -> HTTP(S) proxy / system-proxy route for AI harnesses
+  -> HTTP(S) proxy / transparent route for active traffic profile apps
   -> pass-through provider auth
 
 dam status / dam disconnect
   -> daemon state file
   -> dam-proxy /health when connected
 
+dam logs
+  -> local dam-log SQLite store
+  -> concise non-sensitive operation summaries or event timelines
+
 dam profile
-  -> enabled app state and legacy active harness profile state
+  -> enabled JSON app profile state and legacy active harness profile state
 
 dam integrations list/show/apply/rollback
-  -> dam-integrations profile catalog
+  -> dam-integrations JSON profile catalog
   -> local proxy URL and harness setup snippets
 
 damctl status
@@ -205,10 +208,10 @@ Use [../dam.example.toml](../dam.example.toml) as the local starting point.
 ## Verification
 
 ```bash
-cargo fmt --all --check
-cargo clippy --workspace -- -D warnings
-cargo test --workspace
+scripts/dam-build.sh check
 ```
+
+The build/release entrypoint in [build-release.md](build-release.md) wraps local verification, source builds, signed macOS app packaging, notarization, and local deploy steps so local and CI workflows use the same command surface.
 
 Run only the E2E suite with:
 

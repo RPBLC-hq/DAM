@@ -38,10 +38,16 @@ action = "tokenize"
 vault_write = "redact_only"
 log_write = "warn_continue"
 
-# DAM includes built-in transparent AI routes for api.openai.com,
-# api.anthropic.com, api.x.ai, and chatgpt.com. Add private or
-# provider-compatible endpoints here when system proxy/TLS interception
-# should treat them as AI traffic too.
+# DAM loads a generic traffic profile. The built-in default profile is
+# crates/dam-net/profiles/llm-mvp.json and includes OpenAI, Anthropic, xAI,
+# and ChatGPT/Codex entries. enabled_apps can narrow runtime protection to a
+# subset of app IDs without changing the generic pipeline.
+# [traffic]
+# profile_path = "traffic-profile.json"
+# enabled_apps = ["openai-api", "anthropic-api", "chatgpt-codex"]
+
+# Legacy route overlays are still supported for private or provider-compatible
+# endpoints. Prefer traffic profile app JSON for new mediated services.
 # [[network.ai_routes]]
 # host = "api.enterprise-ai.example"
 # provider = "openai-compatible"

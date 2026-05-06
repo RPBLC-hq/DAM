@@ -1,8 +1,7 @@
 use std::{
     collections::BTreeSet,
-    ffi::OsString,
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    path::PathBuf,
+    net::SocketAddr,
+    path::{Path, PathBuf},
     process::{Command as StdCommand, Stdio},
     time::Duration,
 };
@@ -11,32 +10,9 @@ use std::{
 use std::os::unix::process::CommandExt;
 
 use serde::Serialize;
-use tokio::{net::TcpListener, process::Command as TokioCommand, sync::oneshot};
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:7828";
-const DEFAULT_VAULT_PATH: &str = "vault.db";
 const DEFAULT_LOG_PATH: &str = "log.db";
-const CODEX_CHATGPT_UPSTREAM: &str = "https://chatgpt.com";
-const OPENAI_API_UPSTREAM: &str = "https://api.openai.com";
-const ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
-const CODEX_CHATGPT_UNSUPPORTED_MESSAGE: &str = "dam codex ChatGPT-login one-shot mode is disabled because DAM no longer protects Codex by injecting a custom launcher. Use the tray or `dam connect --profile codex-chatgpt --network-mode tun --trust-mode local_ca`; Codex keeps its normal ChatGPT login and routes chatgpt.com traffic through DAM.";
-const CODEX_API_UNSUPPORTED_MESSAGE: &str = "dam codex --api one-shot mode is disabled because DAM no longer protects Codex by injecting a custom model provider or base URL. Use the tray or `dam connect --profile codex-api --network-mode tun --trust-mode local_ca`; Codex should keep its normal OpenAI API-key configuration and route traffic through DAM.";
-const CLAUDE_UNSUPPORTED_MESSAGE: &str = "dam claude one-shot mode is disabled because DAM no longer protects Claude Code by rewriting ANTHROPIC_BASE_URL. Use the tray or `dam connect --profile claude-code --network-mode tun --trust-mode local_ca`; Claude keeps api.anthropic.com and routes traffic through DAM.";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Tool {
-    Codex,
-    Claude,
-}
-
-impl Tool {
-    fn default_upstream(self) -> &'static str {
-        match self {
-            Self::Codex => CODEX_CHATGPT_UPSTREAM,
-            Self::Claude => ANTHROPIC_UPSTREAM,
-        }
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Cli {
@@ -45,21 +21,42 @@ struct Cli {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum CommandKind {
-    Launch(LaunchArgs),
     Connect(ConnectArgs),
     Disconnect(DisconnectArgs),
     Status(StatusArgs),
+    Logs(LogsArgs),
     Profile(ProfileArgs),
     Trust(TrustArgs),
     Network(NetworkArgs),
     Integrations(IntegrationArgs),
     DaemonRun(dam_daemon::ProxyOptions),
-    Help(Option<Tool>),
+    Help,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct StatusArgs {
     json: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LogsArgs {
+    json: bool,
+    limit: usize,
+    after_id: Option<i64>,
+    operation_id: Option<String>,
+    events: bool,
+}
+
+impl Default for LogsArgs {
+    fn default() -> Self {
+        Self {
+            json: false,
+            limit: 20,
+            after_id: None,
+            operation_id: None,
+            events: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,6 +145,31 @@ struct StatusView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct LogEventView {
+    id: i64,
+    timestamp: i64,
+    operation_id: String,
+    level: String,
+    event_type: String,
+    kind: Option<String>,
+    reference: Option<String>,
+    action: Option<String>,
+    message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct LogOperationSummary {
+    operation_id: String,
+    first_id: i64,
+    last_id: i64,
+    timestamp: i64,
+    events: usize,
+    event_types: Vec<String>,
+    actions: Vec<String>,
+    summary: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct ProfileStatusView {
     active_profile: Option<dam_integrations::ActiveProfileState>,
     enabled_profiles: Vec<dam_integrations::EnabledIntegrationState>,
@@ -167,45 +189,6 @@ struct LocalCaDeleteView {
     state: &'static str,
     deleted: bool,
     state_dir: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct LaunchArgs {
-    tool: Tool,
-    config_path: Option<PathBuf>,
-    listen: String,
-    upstream: String,
-    vault_path: PathBuf,
-    log_path: Option<PathBuf>,
-    consent_path: Option<PathBuf>,
-    resolve_inbound: Option<bool>,
-    codex_api_key_mode: bool,
-    tool_args: Vec<String>,
-}
-
-impl LaunchArgs {
-    fn target_name(&self) -> &'static str {
-        match (self.tool, self.codex_api_key_mode) {
-            (Tool::Codex, true) => "openai",
-            (Tool::Codex, false) => "chatgpt",
-            (Tool::Claude, _) => "anthropic",
-        }
-    }
-
-    fn target_provider(&self) -> &'static str {
-        match (self.tool, self.codex_api_key_mode) {
-            (Tool::Codex, true) => "openai-compatible",
-            (Tool::Codex, false) => "chatgpt",
-            (Tool::Claude, _) => "anthropic",
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ToolCommand {
-    program: String,
-    args: Vec<String>,
-    env: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,17 +222,11 @@ async fn run() -> Result<i32, String> {
     let enabled_connect_profiles = enabled_profiles_for_connect_parse(&args)?;
     match parse_cli_with_active_profiles(args, enabled_connect_profiles)? {
         Cli {
-            command: CommandKind::Help(tool),
+            command: CommandKind::Help,
         } => {
-            match tool {
-                Some(tool) => println!("{}", usage_launch(tool)),
-                None => println!("{}", usage()),
-            }
+            println!("{}", usage());
             Ok(0)
         }
-        Cli {
-            command: CommandKind::Launch(args),
-        } => launch(args).await,
         Cli {
             command: CommandKind::Connect(args),
         } => connect(args).await,
@@ -259,6 +236,9 @@ async fn run() -> Result<i32, String> {
         Cli {
             command: CommandKind::Status(args),
         } => status(args).await,
+        Cli {
+            command: CommandKind::Logs(args),
+        } => logs_command(args),
         Cli {
             command: CommandKind::Profile(args),
         } => profile_command(args),
@@ -277,8 +257,8 @@ async fn run() -> Result<i32, String> {
     }
 }
 
-async fn connect(args: ConnectArgs) -> Result<i32, String> {
-    let config = dam_daemon::proxy_config(&args.proxy)?;
+async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
+    let mut config = dam_daemon::proxy_config(&args.proxy)?;
 
     match dam_daemon::daemon_status().map_err(|error| error.to_string())? {
         dam_daemon::DaemonStatus::Connected(state) => {
@@ -288,10 +268,20 @@ async fn connect(args: ConnectArgs) -> Result<i32, String> {
                 ensure_connect_transparent_prerequisites(&args.proxy, &config, None)?;
                 println!("DAM profile target setup changed; restarting daemon");
                 stop_connected_daemon(&state).await?;
+            } else if !daemon_executable_matches_current(&state)? {
+                if connect_setup_change_requested(&state, &args.proxy) && state.protection_enabled {
+                    return Err(format!(
+                        "DAM is already connected with network mode {} and trust mode {}; run `dam disconnect --stop` before changing setup",
+                        state.network_mode, state.trust.mode
+                    ));
+                }
+                args.proxy = proxy_options_for_existing_daemon(&state, &args.proxy);
+                config = dam_daemon::proxy_config(&args.proxy)?;
+                ensure_connect_transparent_prerequisites(&args.proxy, &config, None)?;
+                println!("DAM daemon executable changed; restarting daemon");
+                stop_connected_daemon(&state).await?;
             } else {
-                if state.network_mode != args.proxy.network_mode
-                    || state.trust.mode != args.proxy.trust_mode
-                {
+                if connect_setup_change_requested(&state, &args.proxy) {
                     if !state.protection_enabled {
                         dam_daemon::set_protection_enabled(true)
                             .map_err(|error| error.to_string())?;
@@ -360,6 +350,98 @@ async fn connect(args: ConnectArgs) -> Result<i32, String> {
     Ok(0)
 }
 
+fn proxy_options_for_existing_daemon(
+    state: &dam_daemon::DaemonState,
+    requested: &dam_daemon::ProxyOptions,
+) -> dam_daemon::ProxyOptions {
+    let mut proxy = requested.clone();
+    proxy.config_path = state
+        .config_path
+        .clone()
+        .or_else(|| requested.config_path.clone());
+    proxy.listen = state.listen.clone();
+    proxy.network_mode = state.network_mode;
+    proxy.network_mode_explicit = false;
+    proxy.trust_mode = state.trust.mode;
+    proxy.trust_mode_explicit = false;
+    proxy.targets = proxy_targets_for_existing_daemon(state);
+    if proxy.targets.is_none() {
+        if let Some(target_name) = &state.target_name {
+            proxy.target_name = target_name.clone();
+        }
+        if let Some(provider) = &state.target_provider {
+            proxy.provider = provider.clone();
+        }
+        if let Some(upstream) = &state.upstream {
+            proxy.upstream = upstream.clone();
+        }
+    }
+    proxy.vault_path = state.vault_path.clone();
+    proxy.log_path = state.log_path.clone();
+    proxy.consent_path = state.consent_path.clone();
+    proxy.resolve_inbound = Some(state.resolve_inbound);
+    proxy
+}
+
+fn proxy_targets_for_existing_daemon(
+    state: &dam_daemon::DaemonState,
+) -> Option<Vec<dam_config::ProxyTargetConfig>> {
+    if !state.proxy_targets.is_empty() {
+        return Some(
+            state
+                .proxy_targets
+                .iter()
+                .map(|target| dam_config::ProxyTargetConfig {
+                    name: target.name.clone(),
+                    provider: target.provider.clone(),
+                    upstream: target.upstream.clone(),
+                    failure_mode: None,
+                    api_key_env: None,
+                    api_key: None,
+                })
+                .collect(),
+        );
+    }
+
+    let (Some(name), Some(provider), Some(upstream)) = (
+        state.target_name.as_ref(),
+        state.target_provider.as_ref(),
+        state.upstream.as_ref(),
+    ) else {
+        return None;
+    };
+
+    Some(vec![dam_config::ProxyTargetConfig {
+        name: name.clone(),
+        provider: provider.clone(),
+        upstream: upstream.clone(),
+        failure_mode: None,
+        api_key_env: None,
+        api_key: None,
+    }])
+}
+
+fn daemon_executable_matches_current(state: &dam_daemon::DaemonState) -> Result<bool, String> {
+    let Some(executable_path) = state.executable_path.as_deref() else {
+        return Ok(false);
+    };
+    let Some(executable_sha256) = state.executable_sha256.as_deref() else {
+        return Ok(false);
+    };
+    let current = std::env::current_exe()
+        .map_err(|error| format!("failed to locate current dam executable: {error}"))?;
+    let current_sha256 = dam_daemon::executable_sha256(&current)
+        .map_err(|error| format!("failed to fingerprint current dam executable: {error}"))?;
+
+    Ok(paths_match(executable_path, &current) && executable_sha256 == current_sha256)
+}
+
+fn paths_match(left: &Path, right: &Path) -> bool {
+    let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
+    let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
+    left == right
+}
+
 fn daemon_proxy_targets_match(
     state: &dam_daemon::DaemonState,
     requested_targets: &[dam_config::ProxyTargetConfig],
@@ -406,6 +488,14 @@ fn legacy_daemon_proxy_target_set(
         }
         _ => BTreeSet::new(),
     }
+}
+
+fn connect_setup_change_requested(
+    state: &dam_daemon::DaemonState,
+    proxy: &dam_daemon::ProxyOptions,
+) -> bool {
+    (proxy.network_mode_explicit && state.network_mode != proxy.network_mode)
+        || (proxy.trust_mode_explicit && state.trust.mode != proxy.trust_mode)
 }
 
 async fn stop_connected_daemon(state: &dam_daemon::DaemonState) -> Result<(), String> {
@@ -501,6 +591,240 @@ async fn status(args: StatusArgs) -> Result<i32, String> {
     }
 
     Ok(code)
+}
+
+fn logs_command(args: LogsArgs) -> Result<i32, String> {
+    let log_path = current_log_path()?
+        .ok_or_else(|| "DAM logging is disabled for the current daemon/config".to_string())?;
+    let store = dam_log::LogStore::open(&log_path)
+        .map_err(|error| format!("failed to open DAM log at {}: {error}", log_path.display()))?;
+    let entries = filtered_log_entries(store.list().map_err(|error| error.to_string())?, &args);
+
+    if args.json {
+        if args.events || args.operation_id.is_some() {
+            let events = entries.into_iter().map(log_event_view).collect::<Vec<_>>();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&events)
+                    .map_err(|error| format!("failed to serialize logs: {error}"))?
+            );
+        } else {
+            let summaries = log_operation_summaries(entries, args.limit);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&summaries)
+                    .map_err(|error| format!("failed to serialize log summaries: {error}"))?
+            );
+        }
+        return Ok(0);
+    }
+
+    if args.events || args.operation_id.is_some() {
+        print!("{}", render_log_events(&entries, args.limit));
+    } else {
+        let summaries = log_operation_summaries(entries, args.limit);
+        print!("{}", render_log_summaries(&summaries));
+    }
+
+    Ok(0)
+}
+
+fn current_log_path() -> Result<Option<PathBuf>, String> {
+    match dam_daemon::daemon_status().map_err(|error| error.to_string())? {
+        dam_daemon::DaemonStatus::Connected(state) | dam_daemon::DaemonStatus::Stale(state) => {
+            Ok(state.log_path)
+        }
+        dam_daemon::DaemonStatus::Disconnected => {
+            let paths = dam_daemon::state_paths().map_err(|error| error.to_string())?;
+            Ok(Some(paths.state_dir.join(DEFAULT_LOG_PATH)))
+        }
+    }
+}
+
+fn filtered_log_entries(
+    entries: Vec<dam_log::LogEntry>,
+    args: &LogsArgs,
+) -> Vec<dam_log::LogEntry> {
+    entries
+        .into_iter()
+        .filter(|entry| args.after_id.is_none_or(|after_id| entry.id > after_id))
+        .filter(|entry| {
+            args.operation_id
+                .as_deref()
+                .is_none_or(|operation_id| entry.operation_id == operation_id)
+        })
+        .collect()
+}
+
+fn log_event_view(entry: dam_log::LogEntry) -> LogEventView {
+    LogEventView {
+        id: entry.id,
+        timestamp: entry.timestamp,
+        operation_id: entry.operation_id,
+        level: entry.level,
+        event_type: entry.event_type,
+        kind: entry.kind,
+        reference: entry.reference,
+        action: entry.action,
+        message: entry.message,
+    }
+}
+
+fn log_operation_summaries(
+    entries: Vec<dam_log::LogEntry>,
+    limit: usize,
+) -> Vec<LogOperationSummary> {
+    let mut summaries = Vec::<LogOperationSummary>::new();
+    for entry in entries {
+        if let Some(summary) = summaries
+            .iter_mut()
+            .find(|summary| summary.operation_id == entry.operation_id)
+        {
+            summary.first_id = summary.first_id.min(entry.id);
+            summary.last_id = summary.last_id.max(entry.id);
+            summary.timestamp = summary.timestamp.max(entry.timestamp);
+            summary.events += 1;
+            push_unique(&mut summary.event_types, &entry.event_type);
+            if let Some(action) = entry.action.as_deref() {
+                push_unique(&mut summary.actions, action);
+            }
+            summary.summary = summarize_operation_message(&summary.summary, &entry);
+        } else {
+            let mut event_types = Vec::new();
+            push_unique(&mut event_types, &entry.event_type);
+            let mut actions = Vec::new();
+            if let Some(action) = entry.action.as_deref() {
+                push_unique(&mut actions, action);
+            }
+            summaries.push(LogOperationSummary {
+                operation_id: entry.operation_id.clone(),
+                first_id: entry.id,
+                last_id: entry.id,
+                timestamp: entry.timestamp,
+                events: 1,
+                event_types,
+                actions,
+                summary: summarize_operation_message("", &entry),
+            });
+        }
+
+        if summaries.len() >= limit
+            && summaries
+                .last()
+                .is_some_and(|summary| summary.operation_id != entry.operation_id)
+        {
+            summaries.truncate(limit);
+            break;
+        }
+    }
+    summaries.truncate(limit);
+    summaries
+}
+
+fn push_unique(values: &mut Vec<String>, value: &str) {
+    if !values.iter().any(|existing| existing == value) {
+        values.push(value.to_string());
+    }
+}
+
+fn summarize_operation_message(existing: &str, entry: &dam_log::LogEntry) -> String {
+    let Some(piece) = log_summary_piece(entry) else {
+        return existing.to_string();
+    };
+    append_summary_piece(existing, &piece)
+}
+
+fn append_summary_piece(existing: &str, piece: &str) -> String {
+    if existing.is_empty() {
+        return piece.to_string();
+    }
+    if existing.split(" | ").any(|part| part == piece) {
+        return existing.to_string();
+    }
+    format!("{existing} | {piece}")
+}
+
+fn log_summary_piece(entry: &dam_log::LogEntry) -> Option<String> {
+    match entry.action.as_deref() {
+        Some("route_decision") => Some(shorten_log_message(&entry.message, 90)),
+        Some("request_protection") => Some(shorten_log_message(&entry.message, 90)),
+        Some("provider_response") => Some(shorten_log_message(&entry.message, 100)),
+        Some("resolve_attempt" | "resolve_non_utf8" | "resolve_disabled") => Some(format!(
+            "{} {}",
+            entry.action.as_deref().unwrap(),
+            entry.message
+        )),
+        Some("intercepted_response_write") => Some(shorten_log_message(&entry.message, 90)),
+        Some("bypassing") => Some("bypassing".to_string()),
+        Some("blocked") => Some(format!("blocked {}", entry.message)),
+        Some("provider_down") => Some("provider_down".to_string()),
+        Some("protected") => Some("protected".to_string()),
+        _ => None,
+    }
+    .map(|value| shorten_log_message(&value, 140))
+}
+
+fn render_log_summaries(summaries: &[LogOperationSummary]) -> String {
+    if summaries.is_empty() {
+        return "No DAM log operations matched.\n".to_string();
+    }
+
+    let mut output = String::from("LastID  Time      Operation               Events  Summary\n");
+    for summary in summaries {
+        output.push_str(&format!(
+            "{:<6} {:<9} {:<23} {:<7} {}\n",
+            summary.last_id,
+            compact_time(summary.timestamp),
+            summary.operation_id,
+            summary.events,
+            summary.summary
+        ));
+    }
+    output
+}
+
+fn render_log_events(entries: &[dam_log::LogEntry], limit: usize) -> String {
+    let mut selected = entries.iter().take(limit).cloned().collect::<Vec<_>>();
+    selected.sort_by_key(|entry| entry.id);
+    if selected.is_empty() {
+        return "No DAM log events matched.\n".to_string();
+    }
+
+    let mut output = String::from(
+        "ID      Time      Operation               Type            Action                  Message\n",
+    );
+    for entry in selected {
+        output.push_str(&format!(
+            "{:<7} {:<9} {:<23} {:<15} {:<23} {}\n",
+            entry.id,
+            compact_time(entry.timestamp),
+            entry.operation_id,
+            entry.event_type,
+            entry.action.unwrap_or_default(),
+            shorten_log_message(&entry.message, 120)
+        ));
+    }
+    output
+}
+
+fn compact_time(timestamp: i64) -> String {
+    let seconds = timestamp.rem_euclid(86_400);
+    let hours = seconds / 3_600;
+    let minutes = (seconds % 3_600) / 60;
+    let seconds = seconds % 60;
+    format!("{hours:02}:{minutes:02}:{seconds:02}")
+}
+
+fn shorten_log_message(message: &str, max: usize) -> String {
+    if message.chars().count() <= max {
+        return message.to_string();
+    }
+    let mut output = message
+        .chars()
+        .take(max.saturating_sub(3))
+        .collect::<String>();
+    output.push_str("...");
+    output
 }
 
 fn profile_command(args: ProfileArgs) -> Result<i32, String> {
@@ -627,14 +951,18 @@ fn network_command(args: NetworkArgs) -> Result<i32, String> {
 }
 
 fn configured_ai_hosts(config: &dam_config::DamConfig) -> Vec<String> {
-    dam_net::ai_routes_with_overlays(config.network.ai_routes.iter().map(|route| {
-        dam_net::AiRoute::custom(
-            &route.host,
-            route.provider.clone(),
-            route.target_name.clone(),
-            route.upstream.clone(),
-        )
-    }))
+    let profile = config.traffic.effective_profile();
+    dam_net::ai_routes_with_profile_and_overlays(
+        &profile,
+        config.network.ai_routes.iter().map(|route| {
+            dam_net::AiRoute::custom(
+                &route.host,
+                route.provider.clone(),
+                route.target_name.clone(),
+                route.upstream.clone(),
+            )
+        }),
+    )
     .into_iter()
     .map(|route| route.host)
     .collect()
@@ -731,81 +1059,6 @@ async fn daemon_run(args: dam_daemon::ProxyOptions) -> Result<i32, String> {
     Ok(0)
 }
 
-async fn launch(args: LaunchArgs) -> Result<i32, String> {
-    ensure_supported_launch(&args)?;
-
-    let config = proxy_config(&args)?;
-    let addr = parse_listen_addr(&config.proxy.listen)?;
-    let app =
-        dam_proxy::build_app(config).map_err(|error| format!("failed to build proxy: {error}"))?;
-    let listener = TcpListener::bind(addr)
-        .await
-        .map_err(|error| format!("failed to bind DAM proxy on {addr}: {error}"))?;
-    let local_addr = listener
-        .local_addr()
-        .map_err(|error| format!("failed to read DAM proxy address: {error}"))?;
-    let base_url = local_base_url(local_addr);
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
-    let mut server = tokio::spawn(async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async {
-                let _ = shutdown_rx.await;
-            })
-            .await
-    });
-
-    if let Err(error) = wait_for_health(&base_url).await {
-        let _ = shutdown_tx.send(());
-        let _ = server.await;
-        return Err(error);
-    }
-
-    eprintln!(
-        "DAM proxy protecting {} traffic at {}",
-        args.target_name(),
-        base_url
-    );
-
-    let tool_command = tool_command(&args, &base_url)?;
-    let mut child = spawn_tool(&tool_command)?;
-
-    let exit_code = tokio::select! {
-        result = child.wait() => {
-            let status = result.map_err(|error| format!("failed to wait for {}: {error}", tool_command.program))?;
-            status.code().unwrap_or(1)
-        }
-        server_result = &mut server => {
-            let _ = child.kill().await;
-            let result = server_result.map_err(|error| format!("DAM proxy task failed: {error}"))?;
-            match result {
-                Ok(()) => return Err("DAM proxy stopped before the tool exited".to_string()),
-                Err(error) => return Err(format!("DAM proxy failed before the tool exited: {error}")),
-            }
-        }
-        signal = tokio::signal::ctrl_c() => {
-            if let Err(error) = signal {
-                return Err(format!("failed to listen for Ctrl-C: {error}"));
-            }
-            let _ = child.kill().await;
-            130
-        }
-    };
-
-    let _ = shutdown_tx.send(());
-    let _ = server.await;
-
-    Ok(exit_code)
-}
-
-fn ensure_supported_launch(args: &LaunchArgs) -> Result<(), String> {
-    match args.tool {
-        Tool::Codex if args.codex_api_key_mode => Err(CODEX_API_UNSUPPORTED_MESSAGE.to_string()),
-        Tool::Codex => Err(CODEX_CHATGPT_UNSUPPORTED_MESSAGE.to_string()),
-        Tool::Claude => Err(CLAUDE_UNSUPPORTED_MESSAGE.to_string()),
-    }
-}
-
 #[cfg(test)]
 fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, String> {
     parse_cli_with_active_profiles(args, Vec::new())
@@ -818,24 +1071,23 @@ fn parse_cli_with_active_profiles(
     let args = args.into_iter().collect::<Vec<_>>();
     let Some(command) = args.first() else {
         return Ok(Cli {
-            command: CommandKind::Help(None),
+            command: CommandKind::Help,
         });
     };
 
     match command.as_str() {
         "-h" | "--help" | "help" => Ok(Cli {
-            command: CommandKind::Help(None),
+            command: CommandKind::Help,
         }),
         "connect" => parse_connect_command(&args[1..], &active_profile_ids),
         "disconnect" => parse_disconnect_command(&args[1..]),
         "status" => parse_status_command(&args[1..]),
+        "logs" => parse_logs_command(&args[1..]),
         "profile" => parse_profile_command(&args[1..]),
         "trust" => parse_trust_command(&args[1..]),
         "network" => parse_network_command(&args[1..]),
         "integrations" => parse_integrations_command(&args[1..]),
         "daemon-run" => parse_daemon_run_command(&args[1..]),
-        "codex" => parse_tool_command(Tool::Codex, &args[1..]),
-        "claude" => parse_tool_command(Tool::Claude, &args[1..]),
         other => Err(format!("unknown command: {other}\n{}", usage())),
     }
 }
@@ -850,6 +1102,11 @@ fn parse_connect_command(args: &[String], active_profile_ids: &[String]) -> Resu
     let mut proxy = dam_daemon::parse_proxy_options(expanded.args)?;
     if expanded.selected_profile_ids.len() > 1 && proxy.targets.is_none() {
         proxy.targets = Some(proxy_targets_for_profiles(&expanded.selected_profile_ids)?);
+    }
+    if !expanded.selected_profile_ids.is_empty() {
+        proxy.traffic_app_ids = Some(traffic_app_ids_for_profiles(
+            &expanded.selected_profile_ids,
+        )?);
     }
     for profile_id in &expanded.selected_profile_ids {
         validate_connect_apply_profile_matches_proxy(profile_id, &proxy)?;
@@ -903,6 +1160,55 @@ fn parse_status_command(args: &[String]) -> Result<Cli, String> {
 
     Ok(Cli {
         command: CommandKind::Status(parsed),
+    })
+}
+
+fn parse_logs_command(args: &[String]) -> Result<Cli, String> {
+    let mut parsed = LogsArgs::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => parsed.json = true,
+            "--events" => parsed.events = true,
+            "--limit" => {
+                i += 1;
+                parsed.limit = args
+                    .get(i)
+                    .ok_or_else(|| "--limit requires a number".to_string())?
+                    .parse::<usize>()
+                    .map_err(|_| "--limit requires a positive number".to_string())?;
+                if parsed.limit == 0 {
+                    return Err("--limit must be greater than zero".to_string());
+                }
+            }
+            "--after-id" => {
+                i += 1;
+                parsed.after_id = Some(
+                    args.get(i)
+                        .ok_or_else(|| "--after-id requires an id".to_string())?
+                        .parse::<i64>()
+                        .map_err(|_| "--after-id requires an integer id".to_string())?,
+                );
+            }
+            "--operation" => {
+                i += 1;
+                parsed.operation_id = Some(
+                    args.get(i)
+                        .ok_or_else(|| "--operation requires an operation id".to_string())?
+                        .to_string(),
+                );
+            }
+            "-h" | "--help" => {
+                println!("{}", usage_logs());
+                std::process::exit(0);
+            }
+            arg => return Err(format!("unknown logs argument: {arg}")),
+        }
+        i += 1;
+    }
+
+    Ok(Cli {
+        command: CommandKind::Logs(parsed),
     })
 }
 
@@ -1472,154 +1778,10 @@ fn profiles_require_local_ca(profile_ids: &[String]) -> Result<bool, String> {
     Ok(false)
 }
 
-fn parse_tool_command(tool: Tool, args: &[String]) -> Result<Cli, String> {
-    if matches!(args.first().map(String::as_str), Some("-h" | "--help")) {
-        return Ok(Cli {
-            command: CommandKind::Help(Some(tool)),
-        });
-    }
-
-    Ok(Cli {
-        command: CommandKind::Launch(parse_launch_args(tool, args)?),
-    })
-}
-
-fn parse_launch_args(tool: Tool, args: &[String]) -> Result<LaunchArgs, String> {
-    let mut launch = LaunchArgs {
-        tool,
-        config_path: None,
-        listen: DEFAULT_LISTEN.to_string(),
-        upstream: tool.default_upstream().to_string(),
-        vault_path: PathBuf::from(DEFAULT_VAULT_PATH),
-        log_path: Some(PathBuf::from(DEFAULT_LOG_PATH)),
-        consent_path: None,
-        resolve_inbound: None,
-        codex_api_key_mode: false,
-        tool_args: Vec::new(),
-    };
-
-    let mut i = 0;
-    while i < args.len() {
-        let arg = &args[i];
-        match arg.as_str() {
-            "--" => {
-                launch.tool_args.extend(args[i + 1..].iter().cloned());
-                break;
-            }
-            "--config" => {
-                i += 1;
-                launch.config_path = Some(PathBuf::from(required_value(args, i, "--config")?));
-            }
-            "--listen" => {
-                i += 1;
-                launch.listen = required_value(args, i, "--listen")?.to_string();
-            }
-            "--upstream" => {
-                i += 1;
-                launch.upstream = required_value(args, i, "--upstream")?.to_string();
-            }
-            "--db" => {
-                i += 1;
-                launch.vault_path = PathBuf::from(required_value(args, i, "--db")?);
-            }
-            "--log" => {
-                i += 1;
-                launch.log_path = Some(PathBuf::from(required_value(args, i, "--log")?));
-            }
-            "--consent-db" => {
-                i += 1;
-                launch.consent_path = Some(PathBuf::from(required_value(args, i, "--consent-db")?));
-            }
-            "--no-log" => {
-                launch.log_path = None;
-            }
-            "--resolve-inbound" => {
-                launch.resolve_inbound = Some(true);
-            }
-            "--no-resolve-inbound" => {
-                launch.resolve_inbound = Some(false);
-            }
-            "--api" if tool == Tool::Codex => {
-                launch.codex_api_key_mode = true;
-                if launch.upstream == CODEX_CHATGPT_UPSTREAM {
-                    launch.upstream = OPENAI_API_UPSTREAM.to_string();
-                }
-            }
-            _ => {
-                launch.tool_args.extend(args[i..].iter().cloned());
-                break;
-            }
-        }
-        i += 1;
-    }
-
-    Ok(launch)
-}
-
 fn required_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str, String> {
     args.get(index)
         .map(String::as_str)
         .ok_or_else(|| format!("{flag} requires a value"))
-}
-
-fn proxy_config(args: &LaunchArgs) -> Result<dam_config::DamConfig, String> {
-    let overrides = dam_config::ConfigOverrides {
-        config_path: args.config_path.clone(),
-        vault_sqlite_path: Some(args.vault_path.clone()),
-        log_sqlite_path: args.log_path.clone(),
-        log_enabled: Some(args.log_path.is_some()),
-        consent_sqlite_path: args.consent_path.clone(),
-        proxy_enabled: Some(true),
-        proxy_listen: Some(args.listen.clone()),
-        proxy_resolve_inbound: args.resolve_inbound,
-        proxy_target_name: Some(args.target_name().to_string()),
-        proxy_target_provider: Some(args.target_provider().to_string()),
-        proxy_target_upstream: Some(args.upstream.clone()),
-        proxy_target_api_key_env: Some(String::new()),
-        ..dam_config::ConfigOverrides::default()
-    };
-
-    dam_config::load(&overrides).map_err(|error| format!("failed to load DAM config: {error}"))
-}
-
-fn parse_listen_addr(listen: &str) -> Result<SocketAddr, String> {
-    let addr = listen
-        .parse::<SocketAddr>()
-        .map_err(|error| format!("invalid --listen address {listen}: {error}"))?;
-    if !addr.ip().is_loopback() {
-        return Err(format!("--listen address must be loopback: {listen}"));
-    }
-    Ok(addr)
-}
-
-fn local_base_url(addr: SocketAddr) -> String {
-    let host = match addr.ip() {
-        IpAddr::V4(ip) if ip.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST).to_string(),
-        IpAddr::V6(ip) if ip.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST).to_string(),
-        IpAddr::V6(ip) => format!("[{ip}]"),
-        ip => ip.to_string(),
-    };
-
-    format!("http://{host}:{}", addr.port())
-}
-
-async fn wait_for_health(base_url: &str) -> Result<(), String> {
-    let url = format!("{}/health", base_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_millis(500))
-        .build()
-        .map_err(|error| format!("failed to build health client: {error}"))?;
-
-    for _ in 0..40 {
-        if let Ok(response) = client.get(&url).send().await
-            && response.status().is_success()
-        {
-            return Ok(());
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-
-    Err(format!("DAM proxy did not become ready at {url}"))
 }
 
 async fn wait_for_daemon_ready(timeout: Duration) -> Result<dam_daemon::DaemonState, String> {
@@ -2566,6 +2728,25 @@ fn proxy_targets_for_profiles(
     Ok(targets)
 }
 
+fn traffic_app_ids_for_profiles(profile_ids: &[String]) -> Result<Vec<String>, String> {
+    let mut app_ids = Vec::new();
+    for profile_id in profile_ids {
+        let profile = dam_integrations::profile(profile_id, dam_integrations::DEFAULT_PROXY_URL)
+            .ok_or_else(|| {
+                format!(
+                    "unknown enabled integration profile: {profile_id}\nknown profiles: {}",
+                    dam_integrations::profile_ids().join(", ")
+                )
+            })?;
+        for app_id in profile.traffic_app_ids {
+            if !app_ids.contains(&app_id) {
+                app_ids.push(app_id);
+            }
+        }
+    }
+    Ok(app_ids)
+}
+
 fn proxy_url_for_connect_apply(options: &dam_daemon::ProxyOptions) -> Result<String, String> {
     let addr = options
         .listen
@@ -2674,33 +2855,8 @@ fn severity_tag(severity: dam_api::DiagnosticSeverity) -> &'static str {
     }
 }
 
-fn tool_command(args: &LaunchArgs, _base_url: &str) -> Result<ToolCommand, String> {
-    match args.tool {
-        Tool::Codex if args.codex_api_key_mode => Err(CODEX_API_UNSUPPORTED_MESSAGE.to_string()),
-        Tool::Codex => Err(CODEX_CHATGPT_UNSUPPORTED_MESSAGE.to_string()),
-        Tool::Claude => Err(CLAUDE_UNSUPPORTED_MESSAGE.to_string()),
-    }
-}
-
-fn spawn_tool(command: &ToolCommand) -> Result<tokio::process::Child, String> {
-    let mut child = TokioCommand::new(&command.program);
-    child
-        .args(command.args.iter().map(OsString::from))
-        .stdin(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::inherit())
-        .stderr(std::process::Stdio::inherit());
-
-    for (key, value) in &command.env {
-        child.env(key, value);
-    }
-
-    child
-        .spawn()
-        .map_err(|error| format!("failed to start {}: {error}", command.program))
-}
-
 fn usage() -> &'static str {
-    "Usage: dam <command>\n\nCommands:\n  connect       Start or resume the background DAM proxy daemon\n  status        Show background DAM protection status\n  profile       Select and inspect the active harness profile\n  trust         Manage local trust artifacts and approved local trust changes\n  network       Manage local network routing plans and approved changes\n  disconnect    Pause DAM protection, or stop the daemon with --stop\n  integrations  List and inspect known harness integration profiles\n  codex         Legacy one-shot launcher; fails closed until interception supports the transport\n  claude        Legacy one-shot launcher; fails closed because base-URL rewriting is disabled\n\nRun `dam connect --help`, `dam profile --help`, `dam trust --help`, `dam network --help`, `dam integrations --help`, `dam codex --help`, or `dam claude --help` for command options."
+    "Usage: dam <command>\n\nCommands:\n  connect       Start or resume the background DAM proxy daemon\n  status        Show background DAM protection status\n  logs          Show concise local DAM operation logs\n  profile       Select and inspect the active harness profile\n  trust         Manage local trust artifacts and approved local trust changes\n  network       Manage local network routing plans and approved changes\n  disconnect    Pause DAM protection, or stop the daemon with --stop\n  integrations  List and inspect known harness integration profiles\n\nRun `dam connect --help`, `dam logs --help`, `dam profile --help`, `dam trust --help`, `dam network --help`, or `dam integrations --help` for command options."
 }
 
 fn usage_connect() -> &'static str {
@@ -2709,6 +2865,10 @@ fn usage_connect() -> &'static str {
 
 fn usage_status() -> &'static str {
     "Usage: dam status [--json]"
+}
+
+fn usage_logs() -> &'static str {
+    "Usage: dam logs [--limit N] [--after-id ID] [--operation OPERATION_ID] [--events] [--json]\n\nShows concise non-sensitive operation summaries by default. Use --operation to inspect one operation's event timeline, or --events to show raw log event rows without grouping."
 }
 
 fn usage_disconnect() -> &'static str {
@@ -2795,109 +2955,24 @@ fn usage_integrations_rollback() -> &'static str {
     "Usage: dam integrations rollback <profile> [--json]"
 }
 
-fn usage_launch(tool: Tool) -> &'static str {
-    match tool {
-        Tool::Codex => {
-            "Usage: dam codex [--api] [DAM_OPTIONS] [-- CODEX_ARGS...]\n\nLegacy one-shot Codex launchers are disabled. DAM no longer protects Codex by injecting a custom model provider or base URL. Use the tray, `dam connect --profile codex-api --network-mode tun --trust-mode local_ca` for API-key traffic, or `dam connect --profile codex-chatgpt --network-mode tun --trust-mode local_ca` for ChatGPT-login traffic."
-        }
-        Tool::Claude => {
-            "Usage: dam claude [DAM_OPTIONS] [-- CLAUDE_ARGS...]\n\nLegacy one-shot Claude launch is disabled. DAM no longer protects Claude Code by rewriting ANTHROPIC_BASE_URL. Use the tray or `dam connect --profile claude-code --network-mode tun --trust-mode local_ca`; Claude keeps api.anthropic.com and routes traffic through DAM."
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn codex_launch_fails_closed_without_custom_launcher_injection() {
-        let args = LaunchArgs {
-            tool: Tool::Codex,
-            config_path: None,
-            listen: "127.0.0.1:7828".to_string(),
-            upstream: CODEX_CHATGPT_UPSTREAM.to_string(),
-            vault_path: PathBuf::from("vault.db"),
-            log_path: Some(PathBuf::from("log.db")),
-            consent_path: None,
-            resolve_inbound: None,
-            codex_api_key_mode: false,
-            tool_args: Vec::new(),
-        };
-
-        let error = ensure_supported_launch(&args).unwrap_err();
-        assert!(error.contains("ChatGPT-login one-shot mode is disabled"));
-        assert!(error.contains("dam connect --profile codex-chatgpt"));
-        assert!(error.contains("--network-mode tun"));
-    }
+    const OPENAI_API_UPSTREAM: &str = "https://api.openai.com";
+    const ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
 
     #[test]
-    fn claude_launch_fails_closed_without_base_url_rewrite() {
-        let args = LaunchArgs {
-            tool: Tool::Claude,
-            config_path: None,
-            listen: "127.0.0.1:7828".to_string(),
-            upstream: ANTHROPIC_UPSTREAM.to_string(),
-            vault_path: PathBuf::from("vault.db"),
-            log_path: Some(PathBuf::from("log.db")),
-            consent_path: None,
-            resolve_inbound: None,
-            codex_api_key_mode: false,
-            tool_args: vec!["--model".into(), "sonnet".into()],
-        };
+    fn removed_tool_launchers_are_not_cli_commands() {
+        for command in ["codex", "claude"] {
+            let error = parse_cli([command.to_string()]).unwrap_err();
 
-        let error = ensure_supported_launch(&args).unwrap_err();
-        assert!(error.contains("rewriting ANTHROPIC_BASE_URL"));
-        assert!(error.contains("dam connect --profile claude-code"));
-    }
-
-    #[test]
-    fn parses_dam_options_and_passes_remaining_args_to_tool() {
-        let cli = parse_cli([
-            "codex".to_string(),
-            "--listen".to_string(),
-            "127.0.0.1:9000".to_string(),
-            "--db".to_string(),
-            "test-vault.db".to_string(),
-            "--consent-db".to_string(),
-            "test-consent.db".to_string(),
-            "--no-resolve-inbound".to_string(),
-            "--".to_string(),
-            "-m".to_string(),
-            "gpt-5.5".to_string(),
-        ])
-        .unwrap();
-
-        let CommandKind::Launch(args) = cli.command else {
-            panic!("expected launch");
-        };
-        assert_eq!(args.tool, Tool::Codex);
-        assert_eq!(args.listen, "127.0.0.1:9000");
-        assert_eq!(args.vault_path, PathBuf::from("test-vault.db"));
-        assert_eq!(args.consent_path, Some(PathBuf::from("test-consent.db")));
-        assert_eq!(args.resolve_inbound, Some(false));
-        assert!(!args.codex_api_key_mode);
-        assert_eq!(args.tool_args, ["-m", "gpt-5.5"]);
-    }
-
-    #[test]
-    fn parses_codex_api_mode_and_openai_api_default_upstream() {
-        let cli = parse_cli([
-            "codex".to_string(),
-            "--api".to_string(),
-            "--".to_string(),
-            "-m".to_string(),
-            "gpt-5.5".to_string(),
-        ])
-        .unwrap();
-
-        let CommandKind::Launch(args) = cli.command else {
-            panic!("expected launch");
-        };
-        assert_eq!(args.tool, Tool::Codex);
-        assert!(args.codex_api_key_mode);
-        assert_eq!(args.upstream, OPENAI_API_UPSTREAM);
-        assert_eq!(args.tool_args, ["-m", "gpt-5.5"]);
+            assert!(error.contains(&format!("unknown command: {command}")));
+            assert!(!error.contains("one-shot"));
+            assert!(!error.contains("fail"));
+            assert!(!error.contains("dam codex"));
+            assert!(!error.contains("dam claude"));
+        }
     }
 
     #[test]
@@ -2941,6 +3016,10 @@ mod tests {
         assert_eq!(args.proxy.target_name, "xai");
         assert_eq!(args.proxy.provider, "openai-compatible");
         assert_eq!(args.proxy.upstream, "https://api.x.ai");
+        assert_eq!(
+            args.proxy.traffic_app_ids,
+            Some(vec!["xai-api".to_string()])
+        );
     }
 
     #[test]
@@ -2963,6 +3042,10 @@ mod tests {
         assert_eq!(args.proxy.target_name, "anthropic");
         assert_eq!(args.proxy.provider, "anthropic");
         assert_eq!(args.proxy.upstream, ANTHROPIC_UPSTREAM);
+        assert_eq!(
+            args.proxy.traffic_app_ids,
+            Some(vec!["anthropic-api".to_string()])
+        );
         assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
         assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
     }
@@ -2987,6 +3070,10 @@ mod tests {
         assert_eq!(args.proxy.listen, "127.0.0.1:9000");
         assert_eq!(args.proxy.provider, "anthropic");
         assert_eq!(args.proxy.upstream, ANTHROPIC_UPSTREAM);
+        assert_eq!(
+            args.proxy.traffic_app_ids,
+            Some(vec!["anthropic-api".to_string()])
+        );
         assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
         assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
     }
@@ -3059,6 +3146,10 @@ mod tests {
             args.apply_profile_ids,
             vec!["codex-api".to_string(), "claude-code".to_string()]
         );
+        assert_eq!(
+            args.proxy.traffic_app_ids,
+            Some(vec!["openai-api".to_string(), "anthropic-api".to_string()])
+        );
         let targets = args.proxy.targets.unwrap();
         assert_eq!(targets.len(), 2);
         assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
@@ -3068,6 +3159,92 @@ mod tests {
                 .any(|target| target.provider == "openai-compatible")
         );
         assert!(targets.iter().any(|target| target.provider == "anthropic"));
+    }
+
+    #[test]
+    fn connect_setup_change_ignores_implicit_default_modes_for_existing_daemon() {
+        let state = test_daemon_state(
+            dam_net::CaptureMode::Tun,
+            dam_trust::TrustMode::LocalCa,
+            true,
+        );
+        let proxy = dam_daemon::ProxyOptions::default();
+
+        assert!(!connect_setup_change_requested(&state, &proxy));
+    }
+
+    #[test]
+    fn connect_setup_change_honors_explicit_mode_flags() {
+        let state = test_daemon_state(
+            dam_net::CaptureMode::Tun,
+            dam_trust::TrustMode::LocalCa,
+            true,
+        );
+        let proxy = dam_daemon::ProxyOptions {
+            network_mode: dam_net::CaptureMode::ExplicitProxy,
+            network_mode_explicit: true,
+            trust_mode: dam_trust::TrustMode::Disabled,
+            trust_mode_explicit: true,
+            ..dam_daemon::ProxyOptions::default()
+        };
+
+        assert!(connect_setup_change_requested(&state, &proxy));
+    }
+
+    #[test]
+    fn existing_daemon_restart_options_preserve_running_setup() {
+        let mut state = test_daemon_state(
+            dam_net::CaptureMode::Tun,
+            dam_trust::TrustMode::LocalCa,
+            true,
+        );
+        state.listen = "127.0.0.1:9001".to_string();
+        state.vault_path = PathBuf::from("/tmp/dam/vault.db");
+        state.log_path = Some(PathBuf::from("/tmp/dam/log.db"));
+        state.consent_path = Some(PathBuf::from("/tmp/dam/consent.db"));
+        state.proxy_targets = vec![
+            dam_daemon::DaemonProxyTargetState {
+                name: "anthropic".to_string(),
+                provider: "anthropic".to_string(),
+                upstream: ANTHROPIC_UPSTREAM.to_string(),
+            },
+            dam_daemon::DaemonProxyTargetState {
+                name: "openai".to_string(),
+                provider: "openai-compatible".to_string(),
+                upstream: OPENAI_API_UPSTREAM.to_string(),
+            },
+        ];
+
+        let requested = dam_daemon::ProxyOptions::default();
+        let proxy = proxy_options_for_existing_daemon(&state, &requested);
+
+        assert_eq!(proxy.listen, "127.0.0.1:9001");
+        assert_eq!(proxy.network_mode, dam_net::CaptureMode::Tun);
+        assert!(!proxy.network_mode_explicit);
+        assert_eq!(proxy.trust_mode, dam_trust::TrustMode::LocalCa);
+        assert!(!proxy.trust_mode_explicit);
+        assert_eq!(proxy.vault_path, PathBuf::from("/tmp/dam/vault.db"));
+        assert_eq!(proxy.log_path, Some(PathBuf::from("/tmp/dam/log.db")));
+        assert_eq!(
+            proxy.consent_path,
+            Some(PathBuf::from("/tmp/dam/consent.db"))
+        );
+        let targets = proxy.targets.unwrap();
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().any(|target| target.name == "anthropic"));
+        assert!(targets.iter().any(|target| target.name == "openai"));
+    }
+
+    #[test]
+    fn daemon_without_recorded_executable_requires_restart() {
+        let mut state = test_daemon_state(
+            dam_net::CaptureMode::ExplicitProxy,
+            dam_trust::TrustMode::Disabled,
+            true,
+        );
+        state.executable_path = None;
+
+        assert!(!daemon_executable_matches_current(&state).unwrap());
     }
 
     #[test]
@@ -3337,6 +3514,88 @@ mod tests {
         let cli = parse_cli(["status".to_string(), "--json".to_string()]).unwrap();
 
         assert_eq!(cli.command, CommandKind::Status(StatusArgs { json: true }));
+    }
+
+    #[test]
+    fn parses_logs_filters() {
+        let cli = parse_cli([
+            "logs".to_string(),
+            "--limit".to_string(),
+            "5".to_string(),
+            "--after-id".to_string(),
+            "42".to_string(),
+            "--operation".to_string(),
+            "abc123".to_string(),
+            "--events".to_string(),
+            "--json".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cli.command,
+            CommandKind::Logs(LogsArgs {
+                json: true,
+                limit: 5,
+                after_id: Some(42),
+                operation_id: Some("abc123".to_string()),
+                events: true,
+            })
+        );
+    }
+
+    #[test]
+    fn log_summary_collapses_proxy_diagnostics() {
+        let entries = vec![
+            dam_log::LogEntry {
+                id: 3,
+                timestamp: 3,
+                operation_id: "op".to_string(),
+                level: "info".to_string(),
+                event_type: "proxy_forward".to_string(),
+                kind: None,
+                reference: None,
+                action: Some("provider_response".to_string()),
+                message: "provider response status=200 content_type=text/event-stream content_encoding=none streaming=true".to_string(),
+            },
+            dam_log::LogEntry {
+                id: 2,
+                timestamp: 2,
+                operation_id: "op".to_string(),
+                level: "info".to_string(),
+                event_type: "proxy_forward".to_string(),
+                kind: None,
+                reference: None,
+                action: Some("request_protection".to_string()),
+                message: "request protection detections=1 replacements=1 tokenized=1 blocked=0".to_string(),
+            },
+            dam_log::LogEntry {
+                id: 1,
+                timestamp: 1,
+                operation_id: "op".to_string(),
+                level: "info".to_string(),
+                event_type: "proxy_forward".to_string(),
+                kind: None,
+                reference: None,
+                action: Some("route_decision".to_string()),
+                message: "route target=anthropic provider=anthropic protection_enabled=true resolve_inbound=true request_bytes=100".to_string(),
+            },
+        ];
+
+        let summaries = log_operation_summaries(entries, 10);
+
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].events, 3);
+        assert!(summaries[0].summary.contains("route target=anthropic"));
+        assert!(
+            summaries[0]
+                .summary
+                .contains("request protection detections=1")
+        );
+        assert!(
+            summaries[0]
+                .summary
+                .contains("provider response status=200")
+        );
     }
 
     #[test]
@@ -3611,92 +3870,38 @@ mod tests {
         assert_eq!(args.upstream, "https://api.x.ai");
     }
 
-    #[test]
-    fn codex_api_launch_fails_closed_without_custom_provider_override() {
-        let args = LaunchArgs {
-            tool: Tool::Codex,
-            config_path: None,
+    fn test_daemon_state(
+        network_mode: dam_net::CaptureMode,
+        trust_mode: dam_trust::TrustMode,
+        protection_enabled: bool,
+    ) -> dam_daemon::DaemonState {
+        dam_daemon::DaemonState {
+            version: 4,
+            pid: 1,
+            executable_path: Some(PathBuf::from("/usr/local/bin/dam")),
+            executable_sha256: Some("abc123".to_string()),
             listen: "127.0.0.1:7828".to_string(),
-            upstream: OPENAI_API_UPSTREAM.to_string(),
+            proxy_url: "http://127.0.0.1:7828".to_string(),
+            config_path: None,
             vault_path: PathBuf::from("vault.db"),
             log_path: Some(PathBuf::from("log.db")),
-            consent_path: None,
-            resolve_inbound: None,
-            codex_api_key_mode: true,
-            tool_args: vec!["-m".into(), "gpt-5.5".into()],
-        };
-
-        let error = ensure_supported_launch(&args).unwrap_err();
-
-        assert!(error.contains("custom model provider or base URL"));
-        assert!(error.contains("dam connect --profile codex-api"));
-    }
-
-    #[test]
-    fn first_unknown_argument_starts_tool_args() {
-        let cli = parse_cli([
-            "claude".to_string(),
-            "--model".to_string(),
-            "sonnet".to_string(),
-        ])
-        .unwrap();
-
-        let CommandKind::Launch(args) = cli.command else {
-            panic!("expected launch");
-        };
-        assert_eq!(args.tool, Tool::Claude);
-        assert_eq!(args.tool_args, ["--model", "sonnet"]);
-    }
-
-    #[test]
-    fn launcher_config_uses_pass_through_auth() {
-        let args = LaunchArgs {
-            tool: Tool::Codex,
-            config_path: None,
-            listen: "127.0.0.1:7828".to_string(),
-            upstream: OPENAI_API_UPSTREAM.to_string(),
-            vault_path: PathBuf::from("vault.db"),
-            log_path: Some(PathBuf::from("log.db")),
-            consent_path: Some(PathBuf::from("consent-test.db")),
-            resolve_inbound: None,
-            codex_api_key_mode: true,
-            tool_args: Vec::new(),
-        };
-
-        let config = proxy_config(&args).unwrap();
-
-        assert!(config.proxy.enabled);
-        assert_eq!(config.proxy.targets.len(), 1);
-        assert_eq!(config.proxy.targets[0].name, "openai");
-        assert_eq!(config.proxy.targets[0].provider, "openai-compatible");
-        assert_eq!(config.proxy.targets[0].upstream, OPENAI_API_UPSTREAM);
-        assert_eq!(config.proxy.targets[0].api_key_env, None);
-        assert_eq!(config.proxy.targets[0].api_key, None);
-        assert!(config.proxy.resolve_inbound);
-        assert!(config.log.enabled);
-        assert_eq!(config.log.sqlite_path, PathBuf::from("log.db"));
-        assert_eq!(config.consent.sqlite_path, PathBuf::from("consent-test.db"));
-    }
-
-    #[test]
-    fn launcher_config_can_enable_inbound_resolution() {
-        let args = LaunchArgs {
-            tool: Tool::Claude,
-            config_path: None,
-            listen: "127.0.0.1:7828".to_string(),
-            upstream: ANTHROPIC_UPSTREAM.to_string(),
-            vault_path: PathBuf::from("vault.db"),
-            log_path: Some(PathBuf::from("log.db")),
-            consent_path: None,
-            resolve_inbound: Some(true),
-            codex_api_key_mode: false,
-            tool_args: Vec::new(),
-        };
-
-        let config = proxy_config(&args).unwrap();
-
-        assert_eq!(config.proxy.targets[0].name, "anthropic");
-        assert_eq!(config.proxy.targets[0].provider, "anthropic");
-        assert!(config.proxy.resolve_inbound);
+            consent_path: Some(PathBuf::from("consent.db")),
+            resolve_inbound: true,
+            target_name: Some("openai".to_string()),
+            target_provider: Some("openai-compatible".to_string()),
+            upstream: Some(OPENAI_API_UPSTREAM.to_string()),
+            proxy_targets: Vec::new(),
+            started_at_unix: 0,
+            network_mode,
+            transparent_ai_routes: Vec::new(),
+            transparent_ai_routing_readiness: Vec::new(),
+            trust: dam_trust::TrustState {
+                mode: trust_mode,
+                ..dam_trust::TrustState::default()
+            },
+            transparent_ai_trust_readiness: Vec::new(),
+            transparent_ai_interception_readiness: Vec::new(),
+            protection_enabled,
+        }
     }
 }

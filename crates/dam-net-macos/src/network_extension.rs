@@ -712,9 +712,6 @@ fn delete_if_exists(path: &Path) -> Result<(), MacosNetworkExtensionError> {
 
 fn default_ai_hosts() -> Vec<String> {
     dam_net::known_ai_hosts()
-        .into_iter()
-        .map(str::to_string)
-        .collect()
 }
 
 fn normalized_ai_hosts(hosts: &[String]) -> Vec<String> {

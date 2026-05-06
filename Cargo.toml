@@ -19,6 +19,7 @@ members = [
     "crates/dam-net-macos",
     "crates/dam-policy",
     "crates/dam-pipeline",
+    "crates/dam-provider-common",
     "crates/dam-provider-anthropic",
     "crates/dam-provider-openai",
     "crates/dam-proxy",
@@ -57,6 +58,7 @@ dam-net = { path = "crates/dam-net" }
 dam-net-macos = { path = "crates/dam-net-macos" }
 dam-policy = { path = "crates/dam-policy" }
 dam-pipeline = { path = "crates/dam-pipeline" }
+dam-provider-common = { path = "crates/dam-provider-common" }
 dam-provider-anthropic = { path = "crates/dam-provider-anthropic" }
 dam-provider-openai = { path = "crates/dam-provider-openai" }
 dam-router = { path = "crates/dam-router" }

@@ -1,5 +1,6 @@
 use dam_core::{
     PolicyAction, PolicyDecision, Reference, SensitiveType, VaultReadError, VaultReader,
+    canonical_sensitive_value,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
@@ -336,11 +337,12 @@ fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConsentEntry> {
 }
 
 pub fn fingerprint(kind: SensitiveType, value: &str) -> String {
+    let canonical_value = canonical_sensitive_value(kind, value);
     let mut hasher = Sha256::new();
     hasher.update(b"dam-consent-v1\0");
     hasher.update(kind.tag().as_bytes());
     hasher.update(b"\0");
-    hasher.update(value.as_bytes());
+    hasher.update(canonical_value.as_bytes());
     bs58::encode(hasher.finalize()).into_string()
 }
 
@@ -382,6 +384,28 @@ mod tests {
 
         assert_eq!(matched.id, entry.id);
         assert_eq!(store.count().unwrap(), 1);
+    }
+
+    #[test]
+    fn grant_matches_canonical_email_variants() {
+        let store = ConsentStore::open_in_memory().unwrap();
+        let entry = store
+            .grant(&GrantConsent {
+                kind: SensitiveType::Email,
+                value: "alice@example.com".to_string(),
+                vault_key: None,
+                ttl_seconds: 60,
+                created_by: "test".to_string(),
+                reason: None,
+            })
+            .unwrap();
+
+        let matched = store
+            .active_for_value(SensitiveType::Email, "alice@ example.COM")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(matched.id, entry.id);
     }
 
     #[test]

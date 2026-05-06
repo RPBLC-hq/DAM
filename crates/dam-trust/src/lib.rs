@@ -1120,9 +1120,6 @@ fn run_system_trust_command(command: &SystemTrustCommand) -> Result<(), TrustArt
 
 pub fn default_allowed_hosts() -> Vec<String> {
     dam_net::known_ai_hosts()
-        .into_iter()
-        .map(str::to_string)
-        .collect()
 }
 
 fn generate_ca_material() -> Result<(String, String), TrustArtifactError> {

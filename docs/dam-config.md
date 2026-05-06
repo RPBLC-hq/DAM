@@ -49,6 +49,10 @@ action = "tokenize"
 vault_write = "redact_only"
 log_write = "warn_continue"
 
+[traffic]
+profile_path = "traffic-profile.json"
+enabled_apps = ["openai-api", "anthropic-api", "chatgpt-codex"]
+
 [[network.ai_routes]]
 host = "api.enterprise-ai.example"
 provider = "openai-compatible"
@@ -75,7 +79,11 @@ api_key_env = "OPENAI_API_KEY"
 
 Supported first-slice provider values are `openai-compatible` and `anthropic`. The local proxy can accept multiple configured targets; `dam-router` selects the OpenAI-compatible or Anthropic route from request path/header shape or from the transparent AI route match.
 
-`network.ai_routes` is optional. DAM always includes built-in transparent AI routes for `api.openai.com`, `api.anthropic.com`, `api.x.ai`, and `chatgpt.com`. Add `[[network.ai_routes]]` entries for enterprise gateways, private OpenAI-compatible endpoints, Anthropic-compatible endpoints, or package-specific AI hosts that should be treated as AI traffic by system proxy routing, trust readiness, daemon state, and the transparent proxy runtime. If a configured route uses the same normalized host as a built-in route, the config route replaces that built-in entry. Duplicate configured hosts are rejected.
+`traffic.profile_path` is optional. Without it, DAM loads the bundled JSON traffic profile at `crates/dam-net/profiles/llm-mvp.json`. A traffic profile contains app entries: each entry names match rules such as domains, IPs, URLs, ports, protocols, and process names; an action such as `inspect` or `bypass`; the protocol adapter; and the generic pipeline steps to run. LLM providers are only the bundled MVP entries, not the shape of the system.
+
+`traffic.enabled_apps` is optional. When present, only those app IDs remain active in the loaded profile. Runtime Connect app selection uses the same mechanism through CLI overrides, so toggling Connect apps changes the active profile subset instead of changing proxy code.
+
+`network.ai_routes` is a legacy compatibility overlay. It is optional and is applied after the effective traffic profile is loaded. Add `[[network.ai_routes]]` entries only for old-style enterprise gateways or private OpenAI-compatible/Anthropic-compatible endpoints that have not yet been converted to traffic profile JSON. If a configured route uses the same normalized host as a profile-derived route, the config route replaces that entry. Duplicate configured hosts are rejected.
 
 `web.addr` and `proxy.listen` must be loopback socket addresses in this local build, for example `127.0.0.1:2896` and `127.0.0.1:7828`.
 
@@ -101,6 +109,8 @@ export DAM_POLICY_DEDUPLICATE_REPLACEMENTS=true
 export DAM_POLICY_SSN_ACTION=redact
 export DAM_FAILURE_VAULT_WRITE=redact_only
 export DAM_FAILURE_LOG_WRITE=warn_continue
+export DAM_TRAFFIC_PROFILE=/etc/dam/traffic-profile.json
+export DAM_TRAFFIC_ENABLED_APPS=openai-api,anthropic-api,chatgpt-codex
 export DAM_WEB_ADDR=127.0.0.1:2896
 export DAM_PROXY_ENABLED=true
 export DAM_PROXY_LISTEN=127.0.0.1:7828
@@ -163,6 +173,13 @@ Supported failure env keys:
 ```text
 DAM_FAILURE_VAULT_WRITE
 DAM_FAILURE_LOG_WRITE
+```
+
+Supported traffic env keys:
+
+```text
+DAM_TRAFFIC_PROFILE
+DAM_TRAFFIC_ENABLED_APPS
 ```
 
 Supported proxy env keys:

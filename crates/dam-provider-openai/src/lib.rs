@@ -2,7 +2,10 @@ use axum::{
     body::{Body, Bytes},
     http::{HeaderMap, Method, Response, Uri, header},
 };
-use futures_util::{StreamExt, TryStreamExt};
+use dam_provider_common::{
+    ProviderByteStream, transform_event_stream_text_body, transform_json_string_body,
+};
+use futures_util::TryStreamExt;
 use reqwest::Url;
 use std::time::Duration;
 
@@ -73,6 +76,7 @@ impl OpenAiProvider {
             }
             upstream_request = upstream_request.header(name, value);
         }
+        upstream_request = upstream_request.header(header::ACCEPT_ENCODING, "identity");
 
         if let Some(api_key) = request.target_api_key {
             upstream_request = upstream_request.bearer_auth(api_key);
@@ -99,11 +103,11 @@ impl OpenAiProvider {
             let stream = response
                 .bytes_stream()
                 .map_err(|error| std::io::Error::other(error.without_url().to_string()));
-            let stream = if request.transform_streaming_response {
+            let stream: ProviderByteStream = if request.transform_streaming_response {
                 let transform = transform_response_body.clone();
-                stream.map_ok(transform).left_stream()
+                transform_event_stream_text_body(stream, transform)
             } else {
-                stream.right_stream()
+                Box::pin(stream)
             };
 
             return builder
@@ -115,7 +119,11 @@ impl OpenAiProvider {
             .bytes()
             .await
             .map_err(|error| OpenAiProviderError::Response(error.without_url().to_string()))?;
-        let response_body = transform_response_body(response_body);
+        let response_body = transform_non_streaming_response_body(
+            &response_headers,
+            response_body,
+            transform_response_body,
+        );
 
         let mut builder = Response::builder().status(status);
         for (name, value) in response_headers.iter() {
@@ -171,6 +179,7 @@ fn should_skip_request_header(
                 | "keep-alive"
                 | "proxy-authorization"
                 | "proxy-authenticate"
+                | "accept-encoding"
         )
         || (target_sets_authorization && normalized == "authorization")
 }
@@ -216,6 +225,21 @@ fn is_streaming_response(headers: &HeaderMap) -> bool {
         })
 }
 
+fn transform_non_streaming_response_body<F>(
+    _headers: &HeaderMap,
+    body: Bytes,
+    transform: F,
+) -> Bytes
+where
+    F: Fn(Bytes) -> Bytes + Clone,
+{
+    if let Some(transformed) = transform_json_string_body(body.clone(), transform.clone()) {
+        return transformed;
+    }
+
+    transform(body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,6 +251,7 @@ mod tests {
         response::{IntoResponse, Response},
         routing::post,
     };
+    use futures_util::stream;
     use std::sync::{Arc, Mutex};
     use tokio::net::TcpListener;
 
@@ -285,17 +310,37 @@ mod tests {
         .await
     }
 
+    async fn spawn_json_response_upstream() -> String {
+        async fn json_response() -> Response {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(
+                    r#"{"choices":[{"message":{"content":"\\[email:abc123\\]"}}],"metadata":{"safe":"ok"}}"#,
+                ))
+                .unwrap()
+        }
+
+        spawn_app(Router::new().route("/v1/chat/completions", post(json_response))).await
+    }
+
     async fn spawn_sse_upstream(seen_body: Arc<Mutex<Option<String>>>) -> String {
         async fn sse(State(seen_body): State<Arc<Mutex<Option<String>>>>, body: Bytes) -> Response {
             let body_text =
                 String::from_utf8(body.to_vec()).expect("upstream body should be utf-8");
             *seen_body.lock().unwrap() = Some(body_text.clone());
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "text/event-stream")],
-                format!("event: response.output_text.delta\ndata: {body_text}\n\n"),
-            )
-                .into_response()
+            let event = format!("event: response.output_text.delta\ndata: {body_text}\n\n");
+            let split_at = event.find("token").unwrap_or(event.len());
+            let chunks = stream::iter([
+                Ok::<_, std::io::Error>(Bytes::from(event[..split_at].to_string())),
+                Ok(Bytes::from(event[split_at..].to_string())),
+            ]);
+
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .body(Body::from_stream(chunks))
+                .unwrap()
         }
 
         spawn_app(
@@ -353,6 +398,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn non_streaming_json_response_transforms_string_values() {
+        let upstream = spawn_json_response_upstream().await;
+        let provider = OpenAiProvider::new().unwrap();
+
+        let response = provider
+            .forward(
+                ForwardRequest {
+                    upstream: &upstream,
+                    method: Method::POST,
+                    uri: Uri::from_static("/v1/chat/completions"),
+                    headers: HeaderMap::new(),
+                    body: Bytes::from_static(b"{}"),
+                    target_api_key: None,
+                    transform_streaming_response: false,
+                },
+                |chunk| {
+                    let text = String::from_utf8(chunk.to_vec()).unwrap();
+                    Bytes::from(text.replace(r"\[email:abc123\]", "banana@example.test"))
+                },
+            )
+            .await
+            .unwrap();
+
+        let body = response_body(response).await;
+        assert!(body.contains("banana@example.test"));
+        assert!(!body.contains(r"\\[email:abc123\\]"));
+        assert!(body.contains(r#""safe":"ok""#));
+    }
+
+    #[tokio::test]
     async fn target_api_key_replaces_inbound_authorization() {
         let seen_headers = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
         let upstream = spawn_capture_headers_upstream(seen_headers.clone()).await;
@@ -401,6 +476,7 @@ mod tests {
         headers.insert("trailer", "x-trailer".parse().unwrap());
         headers.insert("upgrade", "websocket".parse().unwrap());
         headers.insert("proxy-authorization", "Basic local".parse().unwrap());
+        headers.insert(header::ACCEPT_ENCODING, "gzip".parse().unwrap());
         headers.insert("x-keep-me", "ok".parse().unwrap());
 
         provider
@@ -425,6 +501,12 @@ mod tests {
                 .iter()
                 .any(|(name, value)| { name.eq_ignore_ascii_case("x-keep-me") && value == "ok" })
         );
+        let accept_encoding_values = headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("accept-encoding"))
+            .map(|(_, value)| value.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(accept_encoding_values, ["identity"]);
         for blocked in [
             "connection",
             "x-drop-me",

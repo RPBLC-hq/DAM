@@ -20,7 +20,7 @@ dam network status [--json]
 
 Both commands preview by default. `--yes` is required before DAM changes macOS network settings.
 
-Without `--config`, the protected-host comments in the generated PAC and the Network Extension provider configuration include DAM's built-in AI hosts: `api.openai.com`, `api.anthropic.com`, `api.x.ai`, and `chatgpt.com`. With `--config`, those comments and provider configuration also include `[[network.ai_routes]]` entries and route overrides from that config file. PAC routing scope is still all proxy-capable HTTP/HTTPS traffic. Network Extension routing uses a broad outbound rule and relies on provider classification to pass non-target flows through.
+Without `--config`, the protected-host comments in the generated PAC and the Network Extension provider configuration are derived from the bundled LLM MVP traffic profile: `api.openai.com`, `api.anthropic.com`, `api.x.ai`, and `chatgpt.com`. With `--config`, those comments and provider configuration use the effective `[traffic]` profile plus `[[network.ai_routes]]` legacy overlays from that config file. PAC routing scope is still all proxy-capable HTTP/HTTPS traffic. Network Extension routing uses a broad outbound rule and relies on traffic-profile classification to pass non-target flows through.
 
 ## State
 

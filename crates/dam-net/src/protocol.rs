@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{AiRoute, AiTrafficKind};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ProtocolAdapterKind {
     Http,
@@ -12,6 +12,7 @@ pub enum ProtocolAdapterKind {
     EmailImap,
     EmailPop3,
     Media,
+    #[default]
     Unknown,
 }
 

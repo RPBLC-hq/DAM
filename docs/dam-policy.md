@@ -8,10 +8,10 @@ It separates "what was found" from "what should happen."
 
 | Action | Meaning |
 |---|---|
-| `tokenize` | Store original in vault, replace text with `[kind:id]`. |
-| `redact` | Do not store original, replace text with `[kind]`. |
-| `allow` | Do not store original, leave text unchanged. |
-| `block` | Do not store original, fail the operation before output. |
+| `tokenize` | Store the spine-supplied protected value in vault, replace text with `[kind:id]`. |
+| `redact` | Do not store the value, replace text with `[kind]`. |
+| `allow` | Do not store the value, leave text unchanged. |
+| `block` | Do not store the value, fail the operation before output. |
 
 ## Current Implementation
 

@@ -7,8 +7,7 @@ use axum::{
     routing::get,
 };
 use dam_core::{
-    EventSink, LogEvent, LogEventType, LogLevel, VaultReadError, VaultReader, VaultRecord,
-    VaultWriter,
+    EventSink, LogEventType, LogLevel, VaultReadError, VaultReader, VaultRecord, VaultWriter,
 };
 use http_body_util::BodyExt;
 use hyper::upgrade::Upgraded;
@@ -31,7 +30,12 @@ use tokio_rustls::{
     },
 };
 
+mod events;
+mod providers;
 mod websocket;
+
+use events::{log_intercepted_response_write, log_provider_response, record_proxy_event};
+use providers::{ProviderAdapter, ProviderAdapters};
 
 const MAX_REQUEST_BYTES: usize = 10 * 1024 * 1024;
 const MAX_INTERCEPTED_HEADER_BYTES: usize = 64 * 1024;
@@ -77,34 +81,6 @@ pub enum ProxyError {
 
     #[error("consent backend is unavailable: {0}")]
     ConsentUnavailable(String),
-}
-
-struct ProviderAdapters {
-    openai: dam_provider_openai::OpenAiProvider,
-    anthropic: dam_provider_anthropic::AnthropicProvider,
-}
-
-enum ProviderAdapter<'a> {
-    OpenAi(&'a dam_provider_openai::OpenAiProvider),
-    Anthropic(&'a dam_provider_anthropic::AnthropicProvider),
-}
-
-impl ProviderAdapters {
-    fn new() -> Result<Self, ProxyError> {
-        Ok(Self {
-            openai: dam_provider_openai::OpenAiProvider::new()
-                .map_err(|error| ProxyError::ProviderInit(error.to_string()))?,
-            anthropic: dam_provider_anthropic::AnthropicProvider::new()
-                .map_err(|error| ProxyError::ProviderInit(error.to_string()))?,
-        })
-    }
-
-    fn get(&self, kind: dam_router::ProviderKind) -> ProviderAdapter<'_> {
-        match kind {
-            dam_router::ProviderKind::OpenAiCompatible => ProviderAdapter::OpenAi(&self.openai),
-            dam_router::ProviderKind::Anthropic => ProviderAdapter::Anthropic(&self.anthropic),
-        }
-    }
 }
 
 pub struct ProxyState {
@@ -390,14 +366,15 @@ async fn handle_raw_proxy_connection(
     }
 
     let response = proxy_http_request(
-        state,
+        state.clone(),
         request.method,
         request.uri,
         request.headers,
         request.body,
-        operation_id,
+        operation_id.clone(),
     )
     .await;
+    log_intercepted_response_write(&state, &operation_id, &response);
     write_intercepted_http_response(&mut stream, response).await
 }
 
@@ -868,6 +845,21 @@ async fn proxy_http_request(
     operation_id: String,
 ) -> Response {
     let route = state.routes.decide(&headers, Some(&uri));
+    record_proxy_event(
+        &state,
+        &operation_id,
+        LogLevel::Info,
+        LogEventType::ProxyForward,
+        "route_decision",
+        format!(
+            "route target={} provider={} protection_enabled={} resolve_inbound={} request_bytes={}",
+            route.target().name,
+            route.target().provider,
+            state.protection_enabled(),
+            state.resolve_inbound,
+            body.len()
+        ),
+    );
 
     if route.config_required() {
         record_proxy_event(
@@ -938,8 +930,11 @@ async fn proxy_http_request(
         &operation_id,
         &state.policy,
         state.vault.as_ref(),
-        state.consent_store.as_deref(),
-        state.log_sink.as_deref(),
+        dam_pipeline::ProtectTextContext {
+            reference_vault: Some(state.vault.as_ref()),
+            consent_store: state.consent_store.as_deref(),
+            event_sink: state.log_sink.as_deref(),
+        },
         state.replacement_options,
     ) {
         Ok(result) => result,
@@ -952,6 +947,20 @@ async fn proxy_http_request(
             );
         }
     };
+    record_proxy_event(
+        &state,
+        &operation_id,
+        LogLevel::Info,
+        LogEventType::ProxyForward,
+        "request_protection",
+        format!(
+            "request protection detections={} replacements={} tokenized={} blocked={}",
+            protected.detections.len(),
+            protected.plan.replacements.len(),
+            protected.plan.tokenized_count(),
+            protected.plan.blocked_count()
+        ),
+    );
 
     if protected.is_blocked() {
         record_proxy_event(
@@ -1177,7 +1186,7 @@ where
     }
 
     let response = proxy_http_request(
-        state,
+        state.clone(),
         request.method,
         request.uri,
         request.headers,
@@ -1186,6 +1195,7 @@ where
     )
     .await;
 
+    log_intercepted_response_write(&state, operation_id, &response);
     if let Err(error) = write_intercepted_http_response(&mut tls, response).await {
         let _ = write_intercepted_error(&mut tls, StatusCode::BAD_GATEWAY, &error).await;
         return Err(error);
@@ -1325,8 +1335,11 @@ where
                 &operation_id,
                 &state.policy,
                 state.vault.as_ref(),
-                state.consent_store.as_deref(),
-                state.log_sink.as_deref(),
+                dam_pipeline::ProtectTextContext {
+                    reference_vault: Some(state.vault.as_ref()),
+                    consent_store: state.consent_store.as_deref(),
+                    event_sink: state.log_sink.as_deref(),
+                },
                 state.replacement_options,
             )
             .map_err(|_| "WebSocket request frame protection failed".to_string())?;
@@ -2123,6 +2136,8 @@ async fn forward_request(
     let target_api_key = route.target_api_key();
     match state.providers.get(route.provider_kind()) {
         ProviderAdapter::OpenAi(provider) => {
+            let target_name = route.target().name.clone();
+            let target_provider = route.target().provider.clone();
             let response_state = Arc::clone(state);
             let response_operation_id = operation_id.to_owned();
             let request = dam_provider_openai::ForwardRequest {
@@ -2134,14 +2149,29 @@ async fn forward_request(
                 target_api_key,
                 transform_streaming_response: state.resolve_inbound,
             };
-            provider
+            record_proxy_event(
+                state,
+                operation_id,
+                LogLevel::Info,
+                LogEventType::ProxyForward,
+                "provider_forward_start",
+                format!(
+                    "provider forward start target={target_name} provider={target_provider} resolve_streaming={}",
+                    state.resolve_inbound
+                ),
+            );
+            let response = provider
                 .forward(request, move |response_body| {
                     resolve_response_body(&response_state, &response_operation_id, response_body)
                 })
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+            log_provider_response(state, operation_id, &response);
+            Ok(response)
         }
         ProviderAdapter::Anthropic(provider) => {
+            let target_name = route.target().name.clone();
+            let target_provider = route.target().provider.clone();
             let response_state = Arc::clone(state);
             let response_operation_id = operation_id.to_owned();
             let request = dam_provider_anthropic::ForwardRequest {
@@ -2153,30 +2183,79 @@ async fn forward_request(
                 target_api_key,
                 transform_streaming_response: state.resolve_inbound,
             };
-            provider
+            record_proxy_event(
+                state,
+                operation_id,
+                LogLevel::Info,
+                LogEventType::ProxyForward,
+                "provider_forward_start",
+                format!(
+                    "provider forward start target={target_name} provider={target_provider} resolve_streaming={}",
+                    state.resolve_inbound
+                ),
+            );
+            let response = provider
                 .forward(request, move |response_body| {
                     resolve_response_body(&response_state, &response_operation_id, response_body)
                 })
                 .await
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?;
+            log_provider_response(state, operation_id, &response);
+            Ok(response)
         }
     }
 }
 
 fn resolve_response_body(state: &ProxyState, operation_id: &str, body: Bytes) -> Bytes {
     if !state.resolve_inbound {
+        record_proxy_event(
+            state,
+            operation_id,
+            LogLevel::Info,
+            LogEventType::ProxyForward,
+            "resolve_disabled",
+            format!("inbound resolution disabled response_bytes={}", body.len()),
+        );
         return body;
     }
 
     let body_text = match std::str::from_utf8(body.as_ref()) {
         Ok(text) => text,
-        Err(_) => return body,
+        Err(_) => {
+            record_proxy_event(
+                state,
+                operation_id,
+                LogLevel::Warn,
+                LogEventType::Resolve,
+                "resolve_non_utf8",
+                format!(
+                    "inbound resolution skipped non_utf8 response_bytes={}",
+                    body.len()
+                ),
+            );
+            return body;
+        }
     };
     let result = dam_pipeline::resolve_text(
         body_text,
         operation_id,
         state.vault.as_ref(),
         state.log_sink.as_deref(),
+    );
+    record_proxy_event(
+        state,
+        operation_id,
+        LogLevel::Info,
+        LogEventType::Resolve,
+        "resolve_attempt",
+        format!(
+            "inbound resolution references={} resolved={} missing={} read_failures={} response_bytes={}",
+            result.plan.references.len(),
+            result.plan.resolved_count(),
+            result.plan.missing_count(),
+            result.plan.read_failure_count(),
+            body.len()
+        ),
     );
     result.output.map(Bytes::from).unwrap_or(body)
 }
@@ -2192,22 +2271,6 @@ fn request_has_unsupported_content_encoding(headers: &HeaderMap) -> bool {
                 .filter(|part| !part.is_empty())
                 .any(|part| !part.eq_ignore_ascii_case("identity"))
         })
-}
-
-fn record_proxy_event(
-    state: &ProxyState,
-    operation_id: &str,
-    level: LogLevel,
-    event_type: LogEventType,
-    action: &'static str,
-    message: &'static str,
-) {
-    let Some(sink) = &state.log_sink else {
-        return;
-    };
-
-    let event = LogEvent::new(operation_id, level, event_type, message).with_action(action);
-    let _ = sink.record(&event);
 }
 
 fn status_response(
@@ -2269,6 +2332,7 @@ fn proxy_diagnostics(state: dam_api::ProxyState, message: &str) -> Vec<dam_api::
 mod tests {
     use super::*;
     use axum::routing::post;
+    use futures_util::stream;
     use std::sync::Mutex;
 
     fn proxy_config(upstream: String) -> dam_config::DamConfig {
@@ -2336,6 +2400,74 @@ mod tests {
         .await
     }
 
+    async fn spawn_json_escaped_reference_upstream(
+        seen_body: Arc<Mutex<Option<String>>>,
+    ) -> String {
+        async fn json_response(
+            State(seen_body): State<Arc<Mutex<Option<String>>>>,
+            body: Bytes,
+        ) -> Response {
+            let body_text =
+                String::from_utf8(body.to_vec()).expect("upstream body should be utf-8");
+            *seen_body.lock().unwrap() = Some(body_text.clone());
+            let reference = dam_core::find_references(&body_text)
+                .into_iter()
+                .next()
+                .expect("protected upstream body should contain a reference")
+                .reference
+                .display();
+            let escaped_reference = reference.replace('[', r"\\[").replace(']', r"\\]");
+            let response = format!(r#"{{"message":{{"content":"{escaped_reference}"}}}}"#);
+
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(response))
+                .unwrap()
+        }
+
+        spawn_app(
+            Router::new()
+                .route("/v1/chat/completions", post(json_response))
+                .with_state(seen_body),
+        )
+        .await
+    }
+
+    async fn spawn_ndjson_escaped_reference_upstream(
+        seen_body: Arc<Mutex<Option<String>>>,
+    ) -> String {
+        async fn ndjson_response(
+            State(seen_body): State<Arc<Mutex<Option<String>>>>,
+            body: Bytes,
+        ) -> Response {
+            let body_text =
+                String::from_utf8(body.to_vec()).expect("upstream body should be utf-8");
+            *seen_body.lock().unwrap() = Some(body_text.clone());
+            let reference = dam_core::find_references(&body_text)
+                .into_iter()
+                .next()
+                .expect("protected upstream body should contain a reference")
+                .reference
+                .display();
+            let escaped_reference = reference.replace('[', r"\\[").replace(']', r"\\]");
+            let response = format!(r#"{{"type":"delta","text":"{escaped_reference}"}}"#);
+
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/x-ndjson")
+                .body(Body::from(format!("{response}\n")))
+                .unwrap()
+        }
+
+        spawn_app(
+            Router::new()
+                .route("/v1/chat/completions", post(ndjson_response))
+                .with_state(seen_body),
+        )
+        .await
+    }
+
     async fn spawn_capture_headers_upstream(
         seen_headers: Arc<Mutex<Vec<(String, String)>>>,
     ) -> String {
@@ -2398,17 +2530,74 @@ mod tests {
         .await
     }
 
+    async fn spawn_capture_anthropic_sse_text_delta_upstream(
+        seen_body: Arc<Mutex<Option<String>>>,
+    ) -> String {
+        async fn sse(State(seen_body): State<Arc<Mutex<Option<String>>>>, body: Bytes) -> Response {
+            let body_text =
+                String::from_utf8(body.to_vec()).expect("upstream body should be utf-8");
+            *seen_body.lock().unwrap() = Some(body_text.clone());
+            let start = body_text
+                .find("[email:")
+                .expect("protected upstream body should contain email reference");
+            let end = start
+                + body_text[start..]
+                    .find(']')
+                    .expect("email reference should be closed")
+                + 1;
+            let reference = &body_text[start..end];
+            let split_at = reference.len() / 2;
+            let first = &reference[..split_at];
+            let second = &reference[split_at..];
+            let first_event = format!(
+                "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"delta\":{{\"type\":\"text_delta\",\"text\":\"{first}\"}}}}\n\n"
+            );
+            let second_event = format!(
+                "event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"delta\":{{\"type\":\"text_delta\",\"text\":\"{second}\"}}}}\n\n"
+            );
+            let chunks = stream::iter([
+                Ok::<_, std::io::Error>(Bytes::from(first_event)),
+                Ok(Bytes::from(second_event)),
+                Ok(Bytes::from_static(
+                    b"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+                )),
+            ]);
+
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .body(Body::from_stream(chunks))
+                .unwrap()
+        }
+
+        spawn_app(
+            Router::new()
+                .route("/v1/messages", post(sse))
+                .with_state(seen_body),
+        )
+        .await
+    }
+
     async fn spawn_capture_sse_upstream(seen_body: Arc<Mutex<Option<String>>>) -> String {
         async fn sse(State(seen_body): State<Arc<Mutex<Option<String>>>>, body: Bytes) -> Response {
             let body_text =
                 String::from_utf8(body.to_vec()).expect("upstream body should be utf-8");
             *seen_body.lock().unwrap() = Some(body_text.clone());
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, "text/event-stream")],
-                format!("event: response.output_text.delta\ndata: {body_text}\n\n"),
-            )
-                .into_response()
+            let event = format!("event: response.output_text.delta\ndata: {body_text}\n\n");
+            let split_at = event
+                .find("[email:")
+                .map(|index| index + "[email:".len() + 8)
+                .unwrap_or(event.len());
+            let chunks = stream::iter([
+                Ok::<_, std::io::Error>(Bytes::from(event[..split_at].to_string())),
+                Ok(Bytes::from(event[split_at..].to_string())),
+            ]);
+
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "text/event-stream")
+                .body(Body::from_stream(chunks))
+                .unwrap()
         }
 
         spawn_app(
@@ -2869,6 +3058,7 @@ mod tests {
         let upstream_seen = Arc::new(Mutex::new(None::<String>));
         let upstream = spawn_capture_sse_upstream(upstream_seen.clone()).await;
         let config = proxy_config(upstream);
+        let log_path = config.log.sqlite_path.clone();
         let interception = TransparentInterceptionConfig {
             state_dir: tempfile::tempdir().unwrap().keep(),
             network_mode: dam_net::CaptureMode::SystemProxy,
@@ -2910,6 +3100,32 @@ mod tests {
         let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
         assert!(!upstream_body.contains("erin@example.com"));
         assert!(upstream_body.contains("[email:"));
+        let logs = dam_log::LogStore::open(log_path).unwrap().list().unwrap();
+        for action in [
+            "route_decision",
+            "request_protection",
+            "provider_forward_start",
+            "provider_response",
+            "intercepted_response_write",
+            "resolve_attempt",
+        ] {
+            assert!(
+                logs.iter()
+                    .any(|entry| entry.action.as_deref() == Some(action)),
+                "missing proxy diagnostic action {action}"
+            );
+        }
+        assert!(
+            logs.iter().all(|entry| {
+                !entry.message.contains("erin@example.com")
+                    && !entry
+                        .reference
+                        .as_deref()
+                        .unwrap_or_default()
+                        .contains("erin@example.com")
+            }),
+            "logs must not contain raw sensitive values"
+        );
         let _ = shutdown_tx.send(());
     }
 
@@ -3049,12 +3265,15 @@ mod tests {
         assert!(!upstream_body.contains("wololo@ w.com"));
         assert!(!upstream_body.contains("wololo @w.com"));
         assert!(upstream_body.contains("[email:"));
+        let references = dam_core::find_references(&upstream_body);
+        assert_eq!(references.len(), 2);
+        assert_eq!(references[0].reference, references[1].reference);
         assert_eq!(
             dam_vault::Vault::open(&vault_path)
                 .unwrap()
                 .count()
                 .unwrap(),
-            2
+            1
         );
     }
 
@@ -3101,6 +3320,49 @@ mod tests {
                     .as_deref()
                     .is_some_and(|a| a.starts_with("allow:"))
         }));
+    }
+
+    #[tokio::test]
+    async fn active_consent_expands_allowed_references_from_outbound_history() {
+        let upstream_seen = Arc::new(Mutex::new(None::<String>));
+        let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+        let config = proxy_config(upstream);
+        let vault_path = config.vault.sqlite_path.clone();
+        let consent_path = config.consent.sqlite_path.clone();
+        let proxy = spawn_app(build_app(config).unwrap()).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy}/v1/chat/completions"))
+            .body(r#"{"input":"email history@example.com"}"#)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let first_upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+        let reference = dam_core::find_references(&first_upstream_body)
+            .into_iter()
+            .next()
+            .expect("first request should be tokenized")
+            .reference;
+
+        let vault = dam_vault::Vault::open(&vault_path).unwrap();
+        dam_consent::ConsentStore::open(&consent_path)
+            .unwrap()
+            .grant_for_reference(&reference.key(), &vault, 60, "test", None)
+            .unwrap();
+        let history = format!(r#"{{"input":"repeat {}"}}"#, reference.display());
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy}/v1/chat/completions"))
+            .body(history)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let second_upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+        assert!(second_upstream_body.contains("history@example.com"));
+        assert!(!second_upstream_body.contains(&reference.display()));
     }
 
     #[tokio::test]
@@ -3163,6 +3425,48 @@ mod tests {
         let upstream_body = seen_body.lock().unwrap().clone().unwrap();
         assert!(!upstream_body.contains("alice@example.com"));
         assert!(upstream_body.contains("[email:"));
+    }
+
+    #[tokio::test]
+    async fn anthropic_provider_resolves_references_split_across_text_delta_events() {
+        let upstream_seen = Arc::new(Mutex::new(None::<String>));
+        let upstream = spawn_capture_anthropic_sse_text_delta_upstream(upstream_seen.clone()).await;
+        let config = anthropic_proxy_config(upstream);
+        let vault_path = config.vault.sqlite_path.clone();
+        let log_path = config.log.sqlite_path.clone();
+        let proxy = spawn_app(build_app(config).unwrap()).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy}/v1/messages"))
+            .header("x-api-key", "caller-secret")
+            .body(r#"{"messages":[{"content":"email banana@example.test"}],"stream":true}"#)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        let body = response.text().await.unwrap();
+        assert!(body.contains("banana@example.test"));
+        assert!(!body.contains("[email:"));
+
+        let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+        assert!(!upstream_body.contains("banana@example.test"));
+        assert!(upstream_body.contains("[email:"));
+        assert_eq!(
+            dam_vault::Vault::open(vault_path).unwrap().count().unwrap(),
+            1
+        );
+
+        let logs = dam_log::LogStore::open(log_path).unwrap().list().unwrap();
+        assert!(logs.iter().any(|entry| entry.event_type == "vault_read"));
+        assert!(logs.iter().any(|entry| entry.event_type == "resolve"));
     }
 
     #[tokio::test]
@@ -3295,6 +3599,81 @@ mod tests {
             dam_vault::Vault::open(vault_path).unwrap().count().unwrap(),
             1
         );
+
+        let logs = dam_log::LogStore::open(log_path).unwrap().list().unwrap();
+        assert!(logs.iter().any(|entry| entry.event_type == "vault_read"));
+        assert!(logs.iter().any(|entry| entry.event_type == "resolve"));
+    }
+
+    #[tokio::test]
+    async fn resolves_json_escaped_inbound_response_references_by_default() {
+        let upstream_seen = Arc::new(Mutex::new(None::<String>));
+        let upstream = spawn_json_escaped_reference_upstream(upstream_seen.clone()).await;
+        let config = proxy_config(upstream);
+        let vault_path = config.vault.sqlite_path.clone();
+        let log_path = config.log.sqlite_path.clone();
+        let proxy = spawn_app(build_app(config).unwrap()).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy}/v1/chat/completions"))
+            .body(r#"{"messages":[{"content":"email alice@example.com"}]}"#)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        let body = response.text().await.unwrap();
+        assert!(body.contains("alice@example.com"));
+        assert!(!body.contains("[email:"));
+        assert!(!body.contains(r"\\[email:"));
+
+        let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+        assert!(!upstream_body.contains("alice@example.com"));
+        assert!(upstream_body.contains("[email:"));
+        assert_eq!(
+            dam_vault::Vault::open(vault_path).unwrap().count().unwrap(),
+            1
+        );
+
+        let logs = dam_log::LogStore::open(log_path).unwrap().list().unwrap();
+        assert!(logs.iter().any(|entry| entry.event_type == "vault_read"));
+        assert!(logs.iter().any(|entry| entry.event_type == "resolve"));
+    }
+
+    #[tokio::test]
+    async fn resolves_ndjson_escaped_inbound_response_references_by_default() {
+        let upstream_seen = Arc::new(Mutex::new(None::<String>));
+        let upstream = spawn_ndjson_escaped_reference_upstream(upstream_seen.clone()).await;
+        let config = proxy_config(upstream);
+        let log_path = config.log.sqlite_path.clone();
+        let proxy = spawn_app(build_app(config).unwrap()).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{proxy}/v1/chat/completions"))
+            .body(r#"{"messages":[{"content":"email alice@example.com"}]}"#)
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/x-ndjson")
+        );
+        let body = response.text().await.unwrap();
+        assert!(body.contains("alice@example.com"));
+        assert!(!body.contains("[email:"));
+        assert!(!body.contains(r"\\[email:"));
 
         let logs = dam_log::LogStore::open(log_path).unwrap().list().unwrap();
         assert!(logs.iter().any(|entry| entry.event_type == "vault_read"));

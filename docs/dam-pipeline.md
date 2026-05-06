@@ -10,9 +10,10 @@ Outbound protection:
 
 ```text
 input text
+  -> expand actively allowed DAM references through VaultReader when provided
   -> dam-detect
   -> dam-policy
-  -> dam-consent active exact-value overrides
+  -> dam-consent active canonical-value overrides
   -> dam-core replacement plan
   -> VaultWriter for tokenize decisions
   -> dam-redact
@@ -22,12 +23,14 @@ input text
 Inbound reference resolution:
 
 ```text
-input text with [kind:id] references
+input text with [kind:id] or \[kind:id\] references
   -> dam-core reference parser
   -> VaultReader
   -> dam-core resolve plan
   -> restored text when at least one reference resolves
 ```
+
+Before detection, callers may provide both a consent store and `VaultReader`. In that mode the pipeline expands previously tokenized `[kind:id]` references only when the reference resolves and the stored canonical value has active consent. Missing, unreadable, expired, or revoked references remain tokenized and continue through the normal protection path.
 
 `dam-pipeline` records non-sensitive filter, consent, vault, redaction, read, and resolve events through the `EventSink` contract when a sink is provided.
 
@@ -48,7 +51,7 @@ OpenAI-compatible forwarding lives in `dam-provider-openai`, Anthropic forwardin
 
 ## Current Consumers
 
-- `dam-proxy` uses `dam-pipeline` for outbound request body protection and default inbound reference resolution. Streaming/SSE bodies are transformed chunk by chunk before this pipeline has provider-aware event parsing.
+- `dam-proxy` uses `dam-pipeline` for outbound request body protection and default inbound reference resolution. Streaming/SSE bodies are passed to this pipeline by provider adapters after either raw tail-buffering or provider-aware text-delta reassembly, depending on the response shape.
 
 `dam-filter` still owns its CLI-specific pipeline wiring because it also owns report emission, exit codes, and file/stdin handling.
 

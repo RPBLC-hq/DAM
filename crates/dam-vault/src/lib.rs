@@ -142,6 +142,8 @@ impl VaultWriter for Vault {
             && let Some(existing) = find_existing_reference(&conn, record.kind, &record.value)
                 .map_err(|error| VaultWriteError::new(error.to_string()))?
         {
+            touch_reference(&conn, &existing, now)
+                .map_err(|error| VaultWriteError::new(error.to_string()))?;
             return Ok(existing);
         }
 
@@ -202,6 +204,14 @@ fn find_existing_reference(
     }
 
     Ok(None)
+}
+
+fn touch_reference(conn: &Connection, reference: &Reference, updated_at: i64) -> VaultResult<()> {
+    conn.execute(
+        "UPDATE vault_entries SET updated_at = ?2 WHERE key = ?1",
+        params![reference.key(), updated_at],
+    )?;
+    Ok(())
 }
 
 fn deduplicate_entries(entries: Vec<VaultEntry>) -> Vec<VaultEntry> {
@@ -370,6 +380,35 @@ mod tests {
         assert_eq!(second_stored, first);
         assert_eq!(vault.count().unwrap(), 1);
         assert_eq!(vault.get(&second.key()).unwrap(), None);
+    }
+
+    #[test]
+    fn vault_writer_refreshes_existing_reference_recency_for_duplicate_value() {
+        let vault = Vault::open_in_memory().unwrap();
+        let first = dam_core::Reference::generate(dam_core::SensitiveType::Email);
+        let second = dam_core::Reference::generate(dam_core::SensitiveType::Email);
+
+        vault
+            .write(&dam_core::VaultRecord {
+                reference: first.clone(),
+                kind: dam_core::SensitiveType::Email,
+                value: "alice@example.com".to_string(),
+            })
+            .unwrap();
+        let before = vault.list().unwrap()[0].updated_at;
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let stored = vault
+            .write(&dam_core::VaultRecord {
+                reference: second,
+                kind: dam_core::SensitiveType::Email,
+                value: "alice@example.com".to_string(),
+            })
+            .unwrap();
+        let after = vault.list().unwrap()[0].updated_at;
+
+        assert_eq!(stored, first);
+        assert!(after > before);
     }
 
     #[test]

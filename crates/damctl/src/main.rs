@@ -891,7 +891,9 @@ fn network_inspect_ai_routes(
         ..dam_config::ConfigOverrides::default()
     })
     .map_err(|error| error.to_string())?;
-    Ok(dam_net::ai_routes_with_overlays(
+    let profile = config.traffic.effective_profile();
+    Ok(dam_net::ai_routes_with_profile_and_overlays(
+        &profile,
         config.network.ai_routes.iter().map(|route| {
             dam_net::AiRoute::custom(
                 &route.host,
@@ -2990,6 +2992,8 @@ mod tests {
         dam_daemon::DaemonState {
             version: 1,
             pid,
+            executable_path: Some(PathBuf::from("/usr/local/bin/dam")),
+            executable_sha256: Some("abc123".to_string()),
             listen: "127.0.0.1:7828".to_string(),
             proxy_url: "http://127.0.0.1:7828".to_string(),
             config_path: Some(PathBuf::from("dam.toml")),
@@ -3000,6 +3004,7 @@ mod tests {
             target_name: Some("openai".to_string()),
             target_provider: Some("openai-compatible".to_string()),
             upstream: Some("https://api.openai.com".to_string()),
+            proxy_targets: Vec::new(),
             started_at_unix: 1_700_000_000,
             network_mode: dam_net::CaptureMode::ExplicitProxy,
             transparent_ai_routes: dam_net::known_ai_routes(),

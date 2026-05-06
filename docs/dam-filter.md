@@ -10,7 +10,7 @@ It is the integration point for the local rebuild slice.
 input
   -> dam-detect
   -> dam-policy
-  -> dam-consent active exact-value overrides
+  -> dam-consent active canonical-value overrides
   -> dam-core replacement plan
   -> dam-vault for tokenize decisions
   -> dam-redact
@@ -66,7 +66,7 @@ Persisted logs do not include raw values. Vault write failures use the stable `v
 
 Repeated equal values reuse one tokenized reference by default, and compatible vault writers reuse an existing canonical reference for the same stored value. Disable that with `policy.deduplicate_replacements = false` or `DAM_POLICY_DEDUPLICATE_REPLACEMENTS=false` when the repeated-reference equality signal is too revealing.
 
-Active consent grants let exact detected values pass through unredacted until expiry or revocation. Consent overrides `tokenize` and `redact`; it does not override `block`.
+Active consent grants let canonical detected values pass through unredacted until expiry or revocation. Consent overrides `tokenize` and `redact`; it does not override `block`.
 
 ## Tests
 

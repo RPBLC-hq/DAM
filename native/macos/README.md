@@ -14,8 +14,10 @@ swift build --package-path native/macos
 Release packaging:
 
 ```bash
-native/macos/scripts/package-dam-app.sh --mode developer-id
+scripts/dam-build.sh release-macos --mode developer-id
 ```
+
+`scripts/dam-build.sh` is the standard local/CI wrapper for checks, signed app packaging, notarization, release zipping, and local deploys. Its `macos-app` and `release-macos` commands delegate app assembly to `native/macos/scripts/package-dam-app.sh`.
 
 The package script builds the Rust binaries and Swift helper/provider, stages `DAM.app`, embeds the app and Network Extension provisioning profiles, substitutes the Team ID and App Group ID into the generated entitlements and system extension `NetworkExtension` Info.plist dictionary, wraps the helper as `Contents/Helpers/DAMMacosNEHelper.app` so macOS can validate its restricted entitlements against an embedded provisioning profile, signs the app/helper with `com.apple.developer.system-extension.install` and `app-proxy-provider-systemextension`, signs the bundled system extension with `app-proxy-provider-systemextension`, and fails if the system extension usage description, provider class mapping, App-Group-prefixed Mach service name, signed entitlement blobs, or profile-authorized entitlements are missing.
 

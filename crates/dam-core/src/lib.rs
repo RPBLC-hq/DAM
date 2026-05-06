@@ -3,6 +3,10 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+mod normalization;
+
+pub use normalization::canonical_sensitive_value;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SensitiveType {
     Email,
@@ -480,11 +484,18 @@ pub fn find_references(input: &str) -> Vec<ReferenceMatch> {
         };
         let end = content_start + end_offset;
         let display_end = end + 1;
+        let escaped_start = start > 0 && input.as_bytes()[start - 1] == b'\\';
+        let display_start = if escaped_start { start - 1 } else { start };
+        let key_end = if end > content_start && input.as_bytes()[end - 1] == b'\\' {
+            end - 1
+        } else {
+            end
+        };
 
-        if let Some(reference) = Reference::parse_key(&input[content_start..end]) {
+        if let Some(reference) = Reference::parse_key(&input[content_start..key_end]) {
             matches.push(ReferenceMatch {
                 span: Span {
-                    start,
+                    start: display_start,
                     end: display_end,
                 },
                 reference,
@@ -664,10 +675,11 @@ pub fn build_replacement_plan_from_decisions_with_options(
                 }
 
                 let reference = Reference::generate(detection.kind);
+                let stored_value = canonical_sensitive_value(detection.kind, &detection.value);
                 let record = VaultRecord {
                     reference: reference.clone(),
                     kind: detection.kind,
-                    value: detection.value.clone(),
+                    value: stored_value.clone(),
                 };
 
                 let write_options = VaultWriteOptions {
@@ -692,7 +704,7 @@ pub fn build_replacement_plan_from_decisions_with_options(
                         }
                         plan.vault_failures.push(VaultFailure {
                             kind: detection.kind,
-                            value_preview: preview(&detection.value),
+                            value_preview: preview(&stored_value),
                             error: error.to_string(),
                         });
                         plan.replacements.push(Replacement {
@@ -740,7 +752,7 @@ impl ReplacementDedupKey {
         Self {
             kind: decision.detection.kind,
             action: decision.action,
-            value: decision.detection.value.clone(),
+            value: canonical_sensitive_value(decision.detection.kind, &decision.detection.value),
         }
     }
 }
@@ -1087,6 +1099,31 @@ mod tests {
     }
 
     #[test]
+    fn replacement_plan_deduplicates_canonical_email_values() {
+        let vault = RecordingVault::new();
+        let detections = [
+            detection(SensitiveType::Email, "alice@example.COM", 6, 23),
+            detection(SensitiveType::Email, "alice@ example.com", 28, 46),
+            detection(SensitiveType::Email, "alice @example .com", 51, 70),
+        ];
+
+        let plan = build_replacement_plan(&detections, &vault);
+
+        assert_eq!(plan.tokenized_count(), 3);
+        assert_eq!(plan.vault_write_count(), 1);
+        assert_eq!(vault.records.lock().unwrap().len(), 1);
+        assert_eq!(vault.records.lock().unwrap()[0].value, "alice@example.com");
+        assert_eq!(
+            plan.replacements[0].reference,
+            plan.replacements[1].reference
+        );
+        assert_eq!(
+            plan.replacements[1].reference,
+            plan.replacements[2].reference
+        );
+    }
+
+    #[test]
     fn replacement_plan_uses_canonical_reference_returned_by_vault() {
         let canonical = Reference::generate(SensitiveType::Email);
         let vault = CanonicalVault {
@@ -1333,6 +1370,24 @@ mod tests {
     }
 
     #[test]
+    fn find_references_detects_markdown_escaped_token_references() {
+        let reference = Reference::generate(SensitiveType::Email);
+        let input = format!(
+            r#"reply \{} and again \[email:not-valid\]"#,
+            reference.display()
+        );
+
+        let matches = find_references(&input);
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].reference, reference);
+        assert_eq!(
+            &input[matches[0].span.start..matches[0].span.end],
+            format!(r#"\{}"#, reference.display())
+        );
+    }
+
+    #[test]
     fn resolve_plan_restores_known_references_and_leaves_missing_unresolved() {
         let vault = RecordingVault::new();
         let known = Reference::generate(SensitiveType::Email);
@@ -1356,6 +1411,27 @@ mod tests {
             output,
             format!("known alice@example.com missing {}", missing.display())
         );
+    }
+
+    #[test]
+    fn resolve_plan_restores_markdown_escaped_references() {
+        let vault = RecordingVault::new();
+        let reference = Reference::generate(SensitiveType::Email);
+        vault
+            .write(&VaultRecord {
+                reference: reference.clone(),
+                kind: SensitiveType::Email,
+                value: "alice@example.com".to_string(),
+            })
+            .unwrap();
+        let input = format!(r#"known \{}"#, reference.display());
+
+        let plan = build_resolve_plan(&input, &vault);
+        let output = apply_resolve_plan(&input, &plan);
+
+        assert_eq!(plan.references.len(), 1);
+        assert_eq!(plan.resolved_count(), 1);
+        assert_eq!(output, "known alice@example.com");
     }
 
     #[test]

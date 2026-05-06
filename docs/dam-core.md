@@ -13,6 +13,7 @@ It owns shared types and coordination rules. Other modules may implement contrac
 - Logging contract: `EventSink`.
 - Policy action contract: `PolicyAction`.
 - Replacement planning from `PolicyDecision` values.
+- Kind-specific value canonicalization before replacement planning/storage.
 - Non-sensitive operational log event creation.
 - Resolve planning for `[kind:id]` references.
 - Proxy log event types for forward, bypass, and failure states.
@@ -28,7 +29,14 @@ Policy action effects:
 | `allow` | no | unchanged |
 | `block` | no | no transformed output |
 
-By default, replacement planning deduplicates repeated equal `(kind, action, value)` matches within one plan and asks the vault writer to reuse an existing canonical reference for the same stored value. Repeated tokenized values therefore reuse the same `[kind:id]` reference when the vault writer supports value deduplication. Set `policy.deduplicate_replacements = false` to generate separate references for each occurrence when equality leakage is a concern.
+By default, replacement planning deduplicates repeated equal `(kind, action, canonical value)` matches within one plan and asks the vault writer to reuse an existing canonical reference for the same stored value. Repeated tokenized values therefore reuse the same `[kind:id]` reference when the vault writer supports value deduplication. Set `policy.deduplicate_replacements = false` to generate separate references for each occurrence when equality leakage is a concern.
+
+Current canonicalization is intentionally narrow:
+
+- Email values have detector-supported spaces, tabs, and newlines removed from inside the address, and the domain is lowercased before storage and deduplication.
+- Replacement spans still cover the exact detected input text.
+- Resolving an email token returns the stored canonical email value.
+- Phone, SSN, and credit-card values are stored exactly as detected for now.
 
 Vault write failure while tokenizing uses redact-only fallback:
 
@@ -62,15 +70,17 @@ pub trait EventSink: Send + Sync {
 
 ## Resolve Behavior
 
-`dam-core` parses only valid tokenized references:
+`dam-core` parses valid tokenized references:
 
 ```text
 [email:7B2HkqFn9xR4mWpD3nYvKt]
 ```
 
+It also resolves Markdown-escaped tokenized references such as `\[email:7B2HkqFn9xR4mWpD3nYvKt\]`, because model responses may escape square brackets while terminal renderers display them as normal brackets. The escaped wrapper is removed when the reference is restored.
+
 Redact-only placeholders such as `[email]`, unknown kinds, and malformed IDs are ignored.
 
-Known references become replacements with the original value. Missing references and read failures stay unchanged unless a caller chooses strict failure behavior.
+Known references become replacements with the stored value. Missing references and read failures stay unchanged unless a caller chooses strict failure behavior.
 
 ## Privacy Rules
 

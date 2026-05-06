@@ -137,9 +137,6 @@ pub async fn doctor_report(
         .components
         .push(proxy_runtime_component(config, options, &mut report.diagnostics).await);
     add_setup_plan_component(config, options, &mut report);
-    report.components.push(claude_launcher_component());
-    report.components.push(codex_api_launcher_component());
-    report.components.push(codex_chatgpt_component());
     report.state = aggregate_state(&report.components);
 
     report
@@ -1288,33 +1285,6 @@ fn proxy_state_tag(state: dam_api::ProxyState) -> &'static str {
         dam_api::ProxyState::ProviderDown => "provider_down",
         dam_api::ProxyState::ConfigRequired => "config_required",
         dam_api::ProxyState::DamDown => "dam_down",
-    }
-}
-
-fn claude_launcher_component() -> dam_api::ComponentHealth {
-    dam_api::ComponentHealth {
-        component: "launcher_claude".to_string(),
-        state: dam_api::HealthState::Healthy,
-        message: "dam claude fails closed; use claude-code proxy routing through dam connect"
-            .to_string(),
-    }
-}
-
-fn codex_api_launcher_component() -> dam_api::ComponentHealth {
-    dam_api::ComponentHealth {
-        component: "launcher_codex_api".to_string(),
-        state: dam_api::HealthState::Healthy,
-        message: "dam codex --api fails closed; use codex-api proxy routing through dam connect"
-            .to_string(),
-    }
-}
-
-fn codex_chatgpt_component() -> dam_api::ComponentHealth {
-    dam_api::ComponentHealth {
-        component: "launcher_codex_chatgpt".to_string(),
-        state: dam_api::HealthState::Healthy,
-        message: "dam codex ChatGPT-login mode fails closed until its model transport is protected"
-            .to_string(),
     }
 }
 

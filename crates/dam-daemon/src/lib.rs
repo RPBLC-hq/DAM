@@ -8,6 +8,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::net::TcpListener;
 
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:7828";
@@ -19,18 +20,21 @@ pub const STATE_DIR_ENV: &str = "DAM_STATE_DIR";
 
 const STATE_FILE: &str = "daemon.json";
 const PROTECTION_FILE: &str = "protection.state";
-const STATE_VERSION: u32 = 4;
+const STATE_VERSION: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyOptions {
     pub config_path: Option<PathBuf>,
     pub listen: String,
     pub network_mode: dam_net::CaptureMode,
+    pub network_mode_explicit: bool,
     pub trust_mode: dam_trust::TrustMode,
+    pub trust_mode_explicit: bool,
     pub target_name: String,
     pub provider: String,
     pub upstream: String,
     pub targets: Option<Vec<dam_config::ProxyTargetConfig>>,
+    pub traffic_app_ids: Option<Vec<String>>,
     pub vault_path: PathBuf,
     pub log_path: Option<PathBuf>,
     pub consent_path: Option<PathBuf>,
@@ -43,11 +47,14 @@ impl Default for ProxyOptions {
             config_path: None,
             listen: DEFAULT_LISTEN.to_string(),
             network_mode: dam_net::CaptureMode::ExplicitProxy,
+            network_mode_explicit: false,
             trust_mode: dam_trust::TrustMode::Disabled,
+            trust_mode_explicit: false,
             target_name: "openai".to_string(),
             provider: "openai-compatible".to_string(),
             upstream: OPENAI_API_UPSTREAM.to_string(),
             targets: None,
+            traffic_app_ids: None,
             vault_path: PathBuf::from(DEFAULT_VAULT_PATH),
             log_path: Some(PathBuf::from(DEFAULT_LOG_PATH)),
             consent_path: None,
@@ -93,6 +100,10 @@ impl From<&dam_config::ProxyTargetConfig> for DaemonProxyTargetState {
 pub struct DaemonState {
     pub version: u32,
     pub pid: u32,
+    #[serde(default)]
+    pub executable_path: Option<PathBuf>,
+    #[serde(default)]
+    pub executable_sha256: Option<String>,
     pub listen: String,
     pub proxy_url: String,
     pub config_path: Option<PathBuf>,
@@ -231,10 +242,12 @@ pub fn parse_proxy_options(args: impl IntoIterator<Item = String>) -> Result<Pro
             "--network-mode" => {
                 i += 1;
                 options.network_mode = required_value(&args, i, "--network-mode")?.parse()?;
+                options.network_mode_explicit = true;
             }
             "--trust-mode" => {
                 i += 1;
                 options.trust_mode = required_value(&args, i, "--trust-mode")?.parse()?;
+                options.trust_mode_explicit = true;
             }
             "--target-name" => {
                 i += 1;
@@ -278,6 +291,17 @@ pub fn parse_proxy_options(args: impl IntoIterator<Item = String>) -> Result<Pro
                 if let Some(targets) = &mut options.targets {
                     targets.push(target);
                 }
+            }
+            "--traffic-app" => {
+                i += 1;
+                let app_id = required_value(&args, i, "--traffic-app")?.trim();
+                if app_id.is_empty() {
+                    return Err("--traffic-app requires a non-empty app id".to_string());
+                }
+                options
+                    .traffic_app_ids
+                    .get_or_insert_with(Vec::new)
+                    .push(app_id.to_string());
             }
             "--db" => {
                 i += 1;
@@ -332,6 +356,11 @@ pub fn proxy_options_to_args(options: &ProxyOptions) -> Vec<String> {
         args.extend(["--provider".to_string(), options.provider.clone()]);
         args.extend(["--upstream".to_string(), options.upstream.clone()]);
     }
+    if let Some(app_ids) = &options.traffic_app_ids {
+        for app_id in app_ids {
+            args.extend(["--traffic-app".to_string(), app_id.clone()]);
+        }
+    }
     args.extend(["--db".to_string(), options.vault_path.display().to_string()]);
     match &options.log_path {
         Some(path) => args.extend(["--log".to_string(), path.display().to_string()]),
@@ -366,6 +395,7 @@ pub fn proxy_config(options: &ProxyOptions) -> Result<dam_config::DamConfig, Str
         proxy_target_upstream: options.targets.is_none().then(|| options.upstream.clone()),
         proxy_target_api_key_env: options.targets.is_none().then(String::new),
         proxy_targets: options.targets.clone(),
+        traffic_enabled_app_ids: options.traffic_app_ids.clone(),
         ..dam_config::ConfigOverrides::default()
     };
 
@@ -855,9 +885,13 @@ fn state_from_config(
         user_consented_to_interception,
         dam_intercept::TlsInterceptionAdapter::new(true),
     );
+    let (executable_path, executable_sha256) = current_executable_identity();
+
     Ok(DaemonState {
         version: STATE_VERSION,
         pid: std::process::id(),
+        executable_path,
+        executable_sha256,
         listen: local_addr.to_string(),
         proxy_url: local_base_url(local_addr),
         config_path,
@@ -891,6 +925,28 @@ fn state_from_config(
         transparent_ai_interception_readiness,
         protection_enabled: protection_enabled().unwrap_or(true),
     })
+}
+
+pub fn current_executable_identity() -> (Option<PathBuf>, Option<String>) {
+    let Some(path) = current_executable_path() else {
+        return (None, None);
+    };
+    let sha256 = executable_sha256(&path).ok();
+    (Some(path), sha256)
+}
+
+fn current_executable_path() -> Option<PathBuf> {
+    let path = std::env::current_exe().ok()?;
+    Some(path.canonicalize().unwrap_or(path))
+}
+
+pub fn executable_sha256(path: &Path) -> Result<String, std::io::Error> {
+    let bytes = fs::read(path)?;
+    let digest = Sha256::digest(&bytes);
+    Ok(digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>())
 }
 
 fn transparent_interception_config(
@@ -937,14 +993,18 @@ fn transparent_interception_config(
 }
 
 fn configured_ai_routes(config: &dam_config::DamConfig) -> Vec<dam_net::AiRoute> {
-    dam_net::ai_routes_with_overlays(config.network.ai_routes.iter().map(|route| {
-        dam_net::AiRoute::custom(
-            &route.host,
-            route.provider.clone(),
-            route.target_name.clone(),
-            route.upstream.clone(),
-        )
-    }))
+    let profile = config.traffic.effective_profile();
+    dam_net::ai_routes_with_profile_and_overlays(
+        &profile,
+        config.network.ai_routes.iter().map(|route| {
+            dam_net::AiRoute::custom(
+                &route.host,
+                route.provider.clone(),
+                route.target_name.clone(),
+                route.upstream.clone(),
+            )
+        }),
+    )
 }
 
 fn extend_trust_scope(trust: &mut dam_trust::TrustState, routes: &[dam_net::AiRoute]) {
@@ -1030,11 +1090,14 @@ mod tests {
             config_path: Some(PathBuf::from("dam.toml")),
             listen: "127.0.0.1:9000".to_string(),
             network_mode: dam_net::CaptureMode::SystemProxy,
+            network_mode_explicit: true,
             trust_mode: dam_trust::TrustMode::LocalCa,
+            trust_mode_explicit: true,
             target_name: "xai".to_string(),
             provider: "openai-compatible".to_string(),
             upstream: "https://api.x.ai".to_string(),
             targets: None,
+            traffic_app_ids: Some(vec!["xai-api".to_string()]),
             vault_path: PathBuf::from("vault.db"),
             log_path: None,
             consent_path: Some(PathBuf::from("consent.db")),
@@ -1054,6 +1117,7 @@ mod tests {
                 .unwrap();
 
         assert_eq!(options.network_mode, dam_net::CaptureMode::SystemProxy);
+        assert!(options.network_mode_explicit);
     }
 
     #[test]
@@ -1062,6 +1126,7 @@ mod tests {
             parse_proxy_options(["--trust-mode".to_string(), "local-ca".to_string()]).unwrap();
 
         assert_eq!(options.trust_mode, dam_trust::TrustMode::LocalCa);
+        assert!(options.trust_mode_explicit);
     }
 
     #[test]
@@ -1095,6 +1160,8 @@ mod tests {
     #[test]
     fn proxy_options_round_trip_multiple_targets() {
         let options = ProxyOptions {
+            network_mode_explicit: true,
+            trust_mode_explicit: true,
             targets: Some(vec![
                 dam_config::ProxyTargetConfig {
                     name: "openai".to_string(),
@@ -1144,6 +1211,17 @@ mod tests {
     }
 
     #[test]
+    fn configured_ai_routes_follow_runtime_enabled_traffic_apps() {
+        let mut config = dam_config::DamConfig::default();
+        config.traffic.enabled_app_ids = Some(vec!["anthropic-api".to_string()]);
+
+        let routes = configured_ai_routes(&config);
+
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].host, "api.anthropic.com");
+    }
+
+    #[test]
     fn state_paths_prefer_explicit_state_dir() {
         let paths = state_paths_from_env(
             Some(PathBuf::from("/tmp/dam-state")),
@@ -1172,6 +1250,8 @@ mod tests {
         let state = DaemonState {
             version: STATE_VERSION,
             pid: 123,
+            executable_path: Some(PathBuf::from("/usr/local/bin/dam")),
+            executable_sha256: Some("abc123".to_string()),
             listen: "127.0.0.1:7828".to_string(),
             proxy_url: "http://127.0.0.1:7828".to_string(),
             config_path: Some(PathBuf::from("dam.toml")),

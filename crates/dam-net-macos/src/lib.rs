@@ -573,9 +573,6 @@ fn pac_content_for_hosts(proxy_url: &str, ai_hosts: &[String]) -> String {
 
 fn default_ai_hosts() -> Vec<String> {
     dam_net::known_ai_hosts()
-        .into_iter()
-        .map(str::to_string)
-        .collect()
 }
 
 fn normalized_ai_hosts(hosts: &[String]) -> Vec<String> {

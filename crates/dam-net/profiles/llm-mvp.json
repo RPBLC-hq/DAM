@@ -1,0 +1,106 @@
+{
+  "version": 1,
+  "name": "llm_mvp",
+  "default_action": "bypass",
+  "apps": [
+    {
+      "id": "openai-api",
+      "name": "OpenAI API",
+      "enabled": true,
+      "priority": 0,
+      "match": {
+        "domains": ["api.openai.com"],
+        "ports": [443],
+        "protocols": ["https", "web_socket"]
+      },
+      "action": "inspect",
+      "adapter": "http",
+      "provider": "openai-compatible",
+      "target_name": "openai",
+      "upstream": "https://api.openai.com",
+      "traffic_kind": "open_ai_api",
+      "steps": [
+        {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
+        {"id": "consent", "kind": "apply_consents", "direction": "outbound"},
+        {"id": "tokenize", "kind": "replace_sensitive_data", "direction": "outbound"},
+        {"id": "resolve", "kind": "resolve_references", "direction": "inbound"}
+      ],
+      "outbound": {"filter": {"default_action": "tokenize"}},
+      "inbound": {"resolve_references": true}
+    },
+    {
+      "id": "anthropic-api",
+      "name": "Anthropic API",
+      "enabled": true,
+      "priority": 0,
+      "match": {
+        "domains": ["api.anthropic.com"],
+        "ports": [443],
+        "protocols": ["https", "web_socket"]
+      },
+      "action": "inspect",
+      "adapter": "http",
+      "provider": "anthropic",
+      "target_name": "anthropic",
+      "upstream": "https://api.anthropic.com",
+      "traffic_kind": "anthropic_api",
+      "steps": [
+        {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
+        {"id": "consent", "kind": "apply_consents", "direction": "outbound"},
+        {"id": "tokenize", "kind": "replace_sensitive_data", "direction": "outbound"},
+        {"id": "resolve", "kind": "resolve_references", "direction": "inbound"}
+      ],
+      "outbound": {"filter": {"default_action": "tokenize"}},
+      "inbound": {"resolve_references": true}
+    },
+    {
+      "id": "xai-api",
+      "name": "xAI API",
+      "enabled": true,
+      "priority": 0,
+      "match": {
+        "domains": ["api.x.ai"],
+        "ports": [443],
+        "protocols": ["https", "web_socket"]
+      },
+      "action": "inspect",
+      "adapter": "http",
+      "provider": "openai-compatible",
+      "target_name": "xai",
+      "upstream": "https://api.x.ai",
+      "traffic_kind": "xai_api",
+      "steps": [
+        {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
+        {"id": "consent", "kind": "apply_consents", "direction": "outbound"},
+        {"id": "tokenize", "kind": "replace_sensitive_data", "direction": "outbound"},
+        {"id": "resolve", "kind": "resolve_references", "direction": "inbound"}
+      ],
+      "outbound": {"filter": {"default_action": "tokenize"}},
+      "inbound": {"resolve_references": true}
+    },
+    {
+      "id": "chatgpt-codex",
+      "name": "ChatGPT Codex",
+      "enabled": true,
+      "priority": 0,
+      "match": {
+        "domains": ["chatgpt.com"],
+        "ports": [443],
+        "protocols": ["https", "web_socket"]
+      },
+      "action": "inspect",
+      "adapter": "web_socket",
+      "provider": "openai-compatible",
+      "target_name": "chatgpt-codex",
+      "upstream": "https://chatgpt.com",
+      "traffic_kind": "chat_gpt_codex_backend",
+      "steps": [
+        {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
+        {"id": "consent", "kind": "apply_consents", "direction": "outbound"},
+        {"id": "tokenize", "kind": "replace_sensitive_data", "direction": "outbound"}
+      ],
+      "outbound": {"filter": {"default_action": "tokenize"}},
+      "inbound": {"resolve_references": false}
+    }
+  ]
+}

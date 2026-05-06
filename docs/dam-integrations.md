@@ -1,6 +1,6 @@
 # dam-integrations
 
-`dam-integrations` defines known local harness profiles for the background DAM proxy/interception endpoint and owns the deterministic apply/rollback engine behind those profiles.
+`dam-integrations` loads known local harness profiles for the background DAM proxy/interception endpoint and owns the deterministic apply/rollback engine behind those profiles.
 
 The first slice is intentionally local and reversible. It does not install system proxy settings or write secrets. It tells `dam` and future installer/tray surfaces how a harness should route normal provider traffic through the connected daemon, and it prepares safe file mutations with backup records when a profile has a known write path.
 
@@ -21,7 +21,9 @@ dam connect --apply
 
 `dam integrations list` shows known profiles. `dam integrations show` renders the local settings and command snippets for one profile. `dam connect --profile` uses daemon-side defaults for profiles that need a specific provider/upstream. Add `--apply` only when you also want to write that profile's reversible local setup before connecting.
 
-`dam profile set <id>` writes the legacy active local harness profile under DAM's integration state directory. The tray/web Settings flow writes enabled app profile state under the same integration directory. `dam profile status` reports the active profile, enabled profiles, effective proxy URL, and apply state for enabled profile targets. `dam connect` uses enabled profiles when present and falls back to the active profile when no enabled state exists.
+Connect app profiles are bundled JSON files under `crates/dam-integrations/profiles/`. Adding a manual profile is a data change: create a JSON profile with display metadata, connect args, optional explicit-proxy fallback settings, and `traffic_app_ids` that map to app IDs in the active `dam-net` traffic profile. Code should not be added for each new app.
+
+`dam profile set <id>` writes the legacy active local harness profile under DAM's integration state directory. The tray/web Settings flow writes enabled app profile state under the same integration directory. `dam profile status` reports the active profile, enabled profiles, effective proxy URL, and apply state for enabled profile targets. `dam connect` uses enabled profiles when present and falls back to the active profile when no enabled state exists. During connect, enabled profile IDs become `traffic.enabled_apps` runtime overrides, so only the selected traffic profile apps are mediated by the daemon.
 
 `dam integrations apply` previews explicit-proxy fallback setup by default. Add `--write` to call the `dam-integrations` apply engine and write profile setup to a safe target with a rollback record:
 
@@ -86,18 +88,19 @@ When `--proxy-url` is omitted, `dam` uses the connected daemon state if availabl
 
 | Profile | Purpose | Daemon target |
 |---|---|---|
-| `openai-compatible` | Generic OpenAI-compatible SDK or harness using DAM as its HTTP(S) proxy while keeping the normal provider endpoint. | OpenAI-compatible default upstream. |
-| `anthropic` | Generic Anthropic-compatible harness using DAM as its HTTP(S) proxy while keeping the normal Anthropic endpoint. | Anthropic default upstream. |
-| `claude-code` | Claude Code using DAM as its HTTP(S) proxy while keeping the normal Anthropic endpoint. | Anthropic default upstream. |
-| `codex-api` | Codex API-key mode using DAM as its HTTP(S) proxy while keeping the normal OpenAI endpoint. | OpenAI-compatible default upstream. |
-| `codex-chatgpt` | Codex ChatGPT-login mode using Network Extension capture and the WebSocket adapter while keeping the normal ChatGPT login/session flow. | `https://chatgpt.com` through the OpenAI-compatible target shape. |
-| `xai-compatible` | xAI traffic using DAM as its HTTP(S) proxy while keeping the normal xAI endpoint. | `https://api.x.ai` through the OpenAI-compatible provider adapter. |
+| `openai-compatible` | Generic OpenAI-compatible SDK or harness using DAM as its HTTP(S) proxy while keeping the normal provider endpoint. | `traffic_app_ids = ["openai-api"]`. |
+| `anthropic` | Generic Anthropic-compatible harness using DAM as its HTTP(S) proxy while keeping the normal Anthropic endpoint. | `traffic_app_ids = ["anthropic-api"]`. |
+| `claude-code` | Claude Code using DAM as its HTTP(S) proxy while keeping the normal Anthropic endpoint. | `traffic_app_ids = ["anthropic-api"]`. |
+| `codex-api` | Codex API-key mode using DAM as its HTTP(S) proxy while keeping the normal OpenAI endpoint. | `traffic_app_ids = ["openai-api"]`. |
+| `codex-chatgpt` | Codex ChatGPT-login mode using Network Extension capture and the WebSocket adapter while keeping the normal ChatGPT login/session flow. | `traffic_app_ids = ["chatgpt-codex"]`. |
+| `xai-compatible` | xAI traffic using DAM as its HTTP(S) proxy while keeping the normal xAI endpoint. | `traffic_app_ids = ["xai-api"]`. |
 
 ## Apply Contract
 
 `dam-integrations` owns:
 
 - enabled app profile state and legacy active local profile state;
+- bundled JSON profile loading from `crates/dam-integrations/profiles/`;
 - default target path selection for known profiles;
 - desired file content generation;
 - dry-run planning;
@@ -127,4 +130,4 @@ Profiles may contain:
 - Other profiles write DAM-managed proxy environment files for explicit-proxy fallback rather than mutating shell, Codex provider config, or unknown harness config.
 - No model discovery is performed.
 - `dam-integrations` does not install system proxy, Network Extension, TLS trust, or protocol adapters. Claude Code and Codex proxy routing require local CA readiness when DAM decrypts selected Anthropic/OpenAI/ChatGPT traffic.
-- `dam connect --profile <id>` starts one explicit profile target. `dam connect` with multiple enabled profiles can start one daemon with multiple provider targets. `--apply` additionally writes reversible profile setup when explicitly requested.
+- `dam connect --profile <id>` starts one explicit profile target and enables the matching traffic app IDs. `dam connect` with multiple enabled profiles can start one daemon with multiple provider targets and a narrowed active traffic profile. `--apply` additionally writes reversible profile setup when explicitly requested.

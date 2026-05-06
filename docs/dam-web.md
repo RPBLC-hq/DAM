@@ -22,7 +22,7 @@ The app frame is a React shell served from `/assets/dam-web-ui.js`. Rust still r
 /health    health check
 ```
 
-Wallet-row Allowed state is exact-value based. If duplicate wallet rows hold the same value, an active consent grant from one row appears as allowed on every matching row, and protecting it again stops passthrough for that exact value.
+Wallet-row Allowed state is canonical-value based. If duplicate wallet rows hold the same canonical value, an active consent grant from one row appears as allowed on every matching row, and protecting it again stops passthrough for that canonical value.
 
 The wallet and logs support ordering. Wallet uses a single cycle sort button and defaults to most recently seen first; logs keep table header ordering. They use query parameters:
 
@@ -31,9 +31,9 @@ The wallet and logs support ordering. Wallet uses a single cycle sort button and
 /logs?sort=time&dir=desc
 ```
 
-`/connect` uses the enabled integration state managed by `dam-integrations`. It can enable or disable known app profiles, start DAM, pause protection, and expose apply/rollback controls when rollback records are available. The primary Connect action consumes the shared `dam-diagnostics` setup plan and advances setup in order: explicit proxy fallback for enabled CLI profiles, macOS Network Extension routing, local CA trust, then daemon connect. Routing and trust changes require a short confirmation before the web UI shells out to `dam network ... --yes` or `dam trust ... --yes`. The final daemon start uses `dam connect --apply --network-mode tun --trust-mode local_ca` when apps are enabled; enabled profiles select the daemon targets and keep reversible proxy setup as a fallback for source builds and unsupported environments. Pause calls `dam disconnect`, which leaves the daemon active in pass-through mode so running clients keep network connectivity. Resuming protection closes selected-AI pass-through tunnels opened while paused and lets the client reconnect through protected interception. Full restore/stop remains an explicit CLI path.
+`/connect` uses the enabled integration state managed by `dam-integrations`. It can enable or disable known app profiles, start DAM, pause protection, and expose apply/rollback controls when rollback records are available. The primary Connect action consumes the shared `dam-diagnostics` setup plan and advances setup in order: explicit proxy fallback for enabled CLI profiles, macOS Network Extension routing, local CA trust, then daemon connect. Routing and trust changes require a short confirmation before the web UI shells out to `dam network ... --yes` or `dam trust ... --yes`. The final daemon start uses `dam connect --apply --network-mode tun --trust-mode local_ca` when apps are enabled; enabled profiles select the daemon targets and keep reversible proxy setup as a fallback for source builds and unsupported environments. Pause calls `dam disconnect`, which leaves the daemon active in pass-through mode so running clients keep network connectivity. Resuming protection is idempotent for the current daemon setup and closes selected-AI pass-through tunnels opened while paused so the client reconnects through protected interception. If the daemon state is stale, the next connect clears it before starting fresh. Full restore/stop remains an explicit CLI path.
 
-Without enabled apps, the visible default is Protect Everything and Connect uses the default OpenAI-compatible target. With one or more enabled apps, the same Connect action applies reversible explicit-proxy fallback and starts one daemon with the required provider targets. The Apps toggle shows enabled apps inline, with the chevron at the far right. App profiles are shown as compact two-line rows with technical details behind disclosure. `/settings` exposes a compact theme segmented control plus app enable/disable controls rendered in the shared AppIntegrationCard pattern. `dam-tray` hosts this route in a native desktop shell.
+Without enabled apps, the visible default is Protect Everything and Connect uses the bundled traffic profile. With one or more enabled JSON app profiles, the same Connect action applies reversible explicit-proxy fallback and starts one daemon with the required provider targets plus the matching `traffic.enabled_apps` runtime filter. The Apps toggle shows enabled apps inline, with the chevron at the far right. App profiles are shown as compact two-line rows with technical details behind disclosure. `/settings` exposes a compact theme segmented control plus app enable/disable controls rendered in the shared AppIntegrationCard pattern. `dam-tray` hosts this route in a native desktop shell.
 
 When `DAM_WEB_SHELL=tray`, `dam-web` renders a compact tray shell with a navbar power-icon Quit tray button and routes the `[R:]` brand link through the native tray bridge so `https://rpblc.com` opens in the default browser. The tray-hosted Connect button is routed through native IPC so system trust prompts originate from `dam-tray`, not from the hosted web child. If `DAM_WEB_TRAY_POST_TOKEN` is set, tray-mode pages attach that token to same-origin POST form actions so embedded WebView submits do not depend on `Origin` / `Referer` headers. Browser mode remains the default and keeps the normal local-origin POST guard.
 
@@ -84,7 +84,7 @@ Remote vault/consent/log views are not implemented yet.
 
 ## Security Posture
 
-This UI displays vault values in clear text and can allow/protect exact values. Treat it as a local development/admin tool, not a public-facing service.
+This UI displays vault values in clear text and can allow/protect canonical values. Treat it as a local development/admin tool, not a public-facing service.
 
 Connect/settings mutation routes are POST-only and use the same local Host and Origin/Referer guardrails as consent mutation routes.
 

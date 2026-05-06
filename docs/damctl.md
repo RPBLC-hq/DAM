@@ -92,7 +92,7 @@ It checks:
 - proxy runtime `/health` when proxy is enabled;
 - default setup-plan readiness for the local proxy/interception connect flow;
 - integration profile apply state summary;
-- readiness for fail-closed legacy launchers and Codex ChatGPT-login mode.
+- enabled integration profile and Codex ChatGPT-login setup readiness.
 
 Exit codes:
 
@@ -193,7 +193,7 @@ It reports:
 - macOS PAC rollback record path;
 - generated PAC path;
 - whether DAM sees system-proxy routing installed;
-- built-in AI hosts plus configured `[network.ai_routes]` when `--config` is supplied;
+- active traffic-profile hosts plus configured `[network.ai_routes]` legacy overlays when `--config` is supplied;
 - per-route system-proxy readiness.
 
 Use `--state-dir PATH` to inspect a non-default daemon state directory. Use `--config PATH` to preview route readiness with configured AI route overlays before starting the daemon or applying system proxy routing.

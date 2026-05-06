@@ -17,7 +17,7 @@ Status: implemented first extraction.
 - router target/provider/auth/failure-mode decisions;
 - proxy runtime `/health` reachability when proxy is enabled;
 - a read-only setup plan summary for the default local proxy/interception path;
-- readiness notes for fail-closed legacy launchers and Codex ChatGPT-login mode.
+- enabled integration profile and Codex ChatGPT-login setup readiness.
 
 `setup_plan` emits a side-effect-free setup checklist for the local "connect" UX. It evaluates:
 
