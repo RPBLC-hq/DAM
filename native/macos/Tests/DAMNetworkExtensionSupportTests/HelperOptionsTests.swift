@@ -1,4 +1,5 @@
 import XCTest
+
 @testable import DAMNetworkExtensionSupport
 
 final class HelperOptionsTests: XCTestCase {
@@ -22,12 +23,18 @@ final class HelperOptionsTests: XCTestCase {
         XCTAssertEqual(options.displayName, "DAM Network Protection")
         XCTAssertEqual(options.runtimeConfiguration.proxyHost, "127.0.0.1")
         XCTAssertEqual(options.runtimeConfiguration.proxyPort, 7828)
-        XCTAssertEqual(options.runtimeConfiguration.protectedHosts, [
-            "api.openai.com",
-            "api.anthropic.com",
-        ])
+        XCTAssertEqual(
+            options.runtimeConfiguration.protectedHosts,
+            [
+                "api.openai.com",
+                "api.anthropic.com",
+            ])
         XCTAssertEqual(options.runtimeConfiguration.routingFailurePolicy, .failClosed)
-        XCTAssertTrue(options.runtimeConfiguration.shouldBypassSource(signingIdentifier: "com.rpblc.dam.proxy"))
+        XCTAssertTrue(
+            options.runtimeConfiguration.shouldBypassSource(
+                signingIdentifier: "com.rpblc.dam.proxy",
+                processPath: "/Applications/DAM.app/Contents/MacOS/dam-proxy"
+            ))
     }
 
     func testParseRequiresBundleIdentifier() {
@@ -46,6 +53,51 @@ final class HelperOptionsTests: XCTestCase {
         XCTAssertEqual(configuration.routingFailurePolicy, .failOpen)
     }
 
+    func testMissingProviderConfigurationIsInert() {
+        let configuration = DAMProxyRuntimeConfiguration(providerConfiguration: nil)
+
+        XCTAssertEqual(configuration.protectedHosts, [])
+        XCTAssertFalse(configuration.shouldProtect(host: "api.openai.com"))
+        XCTAssertFalse(configuration.shouldProtect(host: "api.anthropic.com"))
+    }
+
+    func testProviderConfigurationWithoutProtectedHostsIsInert() {
+        let configuration = DAMProxyRuntimeConfiguration(providerConfiguration: [
+            DAMProviderConfigurationKey.proxyHost: "127.0.0.1",
+            DAMProviderConfigurationKey.proxyPort: 7828,
+        ])
+
+        XCTAssertEqual(configuration.protectedHosts, [])
+        XCTAssertFalse(configuration.shouldProtect(host: "api.openai.com"))
+    }
+
+    func testDefaultSourceBypassRequiresSignedDamBundleSource() {
+        let configuration = DAMProxyRuntimeConfiguration()
+
+        XCTAssertTrue(
+            configuration.shouldBypassSource(
+                signingIdentifier: "com.rpblc.dam.proxy",
+                processPath: "/Applications/DAM.app/Contents/MacOS/dam-proxy"
+            ))
+        XCTAssertTrue(
+            configuration.shouldBypassSource(
+                signingIdentifier: "com.rpblc.dam.web",
+                processPath: "/Applications/DAM.app/Contents/MacOS/dam-web"
+            ))
+        XCTAssertFalse(configuration.shouldBypassSource(signingIdentifier: "com.rpblc.dam.proxy"))
+        XCTAssertFalse(configuration.shouldBypassSource(signingIdentifier: "dam-proxy"))
+        XCTAssertFalse(
+            configuration.shouldBypassSource(
+                signingIdentifier: nil, processPath: "/Applications/DAM.app/Contents/MacOS/dam-proxy"))
+        XCTAssertFalse(
+            configuration.shouldBypassSource(
+                signingIdentifier: "com.rpblc.dam.proxy", processPath: "/Users/alex/dam-proxy"))
+        XCTAssertFalse(
+            configuration.shouldBypassSource(
+                signingIdentifier: "com.example.app",
+                processPath: "/Applications/Example.app/Contents/MacOS/example"))
+    }
+
     func testParseNoProtectedHostsDisablesDefaultProtectedHosts() throws {
         let options = try parseHelperOptions([
             "install",
@@ -62,17 +114,20 @@ final class HelperOptionsTests: XCTestCase {
             routingFailurePolicy: .failClosed
         )
 
-        let decoded = DAMProxyRuntimeConfiguration(providerConfiguration: configuration.providerConfiguration)
+        let decoded = DAMProxyRuntimeConfiguration(
+            providerConfiguration: configuration.providerConfiguration)
 
         XCTAssertEqual(decoded.routingFailurePolicy, .failClosed)
     }
 
     func testParseRejectsUnknownRoutingFailurePolicy() {
-        XCTAssertThrowsError(try parseHelperOptions([
-            "install",
-            "--bundle-id", "com.rpblc.dam.network-extension",
-            "--routing-failure-policy", "strict",
-        ])) { error in
+        XCTAssertThrowsError(
+            try parseHelperOptions([
+                "install",
+                "--bundle-id", "com.rpblc.dam.network-extension",
+                "--routing-failure-policy", "strict",
+            ])
+        ) { error in
             XCTAssertEqual(error as? DAMHelperArgumentError, .invalidRoutingFailurePolicy("strict"))
         }
     }
