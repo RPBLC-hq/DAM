@@ -5,7 +5,6 @@
   "provider": "openai-compatible",
   "traffic_app_ids": ["openai-api", "chatgpt-codex"],
   "connect_args": [
-    "--openai",
     "--network-mode",
     "tun",
     "--trust-mode",

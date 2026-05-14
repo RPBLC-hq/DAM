@@ -233,7 +233,7 @@ struct NetworkInspectReport {
     pac_path: PathBuf,
     support: &'static str,
     system_proxy_installed: bool,
-    known_ai_hosts: Vec<String>,
+    configured_hosts: Vec<String>,
     route_readiness: Vec<dam_net::TransparentRouteCaptureReadiness>,
 }
 
@@ -812,7 +812,7 @@ fn trust_inspect_report(args: &TrustInspectArgs) -> Result<TrustInspectReport, S
     };
     let local_ca_artifact = dam_trust::inspect_local_ca_artifact(&paths.state_dir)
         .map_err(|error| error.to_string())?;
-    let route_readiness = dam_trust::readiness_for_known_ai_routes(
+    let route_readiness = dam_trust::readiness_for_default_routes(
         &trust,
         trust.mode == dam_trust::TrustMode::LocalCa,
     );
@@ -843,14 +843,14 @@ fn network_inspect_report(args: &NetworkInspectArgs) -> Result<NetworkInspectRep
     let paths = daemon_state_paths(args.state_dir.clone())?;
     let network_paths = dam_net_macos::MacosNetworkPaths::for_state_dir(&paths.state_dir);
     let system_proxy_installed = dam_net_macos::system_proxy_installed(&paths.state_dir);
-    let ai_routes = network_inspect_ai_routes(args.config_path.clone())?;
-    let route_readiness = dam_net::transparent_capture_readiness_for_ai_routes(
-        &ai_routes,
+    let traffic_routes = network_inspect_traffic_routes(args.config_path.clone())?;
+    let route_readiness = dam_net::transparent_capture_readiness_for_routes(
+        &traffic_routes,
         dam_net::CaptureMode::SystemProxy,
         system_proxy_installed,
         false,
     );
-    let known_ai_hosts = ai_routes
+    let configured_hosts = traffic_routes
         .iter()
         .map(|route| route.host.clone())
         .collect::<Vec<_>>();
@@ -875,23 +875,23 @@ fn network_inspect_report(args: &NetworkInspectArgs) -> Result<NetworkInspectRep
             "planned"
         },
         system_proxy_installed,
-        known_ai_hosts,
+        configured_hosts,
         route_readiness,
     })
 }
 
-fn network_inspect_ai_routes(
+fn network_inspect_traffic_routes(
     config_path: Option<PathBuf>,
-) -> Result<Vec<dam_net::AiRoute>, String> {
+) -> Result<Vec<dam_net::TrafficRoute>, String> {
     let Some(config_path) = config_path else {
-        return Ok(dam_net::known_ai_routes());
+        return Ok(dam_net::default_traffic_routes());
     };
     let config = dam_config::load(&dam_config::ConfigOverrides {
         config_path: Some(config_path),
         ..dam_config::ConfigOverrides::default()
     })
     .map_err(|error| error.to_string())?;
-    Ok(dam_net::ai_routes_from_profile(
+    Ok(dam_net::traffic_routes_from_profile(
         &config.traffic.effective_profile(),
     ))
 }
@@ -1203,14 +1203,14 @@ fn render_daemon_inspect_report(report: &DaemonInspectReport) -> String {
             state.protection_enabled
         ));
         output.push_str(&format!(
-            "transparent_ai_routes: {}\n",
-            state.transparent_ai_routes.len()
+            "transparent_routes: {}\n",
+            state.transparent_routes.len()
         ));
         output.push_str(&format!(
             "routing_routes: {}\n",
-            state.transparent_ai_routing_readiness.len()
+            state.transparent_routing_readiness.len()
         ));
-        for route in &state.transparent_ai_routing_readiness {
+        for route in &state.transparent_routing_readiness {
             output.push_str(&format!(
                 "routing_route {}: {} - {}\n",
                 route.route.target_name, route.readiness, route.message
@@ -1223,14 +1223,14 @@ fn render_daemon_inspect_report(report: &DaemonInspectReport) -> String {
             state.trust.local_ca_installed()
         ));
         output.push_str(&format!(
-            "trusted_ai_hosts: {}\n",
+            "trusted_hosts: {}\n",
             state.trust.allowed_hosts.len()
         ));
         output.push_str(&format!(
             "trust_routes: {}\n",
-            state.transparent_ai_trust_readiness.len()
+            state.transparent_trust_readiness.len()
         ));
-        for route in &state.transparent_ai_trust_readiness {
+        for route in &state.transparent_trust_readiness {
             output.push_str(&format!(
                 "trust_route {}: {} - {}\n",
                 route.route.target_name, route.readiness, route.message
@@ -1238,9 +1238,9 @@ fn render_daemon_inspect_report(report: &DaemonInspectReport) -> String {
         }
         output.push_str(&format!(
             "interception_routes: {}\n",
-            state.transparent_ai_interception_readiness.len()
+            state.transparent_interception_readiness.len()
         ));
-        for route in &state.transparent_ai_interception_readiness {
+        for route in &state.transparent_interception_readiness {
             output.push_str(&format!(
                 "interception_route {}: {} - {}\n",
                 route.route.target_name, route.readiness, route.message
@@ -1286,7 +1286,7 @@ fn render_trust_inspect_report(report: &TrustInspectReport) -> String {
         report.trust.local_ca_installed()
     ));
     output.push_str(&format!(
-        "trusted_ai_hosts: {}\n",
+        "trusted_hosts: {}\n",
         report.trust.allowed_hosts.len()
     ));
     match &report.local_ca_artifact {
@@ -1344,11 +1344,11 @@ fn render_network_inspect_report(report: &NetworkInspectReport) -> String {
     ));
     output.push_str(&format!("pac_file: {}\n", report.pac_path.display()));
     output.push_str(&format!(
-        "known_ai_hosts: {}\n",
-        report.known_ai_hosts.len()
+        "configured_hosts: {}\n",
+        report.configured_hosts.len()
     ));
-    for host in &report.known_ai_hosts {
-        output.push_str(&format!("known_ai_host: {host}\n"));
+    for host in &report.configured_hosts {
+        output.push_str(&format!("configured_host: {host}\n"));
     }
     output.push_str(&format!(
         "routing_routes: {}\n",
@@ -2526,21 +2526,21 @@ mod tests {
         assert!(output.stdout.contains("process: running"));
         assert!(output.stdout.contains("target: openai"));
         assert!(output.stdout.contains("network_mode: explicit_proxy"));
-        assert!(output.stdout.contains("transparent_ai_routes: 3"));
-        assert!(output.stdout.contains("routing_routes: 3"));
+        assert!(output.stdout.contains("transparent_routes: 4"));
+        assert!(output.stdout.contains("routing_routes: 4"));
         assert!(output.stdout.contains(
             "routing_route openai: ready - explicit proxy routing is active for clients configured to use DAM"
         ));
         assert!(output.stdout.contains("trust_mode: disabled"));
         assert!(output.stdout.contains("local_ca_installed: false"));
-        assert!(output.stdout.contains("trusted_ai_hosts: 3"));
-        assert!(output.stdout.contains("trust_routes: 3"));
+        assert!(output.stdout.contains("trusted_hosts: 4"));
+        assert!(output.stdout.contains("trust_routes: 4"));
         assert!(
             output
                 .stdout
                 .contains("trust_route openai: disabled - TLS interception is disabled")
         );
-        assert!(output.stdout.contains("interception_routes: 3"));
+        assert!(output.stdout.contains("interception_routes: 4"));
         assert!(output.stdout.contains(
             "interception_route openai: needs_user_consent - TLS interception requires explicit user approval"
         ));
@@ -2566,7 +2566,7 @@ mod tests {
         assert!(output.stdout.contains("trust_mode: disabled"));
         assert!(output.stdout.contains("local_ca_installed: false"));
         assert!(output.stdout.contains("local_ca_artifact: missing"));
-        assert!(output.stdout.contains("trust_routes: 3"));
+        assert!(output.stdout.contains("trust_routes: 4"));
         assert!(output.stdout.contains("action inspect: implemented"));
         let expected_install_support = if dam_trust::PlatformTrustStore::current()
             == dam_trust::PlatformTrustStore::MacosKeychain
@@ -2602,7 +2602,7 @@ mod tests {
             report["local_ca_artifact"]["record"]["installed_at_unix"],
             serde_json::Value::Null
         );
-        assert_eq!(report["route_readiness"].as_array().unwrap().len(), 3);
+        assert_eq!(report["route_readiness"].as_array().unwrap().len(), 4);
     }
 
     #[test]
@@ -2623,7 +2623,7 @@ mod tests {
         let report: serde_json::Value = serde_json::from_str(&output.stdout).unwrap();
         assert_eq!(report["source"], "daemon");
         assert_eq!(report["trust"]["mode"], "local_ca");
-        assert_eq!(report["route_readiness"].as_array().unwrap().len(), 3);
+        assert_eq!(report["route_readiness"].as_array().unwrap().len(), 4);
         assert_eq!(report["actions"].as_array().unwrap().len(), 3);
     }
 
@@ -2641,7 +2641,7 @@ mod tests {
         assert_eq!(output.code, 0);
         assert!(output.stdout.contains("state: not_installed"));
         assert!(output.stdout.contains("system_proxy_installed: false"));
-        assert!(output.stdout.contains("known_ai_hosts: 3"));
+        assert!(output.stdout.contains("configured_hosts: 4"));
         assert!(
             output
                 .stdout
@@ -2672,8 +2672,8 @@ mod tests {
         let report: serde_json::Value = serde_json::from_str(&output.stdout).unwrap();
         assert_eq!(report["state"], "installed");
         assert_eq!(report["system_proxy_installed"], true);
-        assert_eq!(report["known_ai_hosts"].as_array().unwrap().len(), 3);
-        assert_eq!(report["route_readiness"].as_array().unwrap().len(), 3);
+        assert_eq!(report["configured_hosts"].as_array().unwrap().len(), 4);
+        assert_eq!(report["route_readiness"].as_array().unwrap().len(), 4);
         assert_eq!(report["route_readiness"][0]["readiness"], "ready");
     }
 
@@ -2720,9 +2720,9 @@ mod tests {
 
         assert_eq!(output.code, 0);
         let report: serde_json::Value = serde_json::from_str(&output.stdout).unwrap();
-        assert_eq!(report["known_ai_hosts"].as_array().unwrap().len(), 1);
+        assert_eq!(report["configured_hosts"].as_array().unwrap().len(), 1);
         assert!(
-            report["known_ai_hosts"]
+            report["configured_hosts"]
                 .as_array()
                 .unwrap()
                 .iter()
@@ -2950,7 +2950,7 @@ mod tests {
     }
 
     #[test]
-    fn config_check_accepts_anthropic_provider() {
+    fn config_check_accepts_provider_labels() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_config(
             dir.path(),
@@ -2979,10 +2979,12 @@ mod tests {
         assert_eq!(output.code, 0);
         let report: dam_api::HealthReport = serde_json::from_str(&output.stdout).unwrap();
         assert_ne!(report.state, dam_api::HealthState::Unhealthy);
-        assert!(!report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "proxy_config_invalid"
-                && diagnostic.message.contains("unsupported provider")
-        }));
+        assert!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "proxy_config_invalid")
+        );
     }
 
     #[test]
@@ -3026,19 +3028,19 @@ mod tests {
             proxy_targets: Vec::new(),
             started_at_unix: 1_700_000_000,
             network_mode: dam_net::CaptureMode::ExplicitProxy,
-            transparent_ai_routes: dam_net::known_ai_routes(),
-            transparent_ai_routing_readiness:
-                dam_net::transparent_capture_readiness_for_known_ai_routes(
+            transparent_routes: dam_net::default_traffic_routes(),
+            transparent_routing_readiness:
+                dam_net::transparent_capture_readiness_for_default_routes(
                     dam_net::CaptureMode::ExplicitProxy,
                     false,
                     false,
                 ),
             trust: dam_trust::TrustState::default(),
-            transparent_ai_trust_readiness: dam_trust::readiness_for_known_ai_routes(
+            transparent_trust_readiness: dam_trust::readiness_for_default_routes(
                 &dam_trust::TrustState::default(),
                 false,
             ),
-            transparent_ai_interception_readiness: dam_intercept::readiness_for_known_ai_routes(
+            transparent_interception_readiness: dam_intercept::readiness_for_default_routes(
                 dam_net::CaptureMode::ExplicitProxy,
                 false,
                 false,

@@ -145,7 +145,7 @@ pub struct MacosSystemProxyPlan {
     pub paths: MacosNetworkPaths,
     pub proxy_url: String,
     pub pac_url: String,
-    pub ai_hosts: Vec<String>,
+    pub protected_hosts: Vec<String>,
     pub services: Vec<MacosSystemProxyServiceState>,
     pub commands: Vec<MacosNetworkCommand>,
     pub requires_admin: bool,
@@ -182,17 +182,17 @@ pub fn preview_install_system_proxy(
     state_dir: impl AsRef<Path>,
     proxy_url: &str,
 ) -> Result<MacosSystemProxyResult, MacosNetworkError> {
-    let hosts = default_ai_hosts();
+    let hosts = default_protected_hosts();
     preview_install_system_proxy_for_hosts(state_dir, proxy_url, &hosts)
 }
 
 pub fn preview_install_system_proxy_for_hosts(
     state_dir: impl AsRef<Path>,
     proxy_url: &str,
-    ai_hosts: &[String],
+    protected_hosts: &[String],
 ) -> Result<MacosSystemProxyResult, MacosNetworkError> {
     ensure_macos()?;
-    let plan = install_plan_for_hosts(state_dir, proxy_url, ai_hosts, &NetworkSetupRunner)?;
+    let plan = install_plan_for_hosts(state_dir, proxy_url, protected_hosts, &NetworkSetupRunner)?;
     Ok(MacosSystemProxyResult {
         state: if plan.can_execute {
             MacosSystemProxyResultState::Preview
@@ -227,17 +227,22 @@ pub fn install_system_proxy(
     state_dir: impl AsRef<Path>,
     proxy_url: &str,
 ) -> Result<MacosSystemProxyResult, MacosNetworkError> {
-    let hosts = default_ai_hosts();
+    let hosts = default_protected_hosts();
     install_system_proxy_for_hosts(state_dir, proxy_url, &hosts)
 }
 
 pub fn install_system_proxy_for_hosts(
     state_dir: impl AsRef<Path>,
     proxy_url: &str,
-    ai_hosts: &[String],
+    protected_hosts: &[String],
 ) -> Result<MacosSystemProxyResult, MacosNetworkError> {
     ensure_macos()?;
-    install_system_proxy_for_hosts_with_runner(state_dir, proxy_url, ai_hosts, &NetworkSetupRunner)
+    install_system_proxy_for_hosts_with_runner(
+        state_dir,
+        proxy_url,
+        protected_hosts,
+        &NetworkSetupRunner,
+    )
 }
 
 pub fn remove_system_proxy(
@@ -254,17 +259,17 @@ fn install_system_proxy_with_runner(
     proxy_url: &str,
     runner: &impl Runner,
 ) -> Result<MacosSystemProxyResult, MacosNetworkError> {
-    let hosts = default_ai_hosts();
+    let hosts = default_protected_hosts();
     install_system_proxy_for_hosts_with_runner(state_dir, proxy_url, &hosts, runner)
 }
 
 fn install_system_proxy_for_hosts_with_runner(
     state_dir: impl AsRef<Path>,
     proxy_url: &str,
-    ai_hosts: &[String],
+    protected_hosts: &[String],
     runner: &impl Runner,
 ) -> Result<MacosSystemProxyResult, MacosNetworkError> {
-    let plan = install_plan_for_hosts(&state_dir, proxy_url, ai_hosts, runner)?;
+    let plan = install_plan_for_hosts(&state_dir, proxy_url, protected_hosts, runner)?;
     if !plan.can_execute {
         return Ok(MacosSystemProxyResult {
             state: MacosSystemProxyResultState::AlreadyInstalled,
@@ -288,7 +293,7 @@ fn install_system_proxy_for_hosts_with_runner(
     };
     write_atomic(
         &plan.paths.pac_path,
-        pac_content_for_hosts(&plan.proxy_url, &plan.ai_hosts).as_bytes(),
+        pac_content_for_hosts(&plan.proxy_url, &plan.protected_hosts).as_bytes(),
         0o644,
     )?;
 
@@ -343,24 +348,24 @@ fn install_plan(
     proxy_url: &str,
     runner: &impl Runner,
 ) -> Result<MacosSystemProxyPlan, MacosNetworkError> {
-    let hosts = default_ai_hosts();
+    let hosts = default_protected_hosts();
     install_plan_for_hosts(state_dir, proxy_url, &hosts, runner)
 }
 
 fn install_plan_for_hosts(
     state_dir: impl AsRef<Path>,
     proxy_url: &str,
-    ai_hosts: &[String],
+    protected_hosts: &[String],
     runner: &impl Runner,
 ) -> Result<MacosSystemProxyPlan, MacosNetworkError> {
     let paths = MacosNetworkPaths::for_state_dir(state_dir);
     let pac_url = file_url(&paths.pac_path);
-    let ai_hosts = normalized_ai_hosts(ai_hosts);
+    let protected_hosts = normalized_protected_hosts(protected_hosts);
     if paths.rollback_path.exists() {
         let services = read_rollback(&paths)?
             .map(|record| record.services)
             .unwrap_or_default();
-        let desired_pac = pac_content_for_hosts(proxy_url, &ai_hosts);
+        let desired_pac = pac_content_for_hosts(proxy_url, &protected_hosts);
         let pac_needs_update = fs::read_to_string(&paths.pac_path)
             .map(|current| current != desired_pac)
             .unwrap_or(true);
@@ -370,7 +375,7 @@ fn install_plan_for_hosts(
             paths,
             proxy_url: proxy_url.to_string(),
             pac_url,
-            ai_hosts,
+            protected_hosts,
             services,
             commands: Vec::new(),
             requires_admin: false,
@@ -395,7 +400,7 @@ fn install_plan_for_hosts(
         paths,
         proxy_url: proxy_url.to_string(),
         pac_url,
-        ai_hosts,
+        protected_hosts,
         services,
         commands,
         requires_admin: false,
@@ -427,7 +432,7 @@ fn remove_plan(
             .as_ref()
             .map(|record| record.proxy_url.clone())
             .unwrap_or_else(|| proxy_url.to_string()),
-        ai_hosts: default_ai_hosts(),
+        protected_hosts: default_protected_hosts(),
         services,
         commands,
         requires_admin: false,
@@ -552,17 +557,17 @@ fn parse_url(output: &str) -> Option<String> {
 
 #[cfg(test)]
 fn pac_content(proxy_url: &str) -> String {
-    let hosts = default_ai_hosts();
+    let hosts = default_protected_hosts();
     pac_content_for_hosts(proxy_url, &hosts)
 }
 
-fn pac_content_for_hosts(proxy_url: &str, ai_hosts: &[String]) -> String {
+fn pac_content_for_hosts(proxy_url: &str, protected_hosts: &[String]) -> String {
     let proxy = proxy_url
         .trim()
         .trim_start_matches("http://")
         .trim_start_matches("https://")
         .trim_end_matches('/');
-    let protected_host_comment = normalized_ai_hosts(ai_hosts)
+    let protected_host_comment = normalized_protected_hosts(protected_hosts)
         .into_iter()
         .map(|host| format!("// protected-host: {host}"))
         .collect::<Vec<_>>()
@@ -572,14 +577,14 @@ fn pac_content_for_hosts(proxy_url: &str, ai_hosts: &[String]) -> String {
     )
 }
 
-fn default_ai_hosts() -> Vec<String> {
-    dam_net::known_ai_hosts()
+fn default_protected_hosts() -> Vec<String> {
+    dam_net::default_traffic_hosts()
 }
 
-fn normalized_ai_hosts(hosts: &[String]) -> Vec<String> {
+fn normalized_protected_hosts(hosts: &[String]) -> Vec<String> {
     let mut normalized = Vec::new();
     for host in hosts {
-        let host = dam_net::normalize_ai_host(host);
+        let host = dam_net::normalize_traffic_host(host);
         if !host.is_empty() && !normalized.contains(&host) {
             normalized.push(host);
         }
@@ -798,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn pac_accepts_configured_ai_hosts() {
+    fn pac_accepts_configured_protected_hosts() {
         let pac = pac_content_for_hosts(
             "http://127.0.0.1:7828",
             &[
@@ -834,7 +839,7 @@ mod tests {
         let plan = install_plan(dir.path(), "http://127.0.0.1:7828", &runner).unwrap();
 
         assert!(plan.can_execute || plan.support == MacosSystemProxySupport::Planned);
-        assert!(plan.ai_hosts.contains(&"api.openai.com".to_string()));
+        assert!(plan.protected_hosts.contains(&"api.openai.com".to_string()));
         assert_eq!(plan.services.len(), 2);
         assert_eq!(plan.commands.len(), 4);
         assert_eq!(plan.commands[0].args[0], "-setautoproxyurl");

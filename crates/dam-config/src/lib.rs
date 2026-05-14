@@ -8,8 +8,6 @@ use std::str::FromStr;
 
 pub const DEFAULT_CONFIG_PATH: &str = "dam.toml";
 const DEFAULT_REMOTE_TIMEOUT_MS: u64 = 2_000;
-const OPENAI_COMPATIBLE_PROVIDER: &str = "openai-compatible";
-const ANTHROPIC_PROVIDER: &str = "anthropic";
 const GENERIC_HTTP_PROVIDER: &str = "generic-http";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -401,19 +399,32 @@ pub struct ProxyTargetConfig {
     pub name: String,
     pub provider: String,
     pub upstream: String,
+    pub auth: dam_net::UpstreamAuthConfig,
     pub failure_mode: Option<ProxyFailureMode>,
     pub api_key_env: Option<String>,
     pub api_key: Option<SecretValue>,
 }
 
 impl ProxyTargetConfig {
-    pub fn default_openai() -> Self {
+    pub fn default_profile_target() -> Self {
+        if let Some(route) = dam_net::default_traffic_routes().into_iter().next() {
+            return Self {
+                name: route.target_name,
+                provider: route.provider,
+                upstream: route.upstream,
+                auth: route.auth,
+                failure_mode: None,
+                api_key_env: None,
+                api_key: None,
+            };
+        }
         Self {
-            name: "openai".to_string(),
-            provider: "openai-compatible".to_string(),
+            name: "default".to_string(),
+            provider: "default".to_string(),
             upstream: String::new(),
+            auth: dam_net::UpstreamAuthConfig::default(),
             failure_mode: None,
-            api_key_env: Some("OPENAI_API_KEY".to_string()),
+            api_key_env: None,
             api_key: None,
         }
     }
@@ -1022,24 +1033,40 @@ fn validate(config: &DamConfig) -> Result<(), ConfigError> {
                     field: "proxy.targets.provider",
                 });
             }
-            if !matches!(
-                target.provider.as_str(),
-                GENERIC_HTTP_PROVIDER | OPENAI_COMPATIBLE_PROVIDER | ANTHROPIC_PROVIDER
-            ) {
-                return Err(ConfigError::invalid_value(
-                    "proxy.targets.provider",
-                    target.provider.clone(),
-                    "expected generic-http, openai-compatible, or anthropic",
-                ));
-            }
             if target.upstream.trim().is_empty() {
                 return Err(ConfigError::MissingRequired {
                     field: "proxy.targets.upstream",
                 });
             }
+            validate_upstream_auth(&target.auth)?;
         }
     }
 
+    Ok(())
+}
+
+fn validate_upstream_auth(auth: &dam_net::UpstreamAuthConfig) -> Result<(), ConfigError> {
+    for header in &auth.caller_headers {
+        if header.trim().is_empty() {
+            return Err(ConfigError::MissingRequired {
+                field: "proxy.targets.auth.caller_headers",
+            });
+        }
+    }
+    if let Some(inject) = &auth.inject {
+        if inject.header.trim().is_empty() {
+            return Err(ConfigError::MissingRequired {
+                field: "proxy.targets.auth.inject.header",
+            });
+        }
+        for header in &inject.strip_headers {
+            if header.trim().is_empty() {
+                return Err(ConfigError::MissingRequired {
+                    field: "proxy.targets.auth.inject.strip_headers",
+                });
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1097,6 +1124,7 @@ fn parse_proxy_target(raw: RawProxyTargetConfig) -> Result<ProxyTargetConfig, Co
         name: raw.name.unwrap_or_default(),
         provider: raw.provider.unwrap_or_default(),
         upstream: raw.upstream.unwrap_or_default(),
+        auth: raw.auth.unwrap_or_default(),
         failure_mode,
         api_key_env: raw.api_key_env.and_then(non_empty),
         api_key: None,
@@ -1165,7 +1193,9 @@ fn proxy_target_override_is_present(overrides: &ConfigOverrides) -> bool {
 
 fn ensure_first_proxy_target(proxy: &mut ProxyConfig) -> &mut ProxyTargetConfig {
     if proxy.targets.is_empty() {
-        proxy.targets.push(ProxyTargetConfig::default_openai());
+        proxy
+            .targets
+            .push(ProxyTargetConfig::default_profile_target());
     }
 
     &mut proxy.targets[0]
@@ -1350,6 +1380,7 @@ struct RawProxyTargetConfig {
     name: Option<String>,
     provider: Option<String>,
     upstream: Option<String>,
+    auth: Option<dam_net::UpstreamAuthConfig>,
     failure_mode: Option<String>,
     api_key_env: Option<String>,
 }
@@ -1533,7 +1564,7 @@ mod tests {
             Some(vec!["mail-example".to_string()])
         );
         assert_eq!(
-            dam_net::ai_routes_from_profile(&config.traffic.effective_profile())[0].host,
+            dam_net::traffic_routes_from_profile(&config.traffic.effective_profile())[0].host,
             "mail.example.com"
         );
         assert_eq!(config.web.addr, "127.0.0.1:9000");
@@ -1644,7 +1675,7 @@ mod tests {
 
         assert!(!config.proxy.enabled);
         assert_eq!(config.proxy.targets.len(), 1);
-        assert_eq!(config.proxy.targets[0].upstream, "");
+        assert_eq!(config.proxy.targets[0].upstream, "https://api.openai.com");
         assert_eq!(
             config.proxy.targets[0].api_key_env,
             Some("TEST_KEY".to_string())
@@ -1653,12 +1684,27 @@ mod tests {
 
     #[test]
     fn enabled_proxy_requires_target_upstream() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("dam.toml");
+        fs::write(
+            &config_path,
+            r#"
+                [proxy]
+                enabled = true
+                listen = "127.0.0.1:7828"
+
+                [[proxy.targets]]
+                name = "missing-upstream"
+                provider = "custom"
+            "#,
+        )
+        .unwrap();
         let error = load_with_env(
-            &ConfigOverrides::default(),
-            env(&[
-                ("DAM_PROXY_ENABLED", "true"),
-                ("DAM_PROXY_TARGET_API_KEY_ENV", "TEST_KEY"),
-            ]),
+            &ConfigOverrides {
+                config_path: Some(config_path),
+                ..ConfigOverrides::default()
+            },
+            env(&[]),
         )
         .unwrap_err();
 
@@ -1706,7 +1752,7 @@ mod tests {
     }
 
     #[test]
-    fn enabled_proxy_accepts_multiple_targets_and_rejects_unknown_provider() {
+    fn enabled_proxy_accepts_multiple_targets_and_provider_labels() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("dam.toml");
         fs::write(
@@ -1740,7 +1786,7 @@ mod tests {
         assert_eq!(config.proxy.targets[0].name, "one");
         assert_eq!(config.proxy.targets[1].provider, "anthropic");
 
-        let error = load_with_env(
+        let config = load_with_env(
             &ConfigOverrides::default(),
             env(&[
                 ("DAM_PROXY_ENABLED", "true"),
@@ -1748,14 +1794,8 @@ mod tests {
                 ("DAM_PROXY_TARGET_UPSTREAM", "https://api.example.test"),
             ]),
         )
-        .unwrap_err();
-        assert!(matches!(
-            error,
-            ConfigError::InvalidValue {
-                field: "proxy.targets.provider",
-                ..
-            }
-        ));
+        .unwrap();
+        assert_eq!(config.proxy.targets[0].provider, "openai-compatible-typo");
     }
 
     #[test]
@@ -1827,7 +1867,7 @@ mod tests {
             env(&[]),
         )
         .unwrap();
-        let routes = dam_net::ai_routes_from_profile(&config.traffic.effective_profile());
+        let routes = dam_net::traffic_routes_from_profile(&config.traffic.effective_profile());
 
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0].host, "api.enterprise-ai.example");

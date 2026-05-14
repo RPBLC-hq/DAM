@@ -215,7 +215,8 @@ pub fn setup_plan(
     let active_profile = dam_integrations::read_active_profile(&integration_state_dir)?;
     let effective_config = config_with_runtime_enabled_apps(config, &integration_state_dir)?;
     let has_active_routes =
-        !dam_net::ai_routes_from_profile(&effective_config.traffic.effective_profile()).is_empty();
+        !dam_net::traffic_routes_from_profile(&effective_config.traffic.effective_profile())
+            .is_empty();
     let mut steps = vec![
         // The startup step lands before any platform capture setup
         // deliberately: capture installation can require a system
@@ -1193,12 +1194,6 @@ fn proxy_config_component(
         ));
     }
     for target in &config.proxy.targets {
-        if dam_router::ProviderKind::parse(&target.provider).is_err() {
-            errors.push(format!(
-                "proxy target {} uses unsupported provider {}",
-                target.name, target.provider
-            ));
-        }
         if reqwest::Url::parse(&target.upstream).is_err() {
             errors.push(format!(
                 "proxy target {} has invalid upstream URL {}",
@@ -1363,22 +1358,21 @@ fn router_component(
     let decision = route.decide(&reqwest::header::HeaderMap::new());
     let failure_mode = decision.failure_mode().tag();
     let target = decision.target();
-    let provider = decision.provider_kind().id();
     match decision.auth() {
         dam_router::RouteAuth::CallerPassthrough => dam_api::ComponentHealth {
             component: "router".to_string(),
             state: dam_api::HealthState::Healthy,
             message: format!(
-                "target {} routes to {provider} with caller auth passthrough and {failure_mode}",
-                target.name
+                "target {} routes to {} with caller auth passthrough and {failure_mode}",
+                target.name, target.provider
             ),
         },
         dam_router::RouteAuth::TargetApiKey => dam_api::ComponentHealth {
             component: "router".to_string(),
             state: dam_api::HealthState::Healthy,
             message: format!(
-                "target {} routes to {provider} with configured target auth and {failure_mode}",
-                target.name
+                "target {} routes to {} with configured target auth and {failure_mode}",
+                target.name, target.provider
             ),
         },
         dam_router::RouteAuth::ConfigRequired => {
@@ -1398,8 +1392,8 @@ fn router_component(
                 component: "router".to_string(),
                 state: dam_api::HealthState::Degraded,
                 message: format!(
-                    "target {} routes to {provider}, but auth is required before protected requests can flow",
-                    target.name
+                    "target {} routes to {}, but auth is required before protected requests can flow",
+                    target.name, target.provider
                 ),
             }
         }
@@ -1540,6 +1534,25 @@ mod tests {
             name: "test".to_string(),
             provider: provider.to_string(),
             upstream: upstream.to_string(),
+            auth: match provider {
+                "openai-compatible" => dam_net::UpstreamAuthConfig {
+                    caller_headers: vec!["authorization".to_string()],
+                    inject: Some(dam_net::UpstreamAuthInjection {
+                        header: "authorization".to_string(),
+                        scheme: Some("Bearer".to_string()),
+                        strip_headers: vec!["authorization".to_string()],
+                    }),
+                },
+                "anthropic" => dam_net::UpstreamAuthConfig {
+                    caller_headers: vec!["x-api-key".to_string(), "authorization".to_string()],
+                    inject: Some(dam_net::UpstreamAuthInjection {
+                        header: "x-api-key".to_string(),
+                        scheme: None,
+                        strip_headers: vec!["x-api-key".to_string(), "authorization".to_string()],
+                    }),
+                },
+                _ => dam_net::UpstreamAuthConfig::default(),
+            },
             failure_mode: None,
             api_key_env: None,
             api_key: None,
@@ -1566,14 +1579,16 @@ mod tests {
     }
 
     #[test]
-    fn config_report_accepts_anthropic_provider() {
+    fn config_report_accepts_provider_labels() {
         let report = config_report(&proxy_config("https://api.anthropic.com", "anthropic"));
 
         assert_ne!(report.state, dam_api::HealthState::Unhealthy);
-        assert!(!report.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "proxy_config_invalid"
-                && diagnostic.message.contains("unsupported provider")
-        }));
+        assert!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "proxy_config_invalid")
+        );
     }
 
     #[test]

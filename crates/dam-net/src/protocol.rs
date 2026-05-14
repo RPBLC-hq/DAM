@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{AiRoute, AiTrafficKind};
+use crate::TrafficRoute;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -51,24 +51,18 @@ impl ProtocolAdapterReadiness {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProtocolAdapterStatus {
-    pub route: AiRoute,
+    pub route: TrafficRoute,
     pub adapter: ProtocolAdapterKind,
     pub readiness: ProtocolAdapterReadiness,
     pub message: String,
 }
 
-pub fn adapter_for_ai_route(route: &AiRoute) -> ProtocolAdapterKind {
-    match route.kind {
-        AiTrafficKind::ChatGptCodexBackend => ProtocolAdapterKind::WebSocket,
-        AiTrafficKind::OpenAiApi
-        | AiTrafficKind::AnthropicApi
-        | AiTrafficKind::XaiApi
-        | AiTrafficKind::Custom => ProtocolAdapterKind::Http,
-    }
+pub fn adapter_for_traffic_route(route: &TrafficRoute) -> ProtocolAdapterKind {
+    route.adapter
 }
 
-pub fn adapter_status_for_ai_route(route: AiRoute) -> ProtocolAdapterStatus {
-    let adapter = adapter_for_ai_route(&route);
+pub fn adapter_status_for_traffic_route(route: TrafficRoute) -> ProtocolAdapterStatus {
+    let adapter = adapter_for_traffic_route(&route);
     let readiness = match adapter {
         ProtocolAdapterKind::Http | ProtocolAdapterKind::WebSocket => {
             ProtocolAdapterReadiness::Ready
@@ -118,11 +112,11 @@ pub fn adapter_status_for_ai_route(route: AiRoute) -> ProtocolAdapterStatus {
     }
 }
 
-pub fn adapter_status_for_ai_routes(routes: &[AiRoute]) -> Vec<ProtocolAdapterStatus> {
+pub fn adapter_status_for_traffic_routes(routes: &[TrafficRoute]) -> Vec<ProtocolAdapterStatus> {
     routes
         .iter()
         .cloned()
-        .map(adapter_status_for_ai_route)
+        .map(adapter_status_for_traffic_route)
         .collect()
 }
 
@@ -132,12 +126,12 @@ mod tests {
 
     #[test]
     fn codex_chatgpt_uses_websocket_adapter() {
-        let route = crate::known_ai_routes()
+        let route = crate::default_traffic_routes()
             .into_iter()
-            .find(|route| route.kind == AiTrafficKind::ChatGptCodexBackend)
+            .find(|route| route.target_name == "chatgpt-codex")
             .unwrap();
 
-        let status = adapter_status_for_ai_route(route);
+        let status = adapter_status_for_traffic_route(route);
 
         assert_eq!(status.adapter, ProtocolAdapterKind::WebSocket);
         assert_eq!(status.readiness, ProtocolAdapterReadiness::Ready);
@@ -145,15 +139,13 @@ mod tests {
 
     #[test]
     fn api_routes_use_http_adapter() {
-        let statuses = adapter_status_for_ai_routes(&crate::known_ai_routes());
+        let statuses = adapter_status_for_traffic_routes(&crate::default_traffic_routes());
 
         assert!(statuses.iter().any(|status| {
-            status.route.kind == AiTrafficKind::OpenAiApi
-                && status.adapter == ProtocolAdapterKind::Http
+            status.route.target_name == "openai" && status.adapter == ProtocolAdapterKind::Http
         }));
         assert!(statuses.iter().any(|status| {
-            status.route.kind == AiTrafficKind::AnthropicApi
-                && status.adapter == ProtocolAdapterKind::Http
+            status.route.target_name == "anthropic" && status.adapter == ProtocolAdapterKind::Http
         }));
     }
 }

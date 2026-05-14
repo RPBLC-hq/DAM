@@ -49,7 +49,7 @@ The Allowed page uses the same English/French catalog as the rest of the React s
 
 `GET /api/v1/settings` builds a live view from `dam-daemon`, `dam-config`, and `dam-integrations`. The Apps section is wired: enabling an app records its profile as enabled; disabling clears that enabled state. The custom profile creator is parked, so Settings only shows catalog JSON profiles from `$DAM_STATE_DIR/integrations/profiles/`. When a running daemon exists, app toggles reconcile the platform capture scope from the enabled profiles and invoke `dam connect` with explicit `--traffic-app` and route-derived `--target` arguments so the daemon's active traffic routes match the new app selection. Turning every app off leaves an explicit empty enabled state, reconfigures macOS Network Extension capture with no protected hosts, and keeps unrelated traffic outside DAM.
 
-The Network section is read-only and reflects the latest daemon state on disk. `ready` is true only when protection is enabled and every transparent AI interception route reports `ready`.
+The Network section is read-only and reflects the latest daemon state on disk. `ready` is true only when protection is enabled and every transparent interception route reports `ready`.
 
 Defaults are shown as disabled controls in this slice. `POST /api/v1/settings/defaults`, reset, and uninstall still return `not_implemented` until the runtime settings store and destructive flows are designed end to end.
 

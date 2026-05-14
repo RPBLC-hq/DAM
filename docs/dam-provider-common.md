@@ -6,8 +6,8 @@ Status: implemented shared provider utility.
 
 ## Responsibilities
 
-- Shared streaming body transform support for provider adapters.
-- Shared JSON and JSON-lines response-body string-value transform support for provider adapters.
+- Shared streaming body transform support for protocol adapters.
+- Shared JSON and JSON-lines response-body string-value transform support for protocol adapters.
 - Small tail-buffered transformation for raw streaming bodies.
 - Provider-aware `text/event-stream` text-delta transformation for OpenAI-compatible and Anthropic streaming shapes so DAM reference resolution can see a full `[kind:id]` token even when a provider splits it across SSE events.
 - Shared stream type aliases used by provider crates.
@@ -25,7 +25,7 @@ The crate does not:
 - run detection, policy, vault writes, redaction, or logging;
 - own fresh inbound detection/redaction decisions.
 
-Provider-specific forwarding remains in `dam-provider-openai` and `dam-provider-anthropic`. Text protection and reference resolution remain in `dam-pipeline`/`dam-core`.
+HTTP forwarding remains in `dam-http-adapter`. Target-specific auth/header behavior is profile configuration. Text protection and reference resolution remain in `dam-pipeline`/`dam-core`.
 
 ## Testing
 

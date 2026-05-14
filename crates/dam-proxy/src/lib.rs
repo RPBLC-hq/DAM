@@ -36,7 +36,7 @@ mod providers;
 mod websocket;
 
 use events::{log_intercepted_response_write, log_provider_response, record_proxy_event};
-use providers::{ProviderAdapter, ProviderAdapters};
+use providers::ProviderAdapters;
 
 const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 const MAX_INTERCEPTED_HEADER_BYTES: usize = 64 * 1024;
@@ -44,14 +44,14 @@ const PASSTHROUGH_RESUME_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ConnectBypassReason {
-    NonAiRoute,
+    UnmatchedRoute,
     ProtectionPaused,
 }
 
 impl ConnectBypassReason {
     fn as_str(self) -> &'static str {
         match self {
-            Self::NonAiRoute => "non_ai_route",
+            Self::UnmatchedRoute => "unmatched_route",
             Self::ProtectionPaused => "protection_paused",
         }
     }
@@ -64,9 +64,6 @@ pub enum ProxyError {
 
     #[error("proxy target is missing")]
     MissingTarget,
-
-    #[error("unsupported proxy provider: {0}")]
-    UnsupportedProvider(String),
 
     #[error("invalid proxy listen address {addr}: {source}")]
     InvalidListen {
@@ -120,7 +117,7 @@ pub struct TransparentInterceptionConfig {
     pub network_mode: dam_net::CaptureMode,
     pub system_proxy_active: bool,
     pub tun_active: bool,
-    pub ai_routes: Vec<dam_net::AiRoute>,
+    pub routes: Vec<dam_net::TrafficRoute>,
     pub trust: dam_trust::TrustState,
     pub user_consented: bool,
     pub protection_control_path: Option<PathBuf>,
@@ -130,9 +127,6 @@ impl From<dam_router::RouteError> for ProxyError {
     fn from(error: dam_router::RouteError) -> Self {
         match error {
             dam_router::RouteError::MissingTarget => Self::MissingTarget,
-            dam_router::RouteError::UnsupportedProvider(provider) => {
-                Self::UnsupportedProvider(provider)
-            }
         }
     }
 }
@@ -434,13 +428,14 @@ async fn handle_raw_connect_request(
         write_intercepted_http_response(&mut stream, response).await?;
         return Ok(());
     };
-    let ai_route = dam_net::classify_ai_host_with_routes(&authority.host, &interception.ai_routes);
+    let traffic_route =
+        dam_net::classify_traffic_host_with_routes(&authority.host, &interception.routes);
     let protection_paused = !state.protection_enabled();
-    if ai_route.is_none() || protection_paused {
-        let bypass_reason = if ai_route.is_some() && protection_paused {
+    if traffic_route.is_none() || protection_paused {
+        let bypass_reason = if traffic_route.is_some() && protection_paused {
             ConnectBypassReason::ProtectionPaused
         } else {
-            ConnectBypassReason::NonAiRoute
+            ConnectBypassReason::UnmatchedRoute
         };
         return handle_raw_connect_tunnel(
             state,
@@ -448,15 +443,15 @@ async fn handle_raw_connect_request(
             authority,
             bypass_reason,
             stream,
-            ai_route.is_some() && protection_paused,
+            traffic_route.is_some() && protection_paused,
         )
         .await;
     }
-    let ai_route = ai_route.unwrap();
+    let traffic_route = traffic_route.unwrap();
     let route = state
         .routes
-        .decide_for_ai_route(&request.headers, &ai_route);
-    if !route_matches_ai_target(route, &ai_route) {
+        .decide_for_traffic_route(&request.headers, &traffic_route);
+    if !route_matches_traffic_target(route, &traffic_route) {
         let response = connect_blocked_response(
             &state,
             route,
@@ -468,7 +463,7 @@ async fn handle_raw_connect_request(
         return Ok(());
     }
 
-    let readiness = transparent_interception_readiness(&interception, ai_route);
+    let readiness = transparent_interception_readiness(&interception, traffic_route);
     if readiness.readiness != dam_intercept::TlsInterceptionReadiness::Ready {
         record_proxy_event(
             &state,
@@ -576,13 +571,14 @@ async fn handle_connect_request(
             "transparent CONNECT traffic requires the TLS interception runtime",
         );
     };
-    let ai_route = dam_net::classify_ai_host_with_routes(&authority.host, &interception.ai_routes);
+    let traffic_route =
+        dam_net::classify_traffic_host_with_routes(&authority.host, &interception.routes);
     let protection_paused = !state.protection_enabled();
-    if ai_route.is_none() || protection_paused {
-        let bypass_reason = if ai_route.is_some() && protection_paused {
+    if traffic_route.is_none() || protection_paused {
+        let bypass_reason = if traffic_route.is_some() && protection_paused {
             ConnectBypassReason::ProtectionPaused
         } else {
-            ConnectBypassReason::NonAiRoute
+            ConnectBypassReason::UnmatchedRoute
         };
         return handle_connect_tunnel_request(
             state,
@@ -591,14 +587,16 @@ async fn handle_connect_request(
             authority,
             bypass_reason,
             request,
-            ai_route.is_some() && protection_paused,
+            traffic_route.is_some() && protection_paused,
         )
         .await;
     }
-    let ai_route = ai_route.unwrap();
+    let traffic_route = traffic_route.unwrap();
 
-    let route = state.routes.decide_for_ai_route(headers, &ai_route);
-    if !route_matches_ai_target(route, &ai_route) {
+    let route = state
+        .routes
+        .decide_for_traffic_route(headers, &traffic_route);
+    if !route_matches_traffic_target(route, &traffic_route) {
         return connect_blocked_response(
             &state,
             route,
@@ -608,7 +606,7 @@ async fn handle_connect_request(
         );
     }
 
-    let readiness = transparent_interception_readiness(&interception, ai_route);
+    let readiness = transparent_interception_readiness(&interception, traffic_route);
     if readiness.readiness != dam_intercept::TlsInterceptionReadiness::Ready {
         record_proxy_event(
             &state,
@@ -1785,7 +1783,7 @@ fn tls_acceptor_for_host(
     interception: &TransparentInterceptionConfig,
     host: &str,
 ) -> Result<TlsAcceptor, String> {
-    let host = dam_net::normalize_ai_host(host);
+    let host = dam_net::normalize_traffic_host(host);
     if host.is_empty() {
         return Err("failed to issue local TLS certificate: host is empty".to_string());
     }
@@ -1812,10 +1810,10 @@ fn tls_acceptor_for_host(
 
 fn transparent_interception_readiness(
     interception: &TransparentInterceptionConfig,
-    ai_route: dam_net::AiRoute,
+    traffic_route: dam_net::TrafficRoute,
 ) -> dam_intercept::RouteTlsInterceptionReadiness {
     let routing = dam_net::transparent_route_capture_readiness(
-        ai_route.clone(),
+        traffic_route.clone(),
         dam_net::TrafficProtocol::Https,
         interception.network_mode,
         interception.system_proxy_active,
@@ -1824,16 +1822,16 @@ fn transparent_interception_readiness(
     let trust_report = dam_trust::readiness_for_route(
         &dam_net::decide_transparent_route_with_routes(
             &dam_net::TrafficObservation::new(
-                ai_route.host.clone(),
+                traffic_route.host.clone(),
                 dam_net::TrafficProtocol::Https,
             ),
-            &interception.ai_routes,
+            &interception.routes,
         ),
         &interception.trust,
         interception.user_consented,
     );
     let route_trust = dam_trust::RouteTrustReadiness {
-        route: ai_route.clone(),
+        route: traffic_route.clone(),
         protocol: dam_net::TrafficProtocol::Https,
         readiness: trust_report.readiness,
         message: trust_report.message,
@@ -1955,19 +1953,19 @@ fn should_protect_forward_proxy_http_request(
     };
     http_authority(&request.uri, &request.headers)
         .and_then(|authority| {
-            dam_net::classify_ai_host_with_routes(&authority.host, &interception.ai_routes)
+            dam_net::classify_traffic_host_with_routes(&authority.host, &interception.routes)
         })
         .is_some()
 }
 
-fn route_matches_ai_target(
+fn route_matches_traffic_target(
     route: dam_router::RouteDecision<'_>,
-    ai_route: &dam_net::AiRoute,
+    traffic_route: &dam_net::TrafficRoute,
 ) -> bool {
     let target = route.target();
-    route.provider_kind().id() == ai_route.provider
-        && (target.name == ai_route.target_name
-            || normalize_host(&target.upstream) == normalize_host(&ai_route.upstream))
+    target.provider == traffic_route.provider
+        && (target.name == traffic_route.target_name
+            || normalize_host(&target.upstream) == normalize_host(&traffic_route.upstream))
 }
 
 impl ProxyState {
@@ -2025,21 +2023,23 @@ fn route_for_request<'a>(
     headers: &HeaderMap,
     uri: &Uri,
 ) -> dam_router::RouteDecision<'a> {
-    if let Some(ai_route) = ai_route_for_request(state, headers, uri) {
-        return state.routes.decide_for_ai_route(headers, &ai_route);
+    if let Some(traffic_route) = profile_route_for_request(state, headers, uri) {
+        return state
+            .routes
+            .decide_for_traffic_route(headers, &traffic_route);
     }
 
     state.routes.decide(headers, Some(uri))
 }
 
-fn ai_route_for_request(
+fn profile_route_for_request(
     state: &ProxyState,
     headers: &HeaderMap,
     uri: &Uri,
-) -> Option<dam_net::AiRoute> {
+) -> Option<dam_net::TrafficRoute> {
     let interception = state.transparent_interception.as_ref()?;
     let authority = https_authority(uri, headers).or_else(|| http_authority(uri, headers))?;
-    dam_net::classify_ai_host_with_routes(&authority.host, &interception.ai_routes)
+    dam_net::classify_traffic_host_with_routes(&authority.host, &interception.routes)
 }
 
 async fn read_intercepted_http_request<T>(
@@ -2538,90 +2538,56 @@ async fn forward_request(
 ) -> Result<Response, String> {
     let target_api_key = route.target_api_key();
     let transform_inbound = inbound_plan.resolve_references || inbound_plan.protect_sensitive_data;
-    match state.providers.get(route.provider_kind()) {
-        ProviderAdapter::OpenAi(provider) => {
-            let target_name = route.target().name.clone();
-            let target_provider = route.target().provider.clone();
-            let response_state = Arc::clone(state);
-            let response_operation_id = operation_id.to_owned();
-            let response_related_domains = Arc::clone(&related_domains);
-            let request = dam_provider_openai::ForwardRequest {
-                upstream: &route.target().upstream,
-                method,
-                uri,
-                headers,
-                body,
-                target_api_key,
-                transform_streaming_response: transform_inbound,
-            };
-            record_proxy_event(
-                state,
-                operation_id,
-                LogLevel::Info,
-                LogEventType::ProxyForward,
-                "provider_forward_start",
-                format!(
-                    "provider forward start target={target_name} provider={target_provider} resolve_inbound={} transform_streaming={}",
-                    inbound_plan.resolve_references, transform_inbound
-                ),
-            );
-            let response = provider
-                .forward(request, move |response_body| {
-                    resolve_response_body(
-                        &response_state,
-                        &response_operation_id,
-                        response_body,
-                        inbound_plan,
-                        response_related_domains.as_slice(),
-                    )
-                })
-                .await
-                .map_err(|error| error.to_string())?;
-            log_provider_response(state, operation_id, &response);
-            Ok(response)
-        }
-        ProviderAdapter::Anthropic(provider) => {
-            let target_name = route.target().name.clone();
-            let target_provider = route.target().provider.clone();
-            let response_state = Arc::clone(state);
-            let response_operation_id = operation_id.to_owned();
-            let response_related_domains = Arc::clone(&related_domains);
-            let request = dam_provider_anthropic::ForwardRequest {
-                upstream: &route.target().upstream,
-                method,
-                uri,
-                headers,
-                body,
-                target_api_key,
-                transform_streaming_response: transform_inbound,
-            };
-            record_proxy_event(
-                state,
-                operation_id,
-                LogLevel::Info,
-                LogEventType::ProxyForward,
-                "provider_forward_start",
-                format!(
-                    "provider forward start target={target_name} provider={target_provider} resolve_inbound={} transform_streaming={}",
-                    inbound_plan.resolve_references, transform_inbound
-                ),
-            );
-            let response = provider
-                .forward(request, move |response_body| {
-                    resolve_response_body(
-                        &response_state,
-                        &response_operation_id,
-                        response_body,
-                        inbound_plan,
-                        response_related_domains.as_slice(),
-                    )
-                })
-                .await
-                .map_err(|error| error.to_string())?;
-            log_provider_response(state, operation_id, &response);
-            Ok(response)
-        }
-    }
+    let target = route.target();
+    let target_name = target.name.clone();
+    let target_provider = target.provider.clone();
+    let target_api_key_injection = target_api_key
+        .and_then(|_| target.auth.inject.as_ref())
+        .map(|inject| dam_http_adapter::AuthInjection {
+            header: inject.header.as_str(),
+            scheme: inject.scheme.as_deref(),
+            strip_headers: inject.strip_headers.as_slice(),
+        });
+    let response_state = Arc::clone(state);
+    let response_operation_id = operation_id.to_owned();
+    let response_related_domains = Arc::clone(&related_domains);
+    let request = dam_http_adapter::ForwardRequest {
+        upstream: &target.upstream,
+        method,
+        uri,
+        headers,
+        body,
+        target_api_key,
+        target_api_key_injection,
+        transform_streaming_response: transform_inbound,
+    };
+    record_proxy_event(
+        state,
+        operation_id,
+        LogLevel::Info,
+        LogEventType::ProxyForward,
+        "provider_forward_start",
+        format!(
+            "provider forward start target={target_name} provider={target_provider} resolve_inbound={} transform_streaming={}",
+            inbound_plan.resolve_references, transform_inbound
+        ),
+    );
+    let response = state
+        .providers
+        .http()
+        .forward(request, move |response_body| {
+            resolve_response_body(
+                &response_state,
+                &response_operation_id,
+                response_body,
+                inbound_plan,
+                response_related_domains.as_slice(),
+            )
+        })
+        .await
+        .map_err(|error| error.to_string())?;
+    log_provider_response(state, operation_id, &response);
+    Ok(response)
 }
 
 fn resolve_response_body(
@@ -2890,11 +2856,34 @@ mod tests {
             name: "test-openai".to_string(),
             provider: provider.to_string(),
             upstream,
+            auth: auth_for_provider(provider),
             failure_mode: None,
             api_key_env: None,
             api_key: None,
         });
         config
+    }
+
+    fn auth_for_provider(provider: &str) -> dam_net::UpstreamAuthConfig {
+        match provider {
+            "openai-compatible" => dam_net::UpstreamAuthConfig {
+                caller_headers: vec!["authorization".to_string()],
+                inject: Some(dam_net::UpstreamAuthInjection {
+                    header: "authorization".to_string(),
+                    scheme: Some("Bearer".to_string()),
+                    strip_headers: vec!["authorization".to_string()],
+                }),
+            },
+            "anthropic" => dam_net::UpstreamAuthConfig {
+                caller_headers: vec!["x-api-key".to_string(), "authorization".to_string()],
+                inject: Some(dam_net::UpstreamAuthInjection {
+                    header: "x-api-key".to_string(),
+                    scheme: None,
+                    strip_headers: vec!["x-api-key".to_string(), "authorization".to_string()],
+                }),
+            },
+            _ => dam_net::UpstreamAuthConfig::default(),
+        }
     }
 
     fn anthropic_proxy_config(upstream: String) -> dam_config::DamConfig {
@@ -2927,7 +2916,7 @@ mod tests {
                 provider: Some(target.provider),
                 target_name: Some(target.name),
                 upstream: Some(target.upstream),
-                traffic_kind: dam_net::AiTrafficKind::Custom,
+                auth: target.auth,
                 steps: Vec::new(),
                 outbound: dam_net::TrafficDirectionPolicy::default(),
                 inbound: dam_net::TrafficInboundPolicy {
@@ -3584,7 +3573,7 @@ data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"splonk.
             network_mode: dam_net::CaptureMode::SystemProxy,
             system_proxy_active: true,
             tun_active: false,
-            ai_routes: dam_net::known_ai_routes(),
+            routes: dam_net::default_traffic_routes(),
             trust: dam_trust::TrustState::default(),
             user_consented: true,
             protection_control_path: None,
@@ -3691,7 +3680,7 @@ data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"splonk.
     }
 
     #[tokio::test]
-    async fn paused_ai_connect_tunnel_closes_when_protection_resumes() {
+    async fn paused_profile_connect_tunnel_closes_when_protection_resumes() {
         let seen = Arc::new(Mutex::new(Vec::<u8>::new()));
         let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let origin_addr = origin.local_addr().unwrap();
@@ -3719,9 +3708,9 @@ data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"splonk.
         fs::write(&control_path, "disabled\n").unwrap();
         let mut interception = transparent_config(dir.path().to_path_buf());
         interception.protection_control_path = Some(control_path.clone());
-        interception.ai_routes = vec![dam_net::AiRoute::custom(
+        interception.routes = vec![dam_net::TrafficRoute::custom(
             "127.0.0.1",
-            dam_net::OPENAI_COMPATIBLE_PROVIDER,
+            "openai-compatible",
             "test-openai",
             "https://127.0.0.1",
         )];
@@ -3885,7 +3874,7 @@ data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"splonk.
             network_mode: dam_net::CaptureMode::SystemProxy,
             system_proxy_active: true,
             tun_active: false,
-            ai_routes: dam_net::known_ai_routes(),
+            routes: dam_net::default_traffic_routes(),
             trust: dam_trust::TrustState::default(),
             user_consented: true,
             protection_control_path: None,
@@ -3912,14 +3901,14 @@ data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"splonk.
     }
 
     #[tokio::test]
-    async fn transparent_connect_uses_configured_ai_route_registry() {
+    async fn transparent_connect_uses_configured_route_registry() {
         let upstream_seen = Arc::new(Mutex::new(None::<String>));
         let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
         let mut config = proxy_config(upstream);
         config.proxy.targets[0].name = "enterprise-ai".to_string();
-        let ai_routes = vec![dam_net::AiRoute::custom(
+        let traffic_routes = vec![dam_net::TrafficRoute::custom(
             "api.enterprise-ai.example",
-            dam_net::OPENAI_COMPATIBLE_PROVIDER,
+            "openai-compatible",
             "enterprise-ai",
             "https://api.enterprise-ai.example",
         )];
@@ -3928,7 +3917,7 @@ data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"splonk.
             network_mode: dam_net::CaptureMode::SystemProxy,
             system_proxy_active: true,
             tun_active: false,
-            ai_routes,
+            routes: traffic_routes,
             trust: dam_trust::TrustState::default(),
             user_consented: true,
             protection_control_path: None,
@@ -3951,7 +3940,7 @@ data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"splonk.
 
         assert!(response.starts_with("HTTP/1.1 503"));
         assert!(response.contains("TLS interception is disabled"));
-        assert!(!response.contains("not in the known AI route scope"));
+        assert!(!response.contains("not in the configured route scope"));
         assert!(upstream_seen.lock().unwrap().is_none());
     }
 
@@ -3982,7 +3971,7 @@ data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"splonk.
             network_mode: dam_net::CaptureMode::SystemProxy,
             system_proxy_active: true,
             tun_active: false,
-            ai_routes: dam_net::known_ai_routes(),
+            routes: dam_net::default_traffic_routes(),
             trust,
             user_consented: true,
             protection_control_path: None,
@@ -4040,7 +4029,7 @@ data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"splonk.
     }
 
     #[tokio::test]
-    async fn transparent_chatgpt_backend_http_requests_use_ai_route_target() {
+    async fn transparent_chatgpt_backend_http_requests_use_route_target() {
         use tokio_rustls::TlsConnector;
         use tokio_rustls::rustls::{
             ClientConfig, RootCertStore,
@@ -4052,12 +4041,13 @@ data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"splonk.
         let chatgpt_seen = Arc::new(Mutex::new(None::<String>));
         let chatgpt_upstream = spawn_capture_codex_compact_upstream(chatgpt_seen.clone()).await;
 
-        let mut config = proxy_config_with_provider(fallback_upstream, dam_net::ANTHROPIC_PROVIDER);
+        let mut config = proxy_config_with_provider(fallback_upstream, "anthropic");
         config.proxy.targets[0].name = "anthropic".to_string();
         config.proxy.targets.push(dam_config::ProxyTargetConfig {
             name: "chatgpt-codex".to_string(),
-            provider: dam_net::OPENAI_COMPATIBLE_PROVIDER.to_string(),
+            provider: "openai-compatible".to_string(),
             upstream: chatgpt_upstream,
+            auth: dam_net::UpstreamAuthConfig::default(),
             failure_mode: None,
             api_key_env: None,
             api_key: None,
@@ -4078,7 +4068,7 @@ data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"splonk.
             network_mode: dam_net::CaptureMode::SystemProxy,
             system_proxy_active: true,
             tun_active: false,
-            ai_routes: dam_net::known_ai_routes(),
+            routes: dam_net::default_traffic_routes(),
             trust,
             user_consented: true,
             protection_control_path: None,
@@ -4153,7 +4143,7 @@ data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"splonk.
             network_mode: dam_net::CaptureMode::SystemProxy,
             system_proxy_active: true,
             tun_active: false,
-            ai_routes: dam_net::known_ai_routes(),
+            routes: dam_net::default_traffic_routes(),
             trust: dam_trust::TrustState::default(),
             user_consented: true,
             protection_control_path: None,
@@ -5239,14 +5229,11 @@ data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"splonk.
     }
 
     #[test]
-    fn unsupported_provider_fails_at_startup() {
+    fn provider_label_is_configuration_data_not_startup_validation() {
         let mut config = proxy_config("http://127.0.0.1:9999".to_string());
         config.proxy.targets[0].provider = "unknown".to_string();
 
-        assert!(matches!(
-            build_app(config).unwrap_err(),
-            ProxyError::UnsupportedProvider(_)
-        ));
+        assert!(build_app(config).is_ok());
     }
 
     #[test]

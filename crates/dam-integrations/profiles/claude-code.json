@@ -5,7 +5,6 @@
   "provider": "anthropic",
   "traffic_app_ids": ["anthropic-api"],
   "connect_args": [
-    "--anthropic",
     "--network-mode",
     "tun",
     "--trust-mode",

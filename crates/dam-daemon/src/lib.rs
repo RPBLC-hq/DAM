@@ -14,13 +14,16 @@ use tokio::net::TcpListener;
 pub const DEFAULT_LISTEN: &str = "127.0.0.1:7828";
 pub const DEFAULT_VAULT_PATH: &str = "vault.db";
 pub const DEFAULT_LOG_PATH: &str = "log.db";
-pub const OPENAI_API_UPSTREAM: &str = "https://api.openai.com";
-pub const ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
 pub const STATE_DIR_ENV: &str = "DAM_STATE_DIR";
 
 const STATE_FILE: &str = "daemon.json";
 const PROTECTION_FILE: &str = "protection.state";
 const STATE_VERSION: u32 = 6;
+
+#[cfg(test)]
+const OPENAI_API_UPSTREAM: &str = "https://api.openai.com";
+#[cfg(test)]
+const ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyOptions {
@@ -43,6 +46,7 @@ pub struct ProxyOptions {
 
 impl Default for ProxyOptions {
     fn default() -> Self {
+        let target = dam_config::ProxyTargetConfig::default_profile_target();
         Self {
             config_path: None,
             listen: DEFAULT_LISTEN.to_string(),
@@ -50,9 +54,9 @@ impl Default for ProxyOptions {
             network_mode_explicit: false,
             trust_mode: dam_trust::TrustMode::Disabled,
             trust_mode_explicit: false,
-            target_name: "openai".to_string(),
-            provider: "openai-compatible".to_string(),
-            upstream: OPENAI_API_UPSTREAM.to_string(),
+            target_name: target.name,
+            provider: target.provider,
+            upstream: target.upstream,
             targets: None,
             traffic_app_ids: None,
             vault_path: PathBuf::from(DEFAULT_VAULT_PATH),
@@ -60,22 +64,6 @@ impl Default for ProxyOptions {
             consent_path: None,
             resolve_inbound: None,
         }
-    }
-}
-
-impl ProxyOptions {
-    pub fn apply_openai_preset(&mut self) {
-        self.targets = None;
-        self.target_name = "openai".to_string();
-        self.provider = "openai-compatible".to_string();
-        self.upstream = OPENAI_API_UPSTREAM.to_string();
-    }
-
-    pub fn apply_anthropic_preset(&mut self) {
-        self.targets = None;
-        self.target_name = "anthropic".to_string();
-        self.provider = "anthropic".to_string();
-        self.upstream = ANTHROPIC_UPSTREAM.to_string();
     }
 }
 
@@ -119,16 +107,16 @@ pub struct DaemonState {
     pub started_at_unix: u64,
     #[serde(default)]
     pub network_mode: dam_net::CaptureMode,
-    #[serde(default)]
-    pub transparent_ai_routes: Vec<dam_net::AiRoute>,
-    #[serde(default)]
-    pub transparent_ai_routing_readiness: Vec<dam_net::TransparentRouteCaptureReadiness>,
+    #[serde(default, alias = "transparent_ai_routes")]
+    pub transparent_routes: Vec<dam_net::TrafficRoute>,
+    #[serde(default, alias = "transparent_ai_routing_readiness")]
+    pub transparent_routing_readiness: Vec<dam_net::TransparentRouteCaptureReadiness>,
     #[serde(default)]
     pub trust: dam_trust::TrustState,
-    #[serde(default)]
-    pub transparent_ai_trust_readiness: Vec<dam_trust::RouteTrustReadiness>,
-    #[serde(default)]
-    pub transparent_ai_interception_readiness: Vec<dam_intercept::RouteTlsInterceptionReadiness>,
+    #[serde(default, alias = "transparent_ai_trust_readiness")]
+    pub transparent_trust_readiness: Vec<dam_trust::RouteTrustReadiness>,
+    #[serde(default, alias = "transparent_ai_interception_readiness")]
+    pub transparent_interception_readiness: Vec<dam_intercept::RouteTlsInterceptionReadiness>,
     #[serde(default = "default_protection_enabled")]
     pub protection_enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -234,18 +222,10 @@ pub enum DaemonError {
 pub fn parse_proxy_options(args: impl IntoIterator<Item = String>) -> Result<ProxyOptions, String> {
     let args = args.into_iter().collect::<Vec<_>>();
     let mut options = ProxyOptions::default();
-    let mut target_name_explicit = false;
-    let mut upstream_explicit = false;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--openai" => {
-                options.apply_openai_preset();
-            }
-            "--anthropic" => {
-                options.apply_anthropic_preset();
-            }
             "--config" => {
                 i += 1;
                 options.config_path = Some(PathBuf::from(required_value(&args, i, "--config")?));
@@ -268,34 +248,17 @@ pub fn parse_proxy_options(args: impl IntoIterator<Item = String>) -> Result<Pro
                 i += 1;
                 options.targets = None;
                 options.target_name = required_value(&args, i, "--target-name")?.to_string();
-                target_name_explicit = true;
             }
             "--provider" => {
                 i += 1;
                 options.targets = None;
                 let provider = required_value(&args, i, "--provider")?;
                 options.provider = provider.to_string();
-                if provider == "anthropic" {
-                    if !target_name_explicit {
-                        options.target_name = "anthropic".to_string();
-                    }
-                    if !upstream_explicit {
-                        options.upstream = ANTHROPIC_UPSTREAM.to_string();
-                    }
-                } else if provider == "openai-compatible" {
-                    if !target_name_explicit {
-                        options.target_name = "openai".to_string();
-                    }
-                    if !upstream_explicit {
-                        options.upstream = OPENAI_API_UPSTREAM.to_string();
-                    }
-                }
             }
             "--upstream" => {
                 i += 1;
                 options.targets = None;
                 options.upstream = required_value(&args, i, "--upstream")?.to_string();
-                upstream_explicit = true;
             }
             "--target" => {
                 i += 1;
@@ -423,24 +386,27 @@ pub fn proxy_config(options: &ProxyOptions) -> Result<dam_config::DamConfig, Str
 
     let mut config = dam_config::load(&overrides)
         .map_err(|error| format!("failed to load DAM config: {error}"))?;
-    merge_ai_route_proxy_targets(&mut config);
+    merge_traffic_route_proxy_targets(&mut config);
     Ok(config)
 }
 
-fn merge_ai_route_proxy_targets(config: &mut dam_config::DamConfig) {
-    for route in configured_ai_routes(config) {
-        let exists = config.proxy.targets.iter().any(|target| {
+fn merge_traffic_route_proxy_targets(config: &mut dam_config::DamConfig) {
+    for route in configured_traffic_routes(config) {
+        if let Some(existing) = config.proxy.targets.iter_mut().find(|target| {
             target.name == route.target_name
                 && target.provider == route.provider
                 && target.upstream == route.upstream
-        });
-        if exists {
+        }) {
+            if existing.auth == dam_net::UpstreamAuthConfig::default() {
+                existing.auth = route.auth;
+            }
             continue;
         }
         config.proxy.targets.push(dam_config::ProxyTargetConfig {
             name: route.target_name,
             provider: route.provider,
             upstream: route.upstream,
+            auth: route.auth,
             failure_mode: None,
             api_key_env: None,
             api_key: None,
@@ -884,14 +850,34 @@ fn required_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'
 }
 
 fn parse_proxy_target_arg(value: &str) -> Result<dam_config::ProxyTargetConfig, String> {
+    if value.trim_start().starts_with('{') {
+        let target = serde_json::from_str::<ProxyTargetArg>(value)
+            .map_err(|error| format!("failed to parse --target JSON: {error}"))?;
+        if target.name.trim().is_empty()
+            || target.provider.trim().is_empty()
+            || target.upstream.trim().is_empty()
+        {
+            return Err("--target JSON requires name, provider, and upstream".to_string());
+        }
+        return Ok(dam_config::ProxyTargetConfig {
+            name: target.name,
+            provider: target.provider,
+            upstream: target.upstream,
+            auth: target.auth,
+            failure_mode: None,
+            api_key_env: None,
+            api_key: None,
+        });
+    }
     let parts = value.splitn(3, '|').collect::<Vec<_>>();
     if parts.len() != 3 || parts.iter().any(|part| part.trim().is_empty()) {
-        return Err("--target requires name|provider|upstream".to_string());
+        return Err("--target requires JSON or the legacy pipe format".to_string());
     }
     Ok(dam_config::ProxyTargetConfig {
         name: parts[0].to_string(),
         provider: parts[1].to_string(),
         upstream: parts[2].to_string(),
+        auth: dam_net::UpstreamAuthConfig::default(),
         failure_mode: None,
         api_key_env: None,
         api_key: None,
@@ -899,7 +885,22 @@ fn parse_proxy_target_arg(value: &str) -> Result<dam_config::ProxyTargetConfig, 
 }
 
 fn proxy_target_arg(target: &dam_config::ProxyTargetConfig) -> String {
-    format!("{}|{}|{}", target.name, target.provider, target.upstream)
+    serde_json::to_string(&ProxyTargetArg {
+        name: target.name.clone(),
+        provider: target.provider.clone(),
+        upstream: target.upstream.clone(),
+        auth: target.auth.clone(),
+    })
+    .expect("proxy target args should serialize")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProxyTargetArg {
+    name: String,
+    provider: String,
+    upstream: String,
+    #[serde(default)]
+    auth: dam_net::UpstreamAuthConfig,
 }
 
 fn state_from_config(
@@ -911,7 +912,7 @@ fn state_from_config(
 ) -> Result<DaemonState, DaemonError> {
     let target = config.proxy.targets.first();
     let state_paths = state_paths()?;
-    let transparent_ai_routes = configured_ai_routes(config);
+    let transparent_routes = configured_traffic_routes(config);
     let mut trust = match trust_mode {
         dam_trust::TrustMode::Disabled => {
             let mut state = dam_trust::TrustState {
@@ -930,25 +931,25 @@ fn state_from_config(
             )?
         }
     };
-    extend_trust_scope(&mut trust, &transparent_ai_routes);
+    extend_trust_scope(&mut trust, &transparent_routes);
     let user_consented_to_interception = trust_mode == dam_trust::TrustMode::LocalCa;
     let system_proxy_active = network_mode == dam_net::CaptureMode::SystemProxy
         && dam_net_macos::system_proxy_installed(&state_paths.state_dir);
     let tun_active = network_mode == dam_net::CaptureMode::Tun
         && dam_net_macos::network_extension_active(&state_paths.state_dir);
-    let transparent_ai_routing_readiness = dam_net::transparent_capture_readiness_for_ai_routes(
-        &transparent_ai_routes,
+    let transparent_routing_readiness = dam_net::transparent_capture_readiness_for_routes(
+        &transparent_routes,
         network_mode,
         system_proxy_active,
         tun_active,
     );
-    let transparent_ai_trust_readiness = dam_trust::readiness_for_ai_routes(
-        &transparent_ai_routes,
+    let transparent_trust_readiness = dam_trust::readiness_for_routes(
+        &transparent_routes,
         &trust,
         user_consented_to_interception,
     );
-    let transparent_ai_interception_readiness = dam_intercept::readiness_for_ai_routes(
-        &transparent_ai_routes,
+    let transparent_interception_readiness = dam_intercept::readiness_for_routes(
+        &transparent_routes,
         network_mode,
         system_proxy_active,
         tun_active,
@@ -995,11 +996,11 @@ fn state_from_config(
             .collect(),
         started_at_unix,
         network_mode,
-        transparent_ai_routes,
-        transparent_ai_routing_readiness,
+        transparent_routes,
+        transparent_routing_readiness,
         trust,
-        transparent_ai_trust_readiness,
-        transparent_ai_interception_readiness,
+        transparent_trust_readiness,
+        transparent_interception_readiness,
         protection_enabled: protection.enabled,
         protection_started_at_unix: if protection.enabled {
             protection.changed_at_unix.or(Some(started_at_unix))
@@ -1037,7 +1038,7 @@ fn transparent_interception_config(
     trust_mode: dam_trust::TrustMode,
 ) -> Result<dam_proxy::TransparentInterceptionConfig, DaemonError> {
     let state_paths = state_paths()?;
-    let ai_routes = configured_ai_routes(config);
+    let traffic_routes = configured_traffic_routes(config);
     let mut trust = match trust_mode {
         dam_trust::TrustMode::Disabled => {
             let mut state = dam_trust::TrustState {
@@ -1056,7 +1057,7 @@ fn transparent_interception_config(
             )?
         }
     };
-    extend_trust_scope(&mut trust, &ai_routes);
+    extend_trust_scope(&mut trust, &traffic_routes);
     let system_proxy_active = network_mode == dam_net::CaptureMode::SystemProxy
         && dam_net_macos::system_proxy_installed(&state_paths.state_dir);
     let tun_active = network_mode == dam_net::CaptureMode::Tun
@@ -1067,18 +1068,18 @@ fn transparent_interception_config(
         network_mode,
         system_proxy_active,
         tun_active,
-        ai_routes,
+        routes: traffic_routes,
         trust,
         user_consented: trust_mode == dam_trust::TrustMode::LocalCa,
         protection_control_path: Some(protection_control_path()?),
     })
 }
 
-fn configured_ai_routes(config: &dam_config::DamConfig) -> Vec<dam_net::AiRoute> {
-    dam_net::ai_routes_from_profile(&config.traffic.effective_profile())
+fn configured_traffic_routes(config: &dam_config::DamConfig) -> Vec<dam_net::TrafficRoute> {
+    dam_net::traffic_routes_from_profile(&config.traffic.effective_profile())
 }
 
-fn extend_trust_scope(trust: &mut dam_trust::TrustState, routes: &[dam_net::AiRoute]) {
+fn extend_trust_scope(trust: &mut dam_trust::TrustState, routes: &[dam_net::TrafficRoute]) {
     for route in routes {
         if !trust.host_allowed(&route.host) {
             trust.allowed_hosts.push(route.host.clone());
@@ -1137,22 +1138,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn anthropic_preset_sets_target_provider_and_upstream() {
-        let options = parse_proxy_options(["--anthropic".to_string()]).unwrap();
-
-        assert_eq!(options.target_name, "anthropic");
-        assert_eq!(options.provider, "anthropic");
-        assert_eq!(options.upstream, ANTHROPIC_UPSTREAM);
-    }
-
-    #[test]
-    fn provider_anthropic_updates_defaults_when_not_explicit() {
+    fn provider_option_sets_label_without_provider_specific_defaults() {
         let options =
             parse_proxy_options(["--provider".to_string(), "anthropic".to_string()]).unwrap();
 
-        assert_eq!(options.target_name, "anthropic");
+        assert_eq!(options.target_name, "openai");
         assert_eq!(options.provider, "anthropic");
-        assert_eq!(options.upstream, ANTHROPIC_UPSTREAM);
+        assert_eq!(options.upstream, OPENAI_API_UPSTREAM);
     }
 
     #[test]
@@ -1253,6 +1245,7 @@ mod tests {
                     name: "openai".to_string(),
                     provider: "openai-compatible".to_string(),
                     upstream: OPENAI_API_UPSTREAM.to_string(),
+                    auth: dam_net::UpstreamAuthConfig::default(),
                     failure_mode: None,
                     api_key_env: None,
                     api_key: None,
@@ -1261,6 +1254,14 @@ mod tests {
                     name: "anthropic".to_string(),
                     provider: "anthropic".to_string(),
                     upstream: ANTHROPIC_UPSTREAM.to_string(),
+                    auth: dam_net::UpstreamAuthConfig {
+                        caller_headers: vec!["x-api-key".to_string()],
+                        inject: Some(dam_net::UpstreamAuthInjection {
+                            header: "x-api-key".to_string(),
+                            scheme: None,
+                            strip_headers: vec!["x-api-key".to_string()],
+                        }),
+                    },
                     failure_mode: None,
                     api_key_env: None,
                     api_key: None,
@@ -1279,7 +1280,7 @@ mod tests {
     }
 
     #[test]
-    fn configured_ai_routes_follow_custom_traffic_profile() {
+    fn configured_traffic_routes_follow_custom_traffic_profile() {
         let mut config = dam_config::DamConfig::default();
         config.traffic.profile = dam_net::traffic_profile_from_json_str(
             r#"
@@ -1302,7 +1303,7 @@ mod tests {
         )
         .unwrap();
 
-        let routes = configured_ai_routes(&config);
+        let routes = configured_traffic_routes(&config);
 
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0].host, "api.enterprise-ai.example");
@@ -1310,11 +1311,11 @@ mod tests {
     }
 
     #[test]
-    fn configured_ai_routes_follow_runtime_enabled_traffic_apps() {
+    fn configured_traffic_routes_follow_runtime_enabled_traffic_apps() {
         let mut config = dam_config::DamConfig::default();
         config.traffic.enabled_app_ids = Some(vec!["anthropic-api".to_string()]);
 
-        let routes = configured_ai_routes(&config);
+        let routes = configured_traffic_routes(&config);
 
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0].host, "api.anthropic.com");
@@ -1400,19 +1401,19 @@ mod tests {
             }],
             started_at_unix: 42,
             network_mode: dam_net::CaptureMode::ExplicitProxy,
-            transparent_ai_routes: dam_net::known_ai_routes(),
-            transparent_ai_routing_readiness:
-                dam_net::transparent_capture_readiness_for_known_ai_routes(
+            transparent_routes: dam_net::default_traffic_routes(),
+            transparent_routing_readiness:
+                dam_net::transparent_capture_readiness_for_default_routes(
                     dam_net::CaptureMode::ExplicitProxy,
                     false,
                     false,
                 ),
             trust: dam_trust::TrustState::default(),
-            transparent_ai_trust_readiness: dam_trust::readiness_for_known_ai_routes(
+            transparent_trust_readiness: dam_trust::readiness_for_default_routes(
                 &dam_trust::TrustState::default(),
                 false,
             ),
-            transparent_ai_interception_readiness: dam_intercept::readiness_for_known_ai_routes(
+            transparent_interception_readiness: dam_intercept::readiness_for_default_routes(
                 dam_net::CaptureMode::ExplicitProxy,
                 false,
                 false,

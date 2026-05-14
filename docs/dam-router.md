@@ -11,7 +11,7 @@ Current first slice:
 ```text
 proxy config
   -> first configured target
-  -> provider classification
+  -> matched-route target choice
   -> effective failure mode
 
 request headers
@@ -19,29 +19,19 @@ request headers
   -> caller passthrough, target API key injection, or config_required
 ```
 
-Supported provider IDs are:
+Provider labels are target/profile metadata, not a Rust enum. The route table supports multiple configured targets. Direct app-layer requests use the first configured target. Intercepted traffic can select a specific target from the matched `TrafficRoute` metadata supplied by the active traffic profile. `dam-router` does not infer providers from API paths or provider headers. Generic website profile creation/import is parked in the current app.
 
-- `generic-http`
-- `openai-compatible`
-- `anthropic`
-
-The route table supports multiple configured targets. It selects Anthropic or OpenAI-compatible targets from request path/header shape, and transparent traffic can select the target from the matched AI route. `generic-http` is selected by explicit target/profile route metadata and does not require a provider-specific auth header shape, but generic website profile creation/import is parked in the current app. Ambiguous direct app-layer requests still fall back to the first configured target.
-
-Transparent host classification for system-proxy/TUN routing lives in `dam-net`, not in `dam-router`. `dam-router` still owns target/auth/failure decisions after `dam-proxy` has identified an active AI route from the transparent request authority.
+Transparent host classification for system-proxy/TUN routing lives in `dam-net`, not in `dam-router`. `dam-router` still owns target/auth/failure decisions after `dam-proxy` has identified an active traffic route from the transparent request authority.
 
 ## Auth Decisions
 
 `dam-router` returns one of three auth modes for a request:
 
-- `CallerPassthrough`: DAM forwards provider auth from the local tool or harness.
+- `CallerPassthrough`: DAM forwards caller auth from the local tool or harness.
 - `TargetApiKey`: DAM injects the resolved target API key from config/env.
-- `ConfigRequired`: the target names an API-key env var, no value resolved, and the request does not include provider-compatible caller auth.
+- `ConfigRequired`: the target names an API-key env var, no value resolved, and the request does not include any configured caller-auth header.
 
-For `openai-compatible`, caller auth means an `Authorization` header is present.
-
-For `anthropic`, caller auth means `x-api-key` or `Authorization` is present. Anthropic provider forwarding still owns the provider-specific rule that injected target keys use `x-api-key` and drop inbound `Authorization`.
-
-For `generic-http`, caller auth is always considered pass-through. DAM must not require or inject a provider API key unless a future explicit generic credential contract is designed.
+Caller-auth headers and target-key injection headers are configured on the selected target/profile route. If no caller-auth headers are configured, missing target API keys do not force `config_required`.
 
 ## Boundaries
 
@@ -54,7 +44,7 @@ The crate does not:
 - construct `dam-api` reports;
 - decide provider-down behavior after forwarding starts.
 
-Those responsibilities stay in `dam-proxy`, `dam-pipeline`, and provider adapter crates.
+Those responsibilities stay in `dam-proxy`, `dam-pipeline`, and protocol adapter crates.
 
 ## Current Consumer
 

@@ -13,7 +13,7 @@ pub use matcher::TrafficMatch;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{AiRoute, AiTrafficKind, ProtocolAdapterKind, TrafficObservation};
+use crate::{ProtocolAdapterKind, TrafficObservation, TrafficRoute, UpstreamAuthConfig};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrafficProfile {
@@ -75,7 +75,7 @@ pub struct TrafficAppProfile {
     #[serde(default)]
     pub upstream: Option<String>,
     #[serde(default)]
-    pub traffic_kind: AiTrafficKind,
+    pub auth: UpstreamAuthConfig,
     #[serde(default)]
     pub steps: Vec<TrafficPipelineStep>,
     #[serde(default)]
@@ -183,7 +183,7 @@ pub fn decide_profile_traffic(
     }
 }
 
-pub fn ai_routes_from_profile(profile: &TrafficProfile) -> Vec<AiRoute> {
+pub fn traffic_routes_from_profile(profile: &TrafficProfile) -> Vec<TrafficRoute> {
     let mut routes = Vec::new();
     for app in &profile.apps {
         if !app.enabled || app.action != TrafficAction::Inspect {
@@ -209,20 +209,21 @@ pub fn ai_routes_from_profile(profile: &TrafficProfile) -> Vec<AiRoute> {
             .filter(|value| !value.trim().is_empty())
             .unwrap_or(&app.id);
         for domain in app.match_rules.normalized_domains() {
-            routes.push(AiRoute::new(
-                app.traffic_kind,
+            routes.push(TrafficRoute::new_with_auth(
+                app.adapter,
                 domain,
                 provider.clone(),
                 target_name.clone(),
                 upstream.clone(),
+                app.auth.clone(),
             ));
         }
     }
     dedupe_routes(routes)
 }
 
-fn dedupe_routes(routes: Vec<AiRoute>) -> Vec<AiRoute> {
-    let mut deduped = Vec::<AiRoute>::new();
+fn dedupe_routes(routes: Vec<TrafficRoute>) -> Vec<TrafficRoute> {
+    let mut deduped = Vec::<TrafficRoute>::new();
     for route in routes {
         if let Some(existing) = deduped
             .iter_mut()
@@ -262,7 +263,7 @@ fn default_true() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{OPENAI_COMPATIBLE_PROVIDER, TrafficProtocol};
+    use crate::TrafficProtocol;
 
     #[test]
     fn llm_mvp_profile_is_just_traffic_profile_data() {
@@ -274,7 +275,7 @@ mod tests {
         assert_eq!(profile.apps[0].action, TrafficAction::Inspect);
         assert_eq!(
             profile.apps[0].provider.as_deref(),
-            Some(OPENAI_COMPATIBLE_PROVIDER)
+            Some("openai-compatible")
         );
     }
 
@@ -323,7 +324,7 @@ mod tests {
     #[test]
     fn runtime_enabled_apps_filter_profile_without_rewriting_pipeline() {
         let profile = llm_mvp_profile().with_runtime_enabled_apps(&["anthropic-api".to_string()]);
-        let routes = ai_routes_from_profile(&profile);
+        let routes = traffic_routes_from_profile(&profile);
 
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0].host, "api.anthropic.com");
@@ -333,12 +334,12 @@ mod tests {
     fn explicit_empty_runtime_app_list_disables_profile_apps() {
         let profile = llm_mvp_profile().with_runtime_enabled_apps(&[]);
 
-        assert!(ai_routes_from_profile(&profile).is_empty());
+        assert!(traffic_routes_from_profile(&profile).is_empty());
     }
 
     #[test]
     fn route_registry_is_derived_from_inspect_apps() {
-        let routes = ai_routes_from_profile(&llm_mvp_profile());
+        let routes = traffic_routes_from_profile(&llm_mvp_profile());
 
         assert_eq!(routes.len(), 4);
         assert!(routes.iter().any(|route| route.host == "chatgpt.com"));

@@ -141,7 +141,7 @@ It reports:
 - lifecycle state: `connected`, `stale`, or `disconnected`;
 - state directory and state file path;
 - whether the recorded PID is running when a state file exists;
-- proxy URL, target, provider, upstream, network mode, transparent AI route count, per-route routing readiness, trust mode, local CA installed state, per-route trust readiness, per-route interception readiness, local database paths, and inbound resolution setting from the state file.
+- proxy URL, target, provider, upstream, network mode, transparent route count, per-route routing readiness, trust mode, local CA installed state, per-route trust readiness, per-route interception readiness, local database paths, and inbound resolution setting from the state file.
 
 Use `--state-dir PATH` to inspect a non-default state directory, for example in tests or support sessions.
 
@@ -166,7 +166,7 @@ It reports:
 - platform trust-store tag;
 - whether a local CA record is installed;
 - local CA artifact paths when artifacts exist;
-- trusted AI host count;
+- trusted host count;
 - per-route trust readiness for the active traffic profile routes recorded in daemon state;
 - trust actions and whether each is implemented or planned.
 

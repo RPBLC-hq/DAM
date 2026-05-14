@@ -53,22 +53,22 @@ Trust commands are previewed by default through `dam trust install-local-ca` and
 `dam-trust` combines a `dam-net` transparent route decision with local trust state:
 
 ```text
-non-AI traffic              -> not in scope
-HTTP/WS AI-route traffic    -> TLS trust not required
-HTTPS/WSS AI-route traffic  -> needs trust checks
+unmatched traffic           -> not in scope
+HTTP/WS matched traffic     -> TLS trust not required
+HTTPS/WSS matched traffic   -> needs trust checks
 ```
 
-For encrypted AI traffic, readiness is explicit:
+For encrypted matched traffic, readiness is explicit:
 
 ```text
 disabled            TLS interception is disabled
-host_not_allowed    host is outside the trusted AI host scope
+host_not_allowed    host is outside the trusted host scope
 needs_user_consent  user has not approved interception for this scope
 needs_local_ca      local DAM CA is not installed
 ready               host is allowed, user consented, local CA installed
 ```
 
-The default trusted AI host scope comes from `dam-net`:
+The default trusted host scope comes from `dam-net`:
 
 ```text
 api.openai.com
@@ -83,7 +83,7 @@ This list is a transparent-protection scope, not an egress policy allowlist.
 
 ## Current Consumers
 
-- `dam-daemon` stores `trust.mode`, platform store metadata, and trusted AI host scope in `daemon.json`.
+- `dam-daemon` stores `trust.mode`, platform store metadata, and trusted host scope in `daemon.json`.
 - `dam-daemon` stores per-route trust readiness for active traffic profile routes in `daemon.json`.
 - `dam connect --trust-mode disabled|local_ca` records the selected trust mode for future UI/status flows.
 - `dam trust generate-local-ca` creates local CA artifacts without installing trust.
@@ -92,7 +92,7 @@ This list is a transparent-protection scope, not an egress policy allowlist.
 - `dam trust remove-local-ca` previews by default and removes the recorded CA from macOS user trust only with `--yes`.
 - `dam status` prints `trust_mode` and per-route trust readiness when daemon state exists.
 - `damctl trust inspect` prints read-only trust readiness, local CA artifact metadata, and trust action plans.
-- `damctl daemon inspect` prints trust mode, platform store, local CA installed state, and trusted AI host count.
+- `damctl daemon inspect` prints trust mode, platform store, local CA installed state, and trusted host count.
 
 ## Boundaries
 
@@ -105,7 +105,7 @@ This list is a transparent-protection scope, not an egress policy allowlist.
 - local CA system-trust action planning;
 - macOS user login-keychain install/remove execution for DAM-managed CA artifacts;
 - platform trust-store tags;
-- trusted AI host scope;
+- trusted host scope;
 - TLS interception readiness decisions.
 
 `dam-trust` does not own:
@@ -115,7 +115,7 @@ This list is a transparent-protection scope, not an egress policy allowlist.
 - provider request/response handling;
 - detection, policy, consent, vault, logging, or redaction.
 
-Those stay in future platform trust installers for Windows/Linux, `dam-net`, `dam-proxy`, provider adapters, and the spine modules.
+Those stay in future platform trust installers for Windows/Linux, `dam-net`, `dam-proxy`, protocol adapters, and the spine modules.
 
 ## Tests
 

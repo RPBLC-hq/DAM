@@ -125,9 +125,9 @@ fn network_settings(state: &AppState) -> NetworkSetting {
             network_mode: daemon.network_mode.tag().into(),
             trust_mode: daemon.trust.mode.tag().into(),
             ready: daemon.protection_enabled
-                && !daemon.transparent_ai_interception_readiness.is_empty()
+                && !daemon.transparent_interception_readiness.is_empty()
                 && daemon
-                    .transparent_ai_interception_readiness
+                    .transparent_interception_readiness
                     .iter()
                     .all(|route| route.readiness.tag() == "ready"),
         },
@@ -279,15 +279,17 @@ fn capture_scope_for_state(
         config.traffic.enabled_app_ids = Some(app_ids.clone());
         traffic_app_ids = Some(app_ids);
     }
-    let routes = dam_net::ai_routes_from_profile(&config.traffic.effective_profile());
+    let routes = dam_net::traffic_routes_from_profile(&config.traffic.effective_profile());
     Ok(CaptureScope {
         hosts: routes.iter().map(|route| route.host.clone()).collect(),
         traffic_app_ids,
-        proxy_targets: proxy_targets_from_ai_routes(&routes),
+        proxy_targets: proxy_targets_from_traffic_routes(&routes),
     })
 }
 
-fn proxy_targets_from_ai_routes(routes: &[dam_net::AiRoute]) -> Vec<dam_config::ProxyTargetConfig> {
+fn proxy_targets_from_traffic_routes(
+    routes: &[dam_net::TrafficRoute],
+) -> Vec<dam_config::ProxyTargetConfig> {
     let mut seen = BTreeSet::new();
     let mut targets = Vec::new();
     for route in routes {
@@ -304,6 +306,7 @@ fn proxy_targets_from_ai_routes(routes: &[dam_net::AiRoute]) -> Vec<dam_config::
             name,
             provider,
             upstream,
+            auth: route.auth.clone(),
             failure_mode: None,
             api_key_env: None,
             api_key: None,

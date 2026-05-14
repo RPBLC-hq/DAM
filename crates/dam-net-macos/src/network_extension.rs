@@ -130,7 +130,8 @@ pub struct MacosNetworkExtensionStateRecord {
     pub version: u32,
     pub bundle_identifier: String,
     pub team_identifier: Option<String>,
-    pub ai_hosts: Vec<String>,
+    #[serde(default, alias = "ai_hosts")]
+    pub protected_hosts: Vec<String>,
     pub installed_at_unix: u64,
     pub active: bool,
     pub activation_method: String,
@@ -185,7 +186,7 @@ pub struct MacosNetworkExtensionPlan {
     pub paths: MacosNetworkExtensionPaths,
     pub bundle_identifier: String,
     pub team_identifier: Option<String>,
-    pub ai_hosts: Vec<String>,
+    pub protected_hosts: Vec<String>,
     pub commands: Vec<MacosNetworkExtensionCommand>,
     pub requires_admin: bool,
     pub changes_system_routes: bool,
@@ -257,7 +258,7 @@ pub fn record_system_extension_ready(
     state_dir: impl AsRef<Path>,
     bundle_identifier: impl Into<String>,
     team_identifier: Option<String>,
-    ai_hosts: Vec<String>,
+    protected_hosts: Vec<String>,
 ) -> Result<(), MacosNetworkExtensionError> {
     let paths = MacosNetworkExtensionPaths::for_state_dir(state_dir);
     let bundle_identifier = bundle_identifier.into();
@@ -270,7 +271,7 @@ pub fn record_system_extension_ready(
         version: STATE_VERSION,
         bundle_identifier,
         team_identifier,
-        ai_hosts,
+        protected_hosts,
         installed_at_unix: unix_timestamp().unwrap_or(0),
         active: false,
         activation_method: "system_extension_ready_needs_network_configuration".to_string(),
@@ -300,14 +301,14 @@ pub fn record_system_extension_needs_approval(
     state_dir: impl AsRef<Path>,
     bundle_identifier: impl Into<String>,
     team_identifier: Option<String>,
-    ai_hosts: Vec<String>,
+    protected_hosts: Vec<String>,
 ) -> Result<(), MacosNetworkExtensionError> {
     let paths = MacosNetworkExtensionPaths::for_state_dir(state_dir);
     let record = MacosNetworkExtensionStateRecord {
         version: STATE_VERSION,
         bundle_identifier: bundle_identifier.into(),
         team_identifier,
-        ai_hosts,
+        protected_hosts,
         installed_at_unix: unix_timestamp().unwrap_or(0),
         active: false,
         activation_method: "system_extension_needs_user_approval".to_string(),
@@ -326,7 +327,7 @@ pub fn record_pending_reboot(
     state_dir: impl AsRef<Path>,
     bundle_identifier: impl Into<String>,
     team_identifier: Option<String>,
-    ai_hosts: Vec<String>,
+    protected_hosts: Vec<String>,
 ) -> Result<(), MacosNetworkExtensionError> {
     let paths = MacosNetworkExtensionPaths::for_state_dir(state_dir);
     let installed_at_unix = std::time::SystemTime::now()
@@ -337,7 +338,7 @@ pub fn record_pending_reboot(
         version: 1,
         bundle_identifier: bundle_identifier.into(),
         team_identifier,
-        ai_hosts,
+        protected_hosts,
         installed_at_unix,
         active: false,
         activation_method: "system_extension_pending_reboot".to_string(),
@@ -349,24 +350,24 @@ pub fn record_pending_reboot(
 pub fn preview_install_network_extension(
     state_dir: impl AsRef<Path>,
 ) -> Result<MacosNetworkExtensionResult, MacosNetworkExtensionError> {
-    let hosts = default_ai_hosts();
+    let hosts = default_protected_hosts();
     preview_install_network_extension_for_hosts(state_dir, &hosts)
 }
 
 pub fn preview_install_network_extension_for_hosts(
     state_dir: impl AsRef<Path>,
-    ai_hosts: &[String],
+    protected_hosts: &[String],
 ) -> Result<MacosNetworkExtensionResult, MacosNetworkExtensionError> {
     ensure_macos()?;
-    let plan = install_plan_for_hosts(state_dir, ai_hosts)?;
+    let plan = install_plan_for_hosts(state_dir, protected_hosts)?;
     let record = read_record(&plan.paths)?;
     Ok(MacosNetworkExtensionResult {
         state: if plan.can_execute {
             MacosNetworkExtensionResultState::Preview
-        } else if plan.ai_hosts.is_empty()
+        } else if plan.protected_hosts.is_empty()
             && record.as_ref().is_some_and(|record| {
                 !record.active
-                    && normalized_ai_hosts(&record.ai_hosts).is_empty()
+                    && normalized_protected_hosts(&record.protected_hosts).is_empty()
                     && record.activation_method == "network_extension_empty_scope_no_capture"
             })
         {
@@ -388,21 +389,23 @@ pub fn preview_install_network_extension_for_hosts(
 pub fn install_network_extension(
     state_dir: impl AsRef<Path>,
 ) -> Result<MacosNetworkExtensionResult, MacosNetworkExtensionError> {
-    let hosts = default_ai_hosts();
+    let hosts = default_protected_hosts();
     install_network_extension_for_hosts(state_dir, &hosts)
 }
 
 pub fn install_network_extension_for_hosts(
     state_dir: impl AsRef<Path>,
-    ai_hosts: &[String],
+    protected_hosts: &[String],
 ) -> Result<MacosNetworkExtensionResult, MacosNetworkExtensionError> {
     ensure_macos()?;
-    let mut plan = install_plan_for_hosts(&state_dir, ai_hosts)?;
+    let mut plan = install_plan_for_hosts(&state_dir, protected_hosts)?;
     if !plan.can_execute {
         let record = read_record(&plan.paths)?;
         let capture_scope_matches = record
             .as_ref()
-            .map(|record| normalized_ai_hosts(&record.ai_hosts) == plan.ai_hosts)
+            .map(|record| {
+                normalized_protected_hosts(&record.protected_hosts) == plan.protected_hosts
+            })
             .unwrap_or(false);
         if (!plan.backend_status.active || !capture_scope_matches) && plan.commands.is_empty() {
             return Err(MacosNetworkExtensionError::MissingHelper {
@@ -426,7 +429,7 @@ pub fn install_network_extension_for_hosts(
                         version: STATE_VERSION,
                         bundle_identifier: plan.bundle_identifier.clone(),
                         team_identifier: plan.team_identifier.clone(),
-                        ai_hosts: plan.ai_hosts.clone(),
+                        protected_hosts: plan.protected_hosts.clone(),
                         installed_at_unix: unix_timestamp()?,
                         active: false,
                         activation_method:
@@ -456,7 +459,7 @@ pub fn install_network_extension_for_hosts(
         }
     }
 
-    let active = !plan.ai_hosts.is_empty();
+    let active = !plan.protected_hosts.is_empty();
     let activation_method = if active {
         "app_owned_system_extension_native_helper_config"
     } else {
@@ -466,7 +469,7 @@ pub fn install_network_extension_for_hosts(
         version: STATE_VERSION,
         bundle_identifier: plan.bundle_identifier.clone(),
         team_identifier: plan.team_identifier.clone(),
-        ai_hosts: plan.ai_hosts.clone(),
+        protected_hosts: plan.protected_hosts.clone(),
         installed_at_unix: unix_timestamp()?,
         active,
         activation_method: activation_method.to_string(),
@@ -625,7 +628,7 @@ fn reconcile_record_with_manager_status(
             version: STATE_VERSION,
             bundle_identifier: bundle_identifier.to_string(),
             team_identifier,
-            ai_hosts: Vec::new(),
+            protected_hosts: Vec::new(),
             installed_at_unix: unix_timestamp().unwrap_or(0),
             active: status.connected,
             activation_method: method.to_string(),
@@ -773,22 +776,22 @@ fn parse_plist_string_value(xml: &str, key: &str) -> Option<String> {
 
 fn install_plan_for_hosts(
     state_dir: impl AsRef<Path>,
-    ai_hosts: &[String],
+    protected_hosts: &[String],
 ) -> Result<MacosNetworkExtensionPlan, MacosNetworkExtensionError> {
     let paths = MacosNetworkExtensionPaths::for_state_dir(state_dir);
     let record = read_record(&paths)?;
-    let ai_hosts = normalized_ai_hosts(ai_hosts);
+    let protected_hosts = normalized_protected_hosts(protected_hosts);
     let bundle_identifier = bundle_identifier();
     let team_identifier = team_identifier();
     let installed = record.as_ref().is_some_and(|record| record.active);
     let capture_scope_matches = record
         .as_ref()
-        .map(|record| normalized_ai_hosts(&record.ai_hosts) == ai_hosts)
+        .map(|record| normalized_protected_hosts(&record.protected_hosts) == protected_hosts)
         .unwrap_or(false);
-    let empty_scope_recorded = ai_hosts.is_empty()
+    let empty_scope_recorded = protected_hosts.is_empty()
         && record.as_ref().is_some_and(|record| {
             !record.active
-                && normalized_ai_hosts(&record.ai_hosts).is_empty()
+                && normalized_protected_hosts(&record.protected_hosts).is_empty()
                 && record.activation_method == "network_extension_empty_scope_no_capture"
         });
     let pending_approval = record.as_ref().is_some_and(|record| !record.active);
@@ -796,14 +799,14 @@ fn install_plan_for_hosts(
         "install",
         &bundle_identifier,
         team_identifier.as_deref(),
-        &ai_hosts,
+        &protected_hosts,
     );
     let support = support();
     let can_execute = support == MacosNetworkExtensionSupport::Implemented
         && !empty_scope_recorded
         && (!installed || !capture_scope_matches)
         && !commands.is_empty();
-    let message = if ai_hosts.is_empty() {
+    let message = if protected_hosts.is_empty() {
         if empty_scope_recorded {
             "macOS Network Extension capture is disabled because no app profiles are enabled"
                 .to_string()
@@ -839,7 +842,7 @@ fn install_plan_for_hosts(
         paths,
         bundle_identifier,
         team_identifier,
-        ai_hosts,
+        protected_hosts,
         commands,
         requires_admin: true,
         changes_system_routes: true,
@@ -891,9 +894,9 @@ fn remove_plan(
         paths,
         bundle_identifier,
         team_identifier,
-        ai_hosts: record
+        protected_hosts: record
             .as_ref()
-            .map(|record| record.ai_hosts.clone())
+            .map(|record| record.protected_hosts.clone())
             .unwrap_or_default(),
         commands,
         requires_admin: true,
@@ -950,8 +953,8 @@ fn status_plan(
         team_identifier: record
             .and_then(|record| record.team_identifier.clone())
             .or_else(team_identifier),
-        ai_hosts: record
-            .map(|record| record.ai_hosts.clone())
+        protected_hosts: record
+            .map(|record| record.protected_hosts.clone())
             .unwrap_or_default(),
         commands,
         requires_admin: false,
@@ -1018,7 +1021,7 @@ fn helper_command(
     action: &str,
     bundle_identifier: &str,
     team_identifier: Option<&str>,
-    ai_hosts: &[String],
+    protected_hosts: &[String],
 ) -> Vec<MacosNetworkExtensionCommand> {
     let Some(helper) = helper_path() else {
         return Vec::new();
@@ -1038,10 +1041,10 @@ fn helper_command(
             "--routing-failure-policy".to_string(),
             routing_failure_policy(),
         ]);
-        if ai_hosts.is_empty() {
+        if protected_hosts.is_empty() {
             args.push("--no-protected-hosts".to_string());
         } else {
-            for host in ai_hosts {
+            for host in protected_hosts {
                 args.extend(["--protect-host".to_string(), host.to_string()]);
             }
         }
@@ -1270,14 +1273,14 @@ fn delete_if_exists(path: &Path) -> Result<(), MacosNetworkExtensionError> {
     }
 }
 
-fn default_ai_hosts() -> Vec<String> {
-    dam_net::known_ai_hosts()
+fn default_protected_hosts() -> Vec<String> {
+    dam_net::default_traffic_hosts()
 }
 
-fn normalized_ai_hosts(hosts: &[String]) -> Vec<String> {
+fn normalized_protected_hosts(hosts: &[String]) -> Vec<String> {
     let mut normalized = Vec::new();
     for host in hosts {
-        let host = dam_net::normalize_ai_host(host);
+        let host = dam_net::normalize_traffic_host(host);
         if !host.is_empty() && !normalized.contains(&host) {
             normalized.push(host);
         }
@@ -1526,7 +1529,10 @@ mod tests {
             status.plan.backend_status.readiness,
             dam_net::CaptureBackendReadiness::Ready
         );
-        assert_eq!(status.record.unwrap().ai_hosts, vec!["api.openai.com"]);
+        assert_eq!(
+            status.record.unwrap().protected_hosts,
+            vec!["api.openai.com"]
+        );
     }
 
     #[test]
@@ -1628,7 +1634,7 @@ mod tests {
 
         assert!(command.args.contains(&"--no-protected-hosts".to_string()));
         assert!(!command.args.contains(&"--protect-host".to_string()));
-        assert!(result.plan.ai_hosts.is_empty());
+        assert!(result.plan.protected_hosts.is_empty());
     }
 
     #[test]
@@ -1640,7 +1646,7 @@ mod tests {
         let result = install_network_extension_for_hosts(dir.path(), &[]).unwrap();
 
         assert_eq!(result.state, MacosNetworkExtensionResultState::Installed);
-        assert!(result.record.unwrap().ai_hosts.is_empty());
+        assert!(result.record.unwrap().protected_hosts.is_empty());
         assert!(!network_extension_active(dir.path()));
     }
 
@@ -1894,7 +1900,7 @@ mod tests {
             version: STATE_VERSION,
             bundle_identifier: DEFAULT_BUNDLE_ID.to_string(),
             team_identifier: None,
-            ai_hosts: Vec::new(),
+            protected_hosts: Vec::new(),
             installed_at_unix: 2_000,
             active: false,
             activation_method: "system_extension_pending_reboot".to_string(),

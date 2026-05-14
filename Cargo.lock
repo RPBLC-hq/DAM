@@ -550,6 +550,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dam-http-adapter"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "dam-provider-common",
+ "futures-util",
+ "reqwest",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "dam-integrations"
 version = "0.1.0"
 dependencies = [
@@ -631,36 +643,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "dam-provider-anthropic"
-version = "0.1.0"
-dependencies = [
- "axum",
- "dam-provider-common",
- "futures-util",
- "reqwest",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
 name = "dam-provider-common"
 version = "0.1.0"
 dependencies = [
  "axum",
  "futures-util",
  "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "dam-provider-openai"
-version = "0.1.0"
-dependencies = [
- "axum",
- "dam-provider-common",
- "futures-util",
- "reqwest",
- "thiserror 2.0.18",
  "tokio",
 ]
 
@@ -673,13 +661,12 @@ dependencies = [
  "dam-config",
  "dam-consent",
  "dam-core",
+ "dam-http-adapter",
  "dam-intercept",
  "dam-log",
  "dam-net",
  "dam-pipeline",
  "dam-policy",
- "dam-provider-anthropic",
- "dam-provider-openai",
  "dam-router",
  "dam-trust",
  "dam-vault",

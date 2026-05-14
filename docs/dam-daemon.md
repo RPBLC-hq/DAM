@@ -37,7 +37,7 @@ local proxy URL for proxy-aware harnesses: http://127.0.0.1:7828
 Use the Anthropic preset when the harness expects Anthropic-compatible traffic:
 
 ```bash
-dam connect --anthropic
+dam connect --profile claude-code
 ```
 
 That starts the same daemon/proxy lifecycle with:
@@ -77,9 +77,9 @@ The state file contains non-sensitive local lifecycle information:
 - sanitized proxy target set: target name, provider, and upstream URL for each configured proxy target;
 - network mode (`explicit_proxy`, `system_proxy`, or `tun`);
 - active traffic-profile-derived routes from `dam-net`;
-- per-route transparent AI routing readiness from `dam-net`;
+- per-route transparent routing readiness from `dam-net`;
 - trust mode and non-sensitive `dam-trust` readiness metadata;
-- per-route transparent AI trust readiness for active traffic profile routes;
+- per-route transparent trust readiness for active traffic profile routes;
 - per-route guarded TLS interception readiness from `dam-intercept`;
 - whether protection is currently enabled or paused;
 - when protection last became enabled, when known;
@@ -90,7 +90,7 @@ It must not contain raw sensitive values, vault values, provider API keys, or au
 ## Commands
 
 ```bash
-dam connect [--openai|--anthropic] [DAM_OPTIONS]
+dam connect [DAM_OPTIONS]
 dam connect --profile <profile> [--apply]
 dam connect --apply
 dam status [--json]
@@ -100,16 +100,14 @@ dam disconnect [--stop]
 Daemon options:
 
 ```text
---openai             Use the OpenAI-compatible preset (default)
---anthropic          Use the Anthropic preset
 --config <path>      Load DAM config before daemon overrides
 --listen <addr>      Local proxy listen address
 --network-mode <mode> Control-plane network mode: explicit_proxy, system_proxy, or tun
 --trust-mode <mode>  Control-plane trust mode: disabled or local_ca
 --target-name <name> Proxy target name
---provider <name>    Provider adapter: generic-http, openai-compatible, or anthropic
+--provider <name>    Target label for low-level daemon mode
 --upstream <url>     Provider upstream URL
---target <spec>      Internal repeated target spec: name|provider|upstream
+--target <spec>      Internal repeated target spec: target JSON
 --db <path>          Local SQLite vault path
 --log <path>         Local SQLite log path
 --consent-db <path>  Local SQLite consent path
@@ -126,11 +124,11 @@ Daemon options:
 
 `network_mode` records the routing mode. `explicit_proxy` serves the normal app-layer endpoint and HTTP(S) proxy for configured clients. `system_proxy` can report macOS PAC routing installed by `dam-net-macos` and uses the transparent CONNECT/TLS runtime only when route capture, local CA trust, and consent are all ready. `tun` can report macOS Network Extension capture installed by `dam-net-macos`; source builds need `DAM_MACOS_NE_HELPER` or a signed app bundle before that state becomes active. Unknown hosts pass through DAM untouched.
 
-`dam disconnect` pauses protection and leaves the daemon running so existing clients keep network connectivity through DAM pass-through. `dam connect` resumes protection and removes stale daemon state before starting a fresh daemon when the recorded PID is no longer running. It also restarts a live daemon when the state file was written by a missing or different executable fingerprint, while keeping the recorded routing/trust/target setup. Pause/resume state is recorded in `$DAM_STATE_DIR/protection.state` as JSON with the current enabled flag and the Unix time when that flag last changed, so Connect can show how long protection has actually been on; the proxy reads that control file at request time and still accepts the legacy `disabled` marker. When protection resumes, selected-AI pass-through tunnels opened while paused are closed so clients reconnect through the protected CONNECT/TLS path; unknown/non-AI pass-through can continue. `dam disconnect --stop` terminates the daemon and is intended for explicit restore/stop flows after routing or app profile setup has been restored.
+`dam disconnect` pauses protection and leaves the daemon running so existing clients keep network connectivity through DAM pass-through. `dam connect` resumes protection and removes stale daemon state before starting a fresh daemon when the recorded PID is no longer running. It also restarts a live daemon when the state file was written by a missing or different executable fingerprint, while keeping the recorded routing/trust/target setup. Pause/resume state is recorded in `$DAM_STATE_DIR/protection.state` as JSON with the current enabled flag and the Unix time when that flag last changed, so Connect can show how long protection has actually been on; the proxy reads that control file at request time and still accepts the legacy `disabled` marker. When protection resumes, pass-through tunnels for matched routes opened while paused are closed so clients reconnect through the protected CONNECT/TLS path; unmatched pass-through can continue. `dam disconnect --stop` terminates the daemon and is intended for explicit restore/stop flows after routing or app profile setup has been restored.
 
 `trust_mode` is a control-plane/status field and a transparent-runtime gate. `disabled` is the default. `local_ca` records the intended TLS trust mode and may report local CA artifact metadata and macOS installation state. It does not itself install a local CA or change OS trust settings; those actions remain explicit `dam trust ... --yes` commands.
 
-`dam-intercept` readiness is recorded for the merged AI route registry. It only reports `ready` when routing, explicit consent, local TLS trust, and the TLS adapter runtime are all ready. The daemon reports the adapter as available because the first HTTP/1.1 CONNECT runtime exists; readiness still fails closed when route capture or trust is incomplete.
+`dam-intercept` readiness is recorded for the merged traffic route registry. It only reports `ready` when routing, explicit consent, local TLS trust, and the TLS adapter runtime are all ready. The daemon reports the adapter as available because the first HTTP/1.1 CONNECT runtime exists; readiness still fails closed when route capture or trust is incomplete.
 
 `damctl daemon inspect` is the read-only support/debug view over the same state file. It reports `connected`, `stale`, or `disconnected`, state file paths, process status, selected proxy target, local database paths, inbound resolution settings, and trust readiness without starting or stopping the daemon.
 

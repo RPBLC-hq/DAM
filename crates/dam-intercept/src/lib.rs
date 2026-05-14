@@ -34,7 +34,7 @@ impl fmt::Display for TlsInterceptionReadiness {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouteTlsInterceptionReadiness {
-    pub route: dam_net::AiRoute,
+    pub route: dam_net::TrafficRoute,
     pub protocol: dam_net::TrafficProtocol,
     pub network_mode: dam_net::CaptureMode,
     pub routing_readiness: dam_net::RouteCaptureReadiness,
@@ -54,7 +54,7 @@ pub enum TlsInterceptionActivationState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TlsInterceptionActivation {
     pub state: TlsInterceptionActivationState,
-    pub route: dam_net::AiRoute,
+    pub route: dam_net::TrafficRoute,
     pub network_mode: dam_net::CaptureMode,
     pub message: String,
 }
@@ -112,7 +112,7 @@ impl TlsInterceptionAdapter {
     }
 }
 
-pub fn readiness_for_known_ai_routes(
+pub fn readiness_for_default_routes(
     network_mode: dam_net::CaptureMode,
     system_proxy_active: bool,
     tun_active: bool,
@@ -120,8 +120,8 @@ pub fn readiness_for_known_ai_routes(
     user_consented: bool,
     adapter: TlsInterceptionAdapter,
 ) -> Vec<RouteTlsInterceptionReadiness> {
-    readiness_for_ai_routes(
-        &dam_net::known_ai_routes(),
+    readiness_for_routes(
+        &dam_net::default_traffic_routes(),
         network_mode,
         system_proxy_active,
         tun_active,
@@ -131,8 +131,8 @@ pub fn readiness_for_known_ai_routes(
     )
 }
 
-pub fn readiness_for_ai_routes(
-    routes: &[dam_net::AiRoute],
+pub fn readiness_for_routes(
+    routes: &[dam_net::TrafficRoute],
     network_mode: dam_net::CaptureMode,
     system_proxy_active: bool,
     tun_active: bool,
@@ -140,13 +140,13 @@ pub fn readiness_for_ai_routes(
     user_consented: bool,
     adapter: TlsInterceptionAdapter,
 ) -> Vec<RouteTlsInterceptionReadiness> {
-    let routing = dam_net::transparent_capture_readiness_for_ai_routes(
+    let routing = dam_net::transparent_capture_readiness_for_routes(
         routes,
         network_mode,
         system_proxy_active,
         tun_active,
     );
-    let trust = dam_trust::readiness_for_ai_routes(routes, trust, user_consented);
+    let trust = dam_trust::readiness_for_routes(routes, trust, user_consented);
 
     routing
         .iter()
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn explicit_proxy_can_activate_interception_for_configured_clients() {
-        let readiness = readiness_for_known_ai_routes(
+        let readiness = readiness_for_default_routes(
             dam_net::CaptureMode::ExplicitProxy,
             false,
             false,
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn routing_is_required_before_trust_or_adapter_activation() {
-        let readiness = readiness_for_known_ai_routes(
+        let readiness = readiness_for_default_routes(
             dam_net::CaptureMode::SystemProxy,
             false,
             false,
@@ -269,7 +269,7 @@ mod tests {
 
     #[test]
     fn consent_and_trust_gate_adapter_activation_after_routing() {
-        let no_consent = readiness_for_known_ai_routes(
+        let no_consent = readiness_for_default_routes(
             dam_net::CaptureMode::SystemProxy,
             true,
             false,
@@ -277,7 +277,7 @@ mod tests {
             false,
             TlsInterceptionAdapter::new(true),
         );
-        let no_trust = readiness_for_known_ai_routes(
+        let no_trust = readiness_for_default_routes(
             dam_net::CaptureMode::SystemProxy,
             true,
             false,
@@ -299,7 +299,7 @@ mod tests {
     #[test]
     fn adapter_only_activates_when_every_gate_is_ready() {
         let adapter = TlsInterceptionAdapter::new(true);
-        let readiness = readiness_for_known_ai_routes(
+        let readiness = readiness_for_default_routes(
             dam_net::CaptureMode::SystemProxy,
             true,
             false,
@@ -319,7 +319,7 @@ mod tests {
 
     #[test]
     fn unavailable_adapter_stays_inactive_even_after_prerequisites() {
-        let readiness = readiness_for_known_ai_routes(
+        let readiness = readiness_for_default_routes(
             dam_net::CaptureMode::Tun,
             false,
             true,
@@ -337,7 +337,7 @@ mod tests {
     #[test]
     fn unavailable_adapter_handle_cannot_activate_stale_ready_readiness() {
         let ready_adapter = TlsInterceptionAdapter::new(true);
-        let readiness = readiness_for_known_ai_routes(
+        let readiness = readiness_for_default_routes(
             dam_net::CaptureMode::SystemProxy,
             true,
             false,

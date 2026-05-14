@@ -454,7 +454,7 @@ impl TrustState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouteTrustReadiness {
-    pub route: dam_net::AiRoute,
+    pub route: dam_net::TrafficRoute,
     pub protocol: dam_net::TrafficProtocol,
     pub readiness: TlsInterceptionReadiness,
     pub message: String,
@@ -463,7 +463,7 @@ pub struct RouteTrustReadiness {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TlsInterceptionReadiness {
-    NotAiTraffic,
+    NotConfiguredTraffic,
     NotRequired,
     Disabled,
     HostNotAllowed,
@@ -475,7 +475,7 @@ pub enum TlsInterceptionReadiness {
 impl TlsInterceptionReadiness {
     pub fn tag(self) -> &'static str {
         match self {
-            Self::NotAiTraffic => "not_ai_traffic",
+            Self::NotConfiguredTraffic => "not_configured_traffic",
             Self::NotRequired => "not_required",
             Self::Disabled => "disabled",
             Self::HostNotAllowed => "host_not_allowed",
@@ -504,11 +504,11 @@ pub fn readiness_for_route(
     user_consented: bool,
 ) -> TrustReadinessReport {
     match decision {
-        dam_net::TransparentRouteDecision::NonAiTraffic { .. } => TrustReadinessReport {
-            readiness: TlsInterceptionReadiness::NotAiTraffic,
-            message: "non-AI traffic is outside the trust scope".to_string(),
+        dam_net::TransparentRouteDecision::Unmatched { .. } => TrustReadinessReport {
+            readiness: TlsInterceptionReadiness::NotConfiguredTraffic,
+            message: "traffic is outside the configured trust scope".to_string(),
         },
-        dam_net::TransparentRouteDecision::IdentifiedAi {
+        dam_net::TransparentRouteDecision::Matched {
             route,
             protectable_without_tls,
             ..
@@ -519,7 +519,7 @@ pub fn readiness_for_route(
                 route.target_name
             ),
         },
-        dam_net::TransparentRouteDecision::IdentifiedAi { route, .. } => {
+        dam_net::TransparentRouteDecision::Matched { route, .. } => {
             if trust.mode == TrustMode::Disabled {
                 return TrustReadinessReport {
                     readiness: TlsInterceptionReadiness::Disabled,
@@ -529,7 +529,7 @@ pub fn readiness_for_route(
             if !trust.host_allowed(&route.host) {
                 return TrustReadinessReport {
                     readiness: TlsInterceptionReadiness::HostNotAllowed,
-                    message: format!("{} is not in the trusted AI host scope", route.host),
+                    message: format!("{} is not in the trusted host scope", route.host),
                 };
             }
             if !user_consented {
@@ -555,15 +555,15 @@ pub fn readiness_for_route(
     }
 }
 
-pub fn readiness_for_known_ai_routes(
+pub fn readiness_for_default_routes(
     trust: &TrustState,
     user_consented: bool,
 ) -> Vec<RouteTrustReadiness> {
-    readiness_for_ai_routes(&dam_net::known_ai_routes(), trust, user_consented)
+    readiness_for_routes(&dam_net::default_traffic_routes(), trust, user_consented)
 }
 
-pub fn readiness_for_ai_routes(
-    routes: &[dam_net::AiRoute],
+pub fn readiness_for_routes(
+    routes: &[dam_net::TrafficRoute],
     trust: &TrustState,
     user_consented: bool,
 ) -> Vec<RouteTrustReadiness> {
@@ -1119,7 +1119,7 @@ fn run_system_trust_command(command: &SystemTrustCommand) -> Result<(), TrustArt
 }
 
 pub fn default_allowed_hosts() -> Vec<String> {
-    dam_net::known_ai_hosts()
+    dam_net::default_traffic_hosts()
 }
 
 fn generate_ca_material() -> Result<(String, String), TrustArtifactError> {
@@ -1275,7 +1275,7 @@ mod tests {
     }
 
     #[test]
-    fn default_trust_state_allows_known_ai_hosts_but_is_disabled() {
+    fn default_trust_state_allows_default_traffic_hosts_but_is_disabled() {
         let state = TrustState::default();
 
         assert_eq!(state.mode, TrustMode::Disabled);
@@ -1284,7 +1284,7 @@ mod tests {
     }
 
     #[test]
-    fn https_ai_traffic_needs_trust_when_interception_is_disabled() {
+    fn https_profile_traffic_needs_trust_when_interception_is_disabled() {
         let report = readiness_for_route(&https_openai_decision(), &TrustState::default(), false);
 
         assert_eq!(report.readiness, TlsInterceptionReadiness::Disabled);
@@ -1315,7 +1315,7 @@ mod tests {
     }
 
     #[test]
-    fn installed_local_ca_and_user_consent_make_known_ai_tls_route_ready() {
+    fn installed_local_ca_and_user_consent_make_default_tls_route_ready() {
         let state = TrustState {
             mode: TrustMode::LocalCa,
             local_ca: Some(LocalCaRecord {
@@ -1335,9 +1335,9 @@ mod tests {
     }
 
     #[test]
-    fn known_ai_route_readiness_reports_all_initial_https_routes() {
-        let routes = dam_net::known_ai_routes();
-        let reports = readiness_for_known_ai_routes(&TrustState::default(), false);
+    fn default_route_readiness_reports_all_initial_https_routes() {
+        let routes = dam_net::default_traffic_routes();
+        let reports = readiness_for_default_routes(&TrustState::default(), false);
 
         assert_eq!(reports.len(), routes.len());
         assert_eq!(reports[0].route.target_name, "openai");
@@ -1350,10 +1350,10 @@ mod tests {
     }
 
     #[test]
-    fn configured_ai_route_readiness_uses_route_host_scope() {
-        let routes = vec![dam_net::AiRoute::custom(
+    fn configured_route_readiness_uses_route_host_scope() {
+        let routes = vec![dam_net::TrafficRoute::custom(
             "api.enterprise-ai.example",
-            dam_net::OPENAI_COMPATIBLE_PROVIDER,
+            "openai-compatible",
             "enterprise-ai",
             "https://api.enterprise-ai.example",
         )];
@@ -1363,7 +1363,7 @@ mod tests {
             ..TrustState::default()
         };
 
-        let reports = readiness_for_ai_routes(&routes, &trust, true);
+        let reports = readiness_for_routes(&routes, &trust, true);
 
         assert!(
             reports

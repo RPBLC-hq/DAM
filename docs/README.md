@@ -17,22 +17,21 @@ DAM is designed for macOS, Linux, and Windows. Platform-specific routing, trust,
 - [dam-consent](dam-consent.md): canonical-value passthrough grants with TTL and revocation.
 - [dam-daemon](dam-daemon.md): background local proxy lifecycle, pause/resume protection state, state file, and `dam connect/status/disconnect` support.
 - [dam-diagnostics](dam-diagnostics.md): shared local readiness checks for `damctl doctor` and `dam-web /doctor`.
-- [dam-intercept](dam-intercept.md): guarded TLS interception activation contract for transparent AI routes.
+- [dam-intercept](dam-intercept.md): guarded TLS interception activation contract for transparent routes.
 - [dam-integrations](dam-integrations.md): JSON local harness profiles, enabled app state, and legacy active profile state for `dam integrations`, `dam profile`, and `dam connect --profile`.
 - [damctl](damctl.md): local status and config diagnostics CLI.
 - [dam-detect](dam-detect.md): pure rule-based sensitive value detection.
 - [dam-e2e](dam-e2e.md): process-level end-to-end tests across the local binaries.
 - [dam-policy](dam-policy.md): maps detections to `tokenize`, `redact`, `allow`, or `block`.
 - [dam-pipeline](dam-pipeline.md): shared text processing orchestration for detect, policy, consent, vault/log events, redaction, and inbound reference resolution.
-- [dam-provider-common](dam-provider-common.md): shared provider adapter utilities for JSON/JSON-lines string-value, raw stream, and provider-aware SSE text-delta transforms.
-- [dam-provider-anthropic](dam-provider-anthropic.md): Anthropic upstream forwarding, `x-api-key` auth/header handling, JSON/JSON-lines response transforms, and SSE text-delta response transforms for proxy flows.
-- [dam-provider-openai](dam-provider-openai.md): OpenAI-compatible upstream forwarding, auth/header handling, JSON/JSON-lines response transforms, and SSE text-delta response transforms for proxy flows.
-- [dam-router](dam-router.md): proxy target selection, provider classification, auth mode, and failure-mode decisions.
+- [dam-http-adapter](dam-http-adapter.md): generic HTTP upstream forwarding, configured auth/header injection, JSON/JSON-lines response transforms, and SSE text-delta response transforms for proxy flows.
+- [dam-provider-common](dam-provider-common.md): shared response transform utilities for JSON/JSON-lines string-value, raw stream, and SSE text-delta transforms.
+- [dam-router](dam-router.md): proxy target selection, matched-route target choice, auth mode, and failure-mode decisions.
 - [dam-vault](dam-vault.md): local SQLite `VaultWriter` and `VaultReader` implementation.
 - [dam-log](dam-log.md): local SQLite `EventSink` implementation.
 - [dam-net](dam-net.md): network capture-mode vocabulary, generic traffic profile contracts, routing readiness, capture backend status, protocol adapter status, and profile-derived host classification.
 - [dam-net-macos](dam-net-macos.md): macOS PAC system-proxy install/remove plus Network Extension capture planning/status for `tun`.
-- [dam-trust](dam-trust.md): TLS trust-mode vocabulary, local CA artifacts, leaf issuance, macOS trust install/remove, readiness contracts, and trusted AI host scope for transparent protection.
+- [dam-trust](dam-trust.md): TLS trust-mode vocabulary, local CA artifacts, leaf issuance, macOS trust install/remove, readiness contracts, and trusted host scope for transparent protection.
 - [dam-redact](dam-redact.md): pure replacement application.
 - [dam-filter](dam-filter.md): CLI pipeline wiring detection, policy, vault, logs, and redaction.
 - [dam-resolve](dam-resolve.md): CLI pipeline for resolving `[kind:id]` references through `VaultReader`.
@@ -94,11 +93,11 @@ LLM request
   -> dam-vault only for tokenize decisions
   -> dam-redact
   -> dam-log
-  -> dam-provider-openai or dam-provider-anthropic
+  -> dam-http-adapter
   -> upstream provider
 
 provider response
-  -> dam-provider-openai or dam-provider-anthropic
+  -> dam-http-adapter
   -> dam-pipeline
   -> dam-core reference parser
   -> dam-vault through VaultReader
@@ -109,7 +108,7 @@ provider response
 
 Proxy defaults are directional: outbound requests are redacted before the provider sees them. Active consent applies to canonical detected values and, in proxy flows with a vault reader, previously tokenized outbound DAM references for that same allowed value. Agent traffic apps leave known DAM references unresolved in inbound local transcripts, while raw inbound HTTP response redetection/tokenization is explicit per route through traffic profile `inbound.protect_sensitive_data`. JSON-shaped responses are transformed string-by-string, including newline-delimited JSON, when reference restoration or explicit raw inbound protection is active. `text/event-stream` responses are transformed under the same route policy; provider-aware SSE text-delta parsing handles references and opted-in raw values split across adjacent OpenAI-compatible or Anthropic JSON delta events with a bounded event window, while raw streams still use tail-buffered transformation. The Codex ChatGPT-login WebSocket MVP freezes protection state at connection start, strips WebSocket extension negotiation, and protects unfragmented client and server text frames on protected connections; fragmented, binary, or compressed WebSocket frames close the protected connection instead of passing through raw.
 
-`dam-pipeline`, `dam-provider-common`, `dam-provider-openai`, `dam-provider-anthropic`, and `dam-router` have been extracted from the first compact proxy implementation.
+`dam-pipeline`, `dam-provider-common`, `dam-http-adapter`, and `dam-router` have been extracted from the first compact proxy implementation.
 
 ## Control And Diagnostics
 

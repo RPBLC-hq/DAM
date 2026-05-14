@@ -236,7 +236,7 @@ Current tools:
 Background local endpoint:
 
 ```bash
-dam connect [--openai|--anthropic] [DAM_OPTIONS]
+dam connect [DAM_OPTIONS]
 dam connect --profile <profile> [--apply] [DAM_OPTIONS]
 dam connect --apply [DAM_OPTIONS]
 dam status [--json]
@@ -264,14 +264,12 @@ DAM options:
 ```text
 --profile <id>        Use integration profile daemon defaults
 --apply               Ensure selected or enabled DAM profile files before connecting
---openai              Use the OpenAI-compatible daemon preset
---anthropic           Use the Anthropic daemon preset
 --config <path>       Load DAM config before daemon overrides
 --listen <addr>       Local proxy listen address, default 127.0.0.1:7828
 --network-mode <mode> Control-plane network mode: explicit_proxy, system_proxy, or tun
 --trust-mode <mode>   Control-plane trust mode: disabled or local_ca
 --target-name <name>  Proxy target name for daemon mode
---provider <name>     Provider adapter for daemon mode
+--provider <name>     Target label for low-level daemon mode
 --upstream <url>      Provider upstream
 --db <path>           Vault SQLite path, default vault.db
 --log <path>          Log SQLite path, default log.db
@@ -317,7 +315,7 @@ Policy maps detections to `tokenize`, `redact`, `allow`, or `block`. The default
 ## V1 Limits
 
 - DAM protects clients configured to use DAM as an HTTP(S) proxy, the macOS PAC fallback, and the macOS `tun`/Network Extension path when the signed helper is available. Unknown hosts pass through untouched, and active traffic profile matches are decrypted and protected only when routing, local CA trust, consent, and the TLS/protocol adapter are ready.
-- `dam disconnect` pauses protection while leaving the daemon active in pass-through mode so running clients keep network connectivity. When protection resumes, DAM closes selected-AI pass-through tunnels that were opened while paused so the client reconnects through the protected path. `dam disconnect --stop` is reserved for explicit restore/stop flows after routing or app profile setup has been restored.
+- `dam disconnect` pauses protection while leaving the daemon active in pass-through mode so running clients keep network connectivity. When protection resumes, DAM closes pass-through tunnels for matched routes that were opened while paused so the client reconnects through the protected path. `dam disconnect --stop` is reserved for explicit restore/stop flows after routing or app profile setup has been restored.
 - DAM is designed for macOS, Linux, and Windows, but platform-specific routing, trust, tray, and packaging implementations are staged. Partial or delayed platform behavior is tracked in `docs/parking-lot.md` or the relevant module parking-lot doc until implementation, docs, and tests agree.
 - `dam profile set <id>` selects the legacy active harness profile for the local user. The web/tray Settings flow persists enabled app profiles for simultaneous app protection; `dam connect` uses enabled profiles when present and falls back to the legacy active profile when no enabled state exists.
 - `dam connect` starts a local proxy/interception endpoint. Enabled profiles select daemon targets and active traffic app IDs so multiple selected providers can share one daemon. Tray/web Connect uses Network Extension capture as the primary path and keeps DAM-owned profile catalog JSON for source builds and unsupported environments. Resume/default connect is idempotent for the current daemon setup; explicit mismatched `--network-mode` or `--trust-mode` flags require `dam disconnect --stop` first. Transparent modes preflight routing and local CA trust before startup. `dam integrations apply <profile>` previews by default; add `--write` to ensure the DAM-managed catalog file, or pass `--target-path` to write a rendered JSON export with rollback support.
@@ -348,10 +346,9 @@ Do not spend the next session on these until their prerequisite slice exists:
 Implemented extraction modules:
 
 - `dam-pipeline`: shared request processing orchestration for proxy/API-style flows.
-- `dam-provider-openai`: OpenAI-compatible adapter with fixture-first tests and no real provider calls in automated tests.
-- `dam-provider-anthropic`: Anthropic-compatible adapter with fixture-first tests and no real provider calls in automated tests.
+- `dam-http-adapter`: generic HTTP upstream adapter with configured auth/header behavior, fixture-first tests, and no real provider calls in automated tests.
 - `dam-provider-common`: shared JSON/JSON-lines string-value, raw stream, and provider-aware SSE text-delta transforms for inbound reference resolution.
-- `dam-router`: reusable first-target selection, provider classification, auth mode, and failure-mode decisions.
+- `dam-router`: reusable first-target selection, matched-route target choice, auth mode, and failure-mode decisions.
 - `dam-diagnostics`: shared local readiness checks for `damctl doctor` and `dam-web /doctor`.
 - `dam-daemon`: background local proxy lifecycle, pause/resume protection state, and state file for `dam connect/status/disconnect`.
 - `dam-integrations`: JSON local harness profiles plus enabled app state for `dam integrations`, `dam profile`, and `dam connect --profile`.

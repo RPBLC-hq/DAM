@@ -12,8 +12,8 @@ use std::time::Duration;
 const UPSTREAM_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, thiserror::Error)]
-pub enum AnthropicProviderError {
-    #[error("failed to initialize Anthropic provider: {0}")]
+pub enum HttpAdapterError {
+    #[error("failed to initialize HTTP upstream adapter: {0}")]
     Client(String),
 
     #[error("failed to build upstream URL: {0}")]
@@ -27,7 +27,7 @@ pub enum AnthropicProviderError {
 }
 
 #[derive(Clone)]
-pub struct AnthropicProvider {
+pub struct HttpAdapter {
     client: reqwest::Client,
 }
 
@@ -38,16 +38,24 @@ pub struct ForwardRequest<'a> {
     pub headers: HeaderMap,
     pub body: Bytes,
     pub target_api_key: Option<&'a str>,
+    pub target_api_key_injection: Option<AuthInjection<'a>>,
     pub transform_streaming_response: bool,
 }
 
-impl AnthropicProvider {
-    pub fn new() -> Result<Self, AnthropicProviderError> {
+#[derive(Clone, Copy)]
+pub struct AuthInjection<'a> {
+    pub header: &'a str,
+    pub scheme: Option<&'a str>,
+    pub strip_headers: &'a [String],
+}
+
+impl HttpAdapter {
+    pub fn new() -> Result<Self, HttpAdapterError> {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(UPSTREAM_REQUEST_TIMEOUT)
             .build()
-            .map_err(|error| AnthropicProviderError::Client(error.to_string()))?;
+            .map_err(|error| HttpAdapterError::Client(error.to_string()))?;
 
         Ok(Self { client })
     }
@@ -56,20 +64,24 @@ impl AnthropicProvider {
         &self,
         request: ForwardRequest<'_>,
         transform_response_body: F,
-    ) -> Result<Response<Body>, AnthropicProviderError>
+    ) -> Result<Response<Body>, HttpAdapterError>
     where
         F: Fn(Bytes) -> Bytes + Clone + Send + Sync + 'static,
     {
         let url = upstream_url(request.upstream, &request.uri)?;
         let method = reqwest::Method::from_bytes(request.method.as_str().as_bytes())
-            .map_err(|error| AnthropicProviderError::Request(error.to_string()))?;
+            .map_err(|error| HttpAdapterError::Request(error.to_string()))?;
         let request_connection_headers = connection_header_tokens(&request.headers);
         let mut upstream_request = self.client.request(method, url).body(request.body);
 
         for (name, value) in request.headers.iter() {
             if should_skip_request_header(
                 name.as_str(),
-                request.target_api_key.is_some(),
+                if request.target_api_key.is_some() {
+                    request.target_api_key_injection
+                } else {
+                    None
+                },
                 &request_connection_headers,
             ) {
                 continue;
@@ -78,14 +90,22 @@ impl AnthropicProvider {
         }
         upstream_request = upstream_request.header(header::ACCEPT_ENCODING, "identity");
 
-        if let Some(api_key) = request.target_api_key {
-            upstream_request = upstream_request.header("x-api-key", api_key);
+        if let (Some(api_key), Some(injection)) =
+            (request.target_api_key, request.target_api_key_injection)
+        {
+            let value = match injection.scheme {
+                Some(scheme) if !scheme.trim().is_empty() => {
+                    format!("{} {}", scheme.trim(), api_key)
+                }
+                _ => api_key.to_string(),
+            };
+            upstream_request = upstream_request.header(injection.header, value);
         }
 
         let response = upstream_request
             .send()
             .await
-            .map_err(|error| AnthropicProviderError::Request(error.without_url().to_string()))?;
+            .map_err(|error| HttpAdapterError::Request(error.without_url().to_string()))?;
         let status = response.status();
         let response_headers = response.headers().clone();
         let response_connection_headers = connection_header_tokens(&response_headers);
@@ -112,13 +132,13 @@ impl AnthropicProvider {
 
             return builder
                 .body(Body::from_stream(stream))
-                .map_err(|error| AnthropicProviderError::Response(error.to_string()));
+                .map_err(|error| HttpAdapterError::Response(error.to_string()));
         }
 
         let response_body = response
             .bytes()
             .await
-            .map_err(|error| AnthropicProviderError::Response(error.without_url().to_string()))?;
+            .map_err(|error| HttpAdapterError::Response(error.without_url().to_string()))?;
         let response_body = transform_non_streaming_response_body(
             &response_headers,
             response_body,
@@ -135,13 +155,13 @@ impl AnthropicProvider {
 
         builder
             .body(Body::from(response_body))
-            .map_err(|error| AnthropicProviderError::Response(error.to_string()))
+            .map_err(|error| HttpAdapterError::Response(error.to_string()))
     }
 }
 
-fn upstream_url(base: &str, uri: &Uri) -> Result<String, AnthropicProviderError> {
+fn upstream_url(base: &str, uri: &Uri) -> Result<String, HttpAdapterError> {
     let mut url =
-        Url::parse(base).map_err(|error| AnthropicProviderError::UpstreamUrl(error.to_string()))?;
+        Url::parse(base).map_err(|error| HttpAdapterError::UpstreamUrl(error.to_string()))?;
     let base_path = url.path().trim_end_matches('/');
     let request_path = uri.path().trim_start_matches('/');
     let path = match (
@@ -160,7 +180,7 @@ fn upstream_url(base: &str, uri: &Uri) -> Result<String, AnthropicProviderError>
 
 fn should_skip_request_header(
     name: &str,
-    target_sets_api_key: bool,
+    target_api_key_injection: Option<AuthInjection<'_>>,
     connection_headers: &[String],
 ) -> bool {
     let normalized = name.to_ascii_lowercase();
@@ -181,7 +201,13 @@ fn should_skip_request_header(
                 | "proxy-authenticate"
                 | "accept-encoding"
         )
-        || (target_sets_api_key && matches!(normalized.as_str(), "x-api-key" | "authorization"))
+        || target_api_key_injection.is_some_and(|injection| {
+            normalized == injection.header.trim().to_ascii_lowercase()
+                || injection
+                    .strip_headers
+                    .iter()
+                    .any(|header| normalized == header.trim().to_ascii_lowercase())
+        })
 }
 
 fn should_skip_response_header(name: &str, connection_headers: &[String]) -> bool {
@@ -290,7 +316,7 @@ mod tests {
 
         spawn_app(
             Router::new()
-                .route("/base/v1/messages", post(echo))
+                .route("/base/v1/chat/completions", post(echo))
                 .with_state(seen_body),
         )
         .await
@@ -317,7 +343,7 @@ mod tests {
 
         spawn_app(
             Router::new()
-                .route("/v1/messages", post(echo))
+                .route("/v1/chat/completions", post(echo))
                 .with_state(seen_headers),
         )
         .await
@@ -329,12 +355,12 @@ mod tests {
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/json")
                 .body(Body::from(
-                    r#"{"content":"\\[email:abc123\\]","metadata":{"safe":"ok"}}"#,
+                    r#"{"choices":[{"message":{"content":"\\[email:abc123\\]"}}],"metadata":{"safe":"ok"}}"#,
                 ))
                 .unwrap()
         }
 
-        spawn_app(Router::new().route("/v1/messages", post(json_response))).await
+        spawn_app(Router::new().route("/v1/chat/completions", post(json_response))).await
     }
 
     async fn spawn_sse_upstream(seen_body: Arc<Mutex<Option<String>>>) -> String {
@@ -371,13 +397,13 @@ mod tests {
 
     #[test]
     fn upstream_url_preserves_base_path_request_path_and_query() {
-        let uri = Uri::from_static("/v1/messages?stream=false");
+        let uri = Uri::from_static("/v1/chat/completions?stream=false");
 
         let url = upstream_url("https://api.example.test/base", &uri).unwrap();
 
         assert_eq!(
             url,
-            "https://api.example.test/base/v1/messages?stream=false"
+            "https://api.example.test/base/v1/chat/completions?stream=false"
         );
     }
 
@@ -392,17 +418,18 @@ mod tests {
     async fn non_streaming_response_uses_body_transform() {
         let seen_body = Arc::new(Mutex::new(None::<String>));
         let upstream = spawn_capture_echo_upstream(seen_body.clone()).await;
-        let provider = AnthropicProvider::new().unwrap();
+        let provider = HttpAdapter::new().unwrap();
 
         let response = provider
             .forward(
                 ForwardRequest {
                     upstream: &format!("{upstream}/base"),
                     method: Method::POST,
-                    uri: Uri::from_static("/v1/messages"),
+                    uri: Uri::from_static("/v1/chat/completions"),
                     headers: HeaderMap::new(),
                     body: Bytes::from_static(b"raw [email:abc]"),
                     target_api_key: None,
+                    target_api_key_injection: None,
                     transform_streaming_response: false,
                 },
                 |_| Bytes::from_static(b"resolved body"),
@@ -420,17 +447,18 @@ mod tests {
     #[tokio::test]
     async fn non_streaming_json_response_transforms_string_values() {
         let upstream = spawn_json_response_upstream().await;
-        let provider = AnthropicProvider::new().unwrap();
+        let provider = HttpAdapter::new().unwrap();
 
         let response = provider
             .forward(
                 ForwardRequest {
                     upstream: &upstream,
                     method: Method::POST,
-                    uri: Uri::from_static("/v1/messages"),
+                    uri: Uri::from_static("/v1/chat/completions"),
                     headers: HeaderMap::new(),
                     body: Bytes::from_static(b"{}"),
                     target_api_key: None,
+                    target_api_key_injection: None,
                     transform_streaming_response: false,
                 },
                 |chunk| {
@@ -448,15 +476,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn target_api_key_replaces_inbound_x_api_key_and_drops_authorization() {
+    async fn target_api_key_replaces_inbound_authorization() {
         let seen_headers = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
         let upstream = spawn_capture_headers_upstream(seen_headers.clone()).await;
-        let provider = AnthropicProvider::new().unwrap();
+        let provider = HttpAdapter::new().unwrap();
         let mut headers = HeaderMap::new();
-        headers.insert("x-api-key", "local-agent-secret".parse().unwrap());
         headers.insert(
             header::AUTHORIZATION,
-            "Bearer local-authorization".parse().unwrap(),
+            "Bearer local-agent-secret".parse().unwrap(),
         );
 
         provider
@@ -464,10 +491,15 @@ mod tests {
                 ForwardRequest {
                     upstream: &upstream,
                     method: Method::POST,
-                    uri: Uri::from_static("/v1/messages"),
+                    uri: Uri::from_static("/v1/chat/completions"),
                     headers,
                     body: Bytes::from_static(b"{}"),
                     target_api_key: Some("upstream-secret"),
+                    target_api_key_injection: Some(AuthInjection {
+                        header: "authorization",
+                        scheme: Some("Bearer"),
+                        strip_headers: &[],
+                    }),
                     transform_streaming_response: false,
                 },
                 |body| body,
@@ -475,59 +507,21 @@ mod tests {
             .await
             .unwrap();
 
-        let headers = seen_headers.lock().unwrap();
-        let x_api_key_values = headers
-            .iter()
-            .filter(|(name, _)| name.eq_ignore_ascii_case("x-api-key"))
-            .map(|(_, value)| value.clone())
-            .collect::<Vec<_>>();
-        assert_eq!(x_api_key_values, ["upstream-secret"]);
-        assert!(
-            !headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
-        );
-    }
-
-    #[tokio::test]
-    async fn caller_x_api_key_passes_through_without_target_api_key() {
-        let seen_headers = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
-        let upstream = spawn_capture_headers_upstream(seen_headers.clone()).await;
-        let provider = AnthropicProvider::new().unwrap();
-        let mut headers = HeaderMap::new();
-        headers.insert("x-api-key", "caller-secret".parse().unwrap());
-
-        provider
-            .forward(
-                ForwardRequest {
-                    upstream: &upstream,
-                    method: Method::POST,
-                    uri: Uri::from_static("/v1/messages"),
-                    headers,
-                    body: Bytes::from_static(b"{}"),
-                    target_api_key: None,
-                    transform_streaming_response: false,
-                },
-                |body| body,
-            )
-            .await
-            .unwrap();
-
-        let x_api_key_values = seen_headers
+        let authorization_values = seen_headers
             .lock()
             .unwrap()
             .iter()
-            .filter(|(name, _)| name.eq_ignore_ascii_case("x-api-key"))
+            .filter(|(name, _)| name.eq_ignore_ascii_case("authorization"))
             .map(|(_, value)| value.clone())
             .collect::<Vec<_>>();
-        assert_eq!(x_api_key_values, ["caller-secret"]);
+        assert_eq!(authorization_values, ["Bearer upstream-secret"]);
     }
 
     #[tokio::test]
     async fn hop_by_hop_and_connection_listed_headers_are_not_forwarded() {
         let seen_headers = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
         let upstream = spawn_capture_headers_upstream(seen_headers.clone()).await;
-        let provider = AnthropicProvider::new().unwrap();
+        let provider = HttpAdapter::new().unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(header::CONNECTION, "x-drop-me, keep-alive".parse().unwrap());
         headers.insert("x-drop-me", "secret".parse().unwrap());
@@ -543,10 +537,11 @@ mod tests {
                 ForwardRequest {
                     upstream: &upstream,
                     method: Method::POST,
-                    uri: Uri::from_static("/v1/messages"),
+                    uri: Uri::from_static("/v1/chat/completions"),
                     headers,
                     body: Bytes::from_static(b"{}"),
                     target_api_key: None,
+                    target_api_key_injection: None,
                     transform_streaming_response: false,
                 },
                 |body| body,
@@ -587,7 +582,7 @@ mod tests {
     async fn event_stream_response_passes_through_without_body_transform() {
         let seen_body = Arc::new(Mutex::new(None::<String>));
         let upstream = spawn_sse_upstream(seen_body.clone()).await;
-        let provider = AnthropicProvider::new().unwrap();
+        let provider = HttpAdapter::new().unwrap();
 
         let response = provider
             .forward(
@@ -598,6 +593,7 @@ mod tests {
                     headers: HeaderMap::new(),
                     body: Bytes::from_static(b"stream token"),
                     target_api_key: None,
+                    target_api_key_injection: None,
                     transform_streaming_response: false,
                 },
                 |_| panic!("streaming response body should not be transformed"),
@@ -620,7 +616,7 @@ mod tests {
     async fn event_stream_response_uses_chunk_transform_when_enabled() {
         let seen_body = Arc::new(Mutex::new(None::<String>));
         let upstream = spawn_sse_upstream(seen_body.clone()).await;
-        let provider = AnthropicProvider::new().unwrap();
+        let provider = HttpAdapter::new().unwrap();
 
         let response = provider
             .forward(
@@ -631,6 +627,7 @@ mod tests {
                     headers: HeaderMap::new(),
                     body: Bytes::from_static(b"stream token"),
                     target_api_key: None,
+                    target_api_key_injection: None,
                     transform_streaming_response: true,
                 },
                 |chunk| {

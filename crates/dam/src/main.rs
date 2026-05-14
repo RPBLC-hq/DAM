@@ -435,6 +435,7 @@ fn proxy_targets_for_existing_daemon(
                     name: target.name.clone(),
                     provider: target.provider.clone(),
                     upstream: target.upstream.clone(),
+                    auth: dam_net::UpstreamAuthConfig::default(),
                     failure_mode: None,
                     api_key_env: None,
                     api_key: None,
@@ -455,6 +456,7 @@ fn proxy_targets_for_existing_daemon(
         name: name.clone(),
         provider: provider.clone(),
         upstream: upstream.clone(),
+        auth: dam_net::UpstreamAuthConfig::default(),
         failure_mode: None,
         api_key_env: None,
         api_key: None,
@@ -520,36 +522,27 @@ fn daemon_transparent_routes_match(
     config: &dam_config::DamConfig,
 ) -> bool {
     let current_routes = state
-        .transparent_ai_routes
+        .transparent_routes
         .iter()
         .map(route_identity)
         .collect::<BTreeSet<_>>();
-    let requested_routes = dam_net::ai_routes_from_profile(&config.traffic.effective_profile())
-        .iter()
-        .map(route_identity)
-        .collect::<BTreeSet<_>>();
+    let requested_routes =
+        dam_net::traffic_routes_from_profile(&config.traffic.effective_profile())
+            .iter()
+            .map(route_identity)
+            .collect::<BTreeSet<_>>();
 
     current_routes == requested_routes
 }
 
-fn route_identity(route: &dam_net::AiRoute) -> (String, String, String, String, &'static str) {
+fn route_identity(route: &dam_net::TrafficRoute) -> (String, String, String, String, &'static str) {
     (
         route.host.clone(),
         route.provider.clone(),
         route.target_name.clone(),
         route.upstream.clone(),
-        ai_traffic_kind_tag(route.kind),
+        route.adapter.tag(),
     )
-}
-
-fn ai_traffic_kind_tag(kind: dam_net::AiTrafficKind) -> &'static str {
-    match kind {
-        dam_net::AiTrafficKind::OpenAiApi => "openai_api",
-        dam_net::AiTrafficKind::AnthropicApi => "anthropic_api",
-        dam_net::AiTrafficKind::XaiApi => "xai_api",
-        dam_net::AiTrafficKind::ChatGptCodexBackend => "chatgpt_codex_backend",
-        dam_net::AiTrafficKind::Custom => "custom",
-    }
 }
 
 fn legacy_daemon_proxy_target_set(
@@ -966,7 +959,7 @@ fn network_command(args: NetworkArgs) -> Result<i32, String> {
                 ..dam_config::ConfigOverrides::default()
             })
             .map_err(|error| error.to_string())?;
-            let hosts = configured_ai_hosts_for_state(&config, &state_dir)?;
+            let hosts = configured_hosts_for_state(&config, &state_dir)?;
             let result = if yes {
                 dam_net_macos::install_system_proxy_for_hosts(&state_dir, &proxy_url, &hosts)
             } else {
@@ -996,7 +989,7 @@ fn network_command(args: NetworkArgs) -> Result<i32, String> {
                 ..dam_config::ConfigOverrides::default()
             })
             .map_err(|error| error.to_string())?;
-            let hosts = configured_ai_hosts_for_state(&config, &state_dir)?;
+            let hosts = configured_hosts_for_state(&config, &state_dir)?;
             let result = if yes {
                 dam_net_macos::install_network_extension_for_hosts(&state_dir, &hosts)
             } else {
@@ -1136,14 +1129,14 @@ fn render_startup_status_view(view: &StartupStatusView) -> String {
     )
 }
 
-fn configured_ai_hosts(config: &dam_config::DamConfig) -> Vec<String> {
-    dam_net::ai_routes_from_profile(&config.traffic.effective_profile())
+fn configured_hosts(config: &dam_config::DamConfig) -> Vec<String> {
+    dam_net::traffic_routes_from_profile(&config.traffic.effective_profile())
         .into_iter()
         .map(|route| route.host)
         .collect()
 }
 
-fn configured_ai_hosts_for_state(
+fn configured_hosts_for_state(
     config: &dam_config::DamConfig,
     state_dir: &Path,
 ) -> Result<Vec<String>, String> {
@@ -1159,7 +1152,7 @@ fn configured_ai_hosts_for_state(
             )?,
         );
     }
-    Ok(configured_ai_hosts(&config))
+    Ok(configured_hosts(&config))
 }
 
 async fn integrations(args: IntegrationArgs) -> Result<i32, String> {
@@ -1361,7 +1354,7 @@ fn parse_connect_command(
 
     let expanded = expand_connect_profile_args(args, &connect_profiles)?;
     let mut proxy = dam_daemon::parse_proxy_options(expanded.args)?;
-    if expanded.selected_profile_ids.len() > 1 && proxy.targets.is_none() {
+    if !expanded.selected_profile_ids.is_empty() && proxy.targets.is_none() {
         proxy.targets = Some(proxy_targets_for_profiles(
             &expanded.selected_profile_ids,
             connect_profiles.integration_state_dir.as_deref(),
@@ -2229,9 +2222,9 @@ fn render_status_view(view: &StatusView) -> String {
         ));
         output.push_str(&format!(
             "routing_routes: {}\n",
-            state.transparent_ai_routing_readiness.len()
+            state.transparent_routing_readiness.len()
         ));
-        for route in &state.transparent_ai_routing_readiness {
+        for route in &state.transparent_routing_readiness {
             output.push_str(&format!(
                 "routing_route {}: {} - {}\n",
                 route.route.target_name, route.readiness, route.message
@@ -2240,9 +2233,9 @@ fn render_status_view(view: &StatusView) -> String {
         output.push_str(&format!("trust_mode: {}\n", state.trust.mode));
         output.push_str(&format!(
             "trust_routes: {}\n",
-            state.transparent_ai_trust_readiness.len()
+            state.transparent_trust_readiness.len()
         ));
-        for route in &state.transparent_ai_trust_readiness {
+        for route in &state.transparent_trust_readiness {
             output.push_str(&format!(
                 "trust_route {}: {} - {}\n",
                 route.route.target_name, route.readiness, route.message
@@ -2250,9 +2243,9 @@ fn render_status_view(view: &StatusView) -> String {
         }
         output.push_str(&format!(
             "interception_routes: {}\n",
-            state.transparent_ai_interception_readiness.len()
+            state.transparent_interception_readiness.len()
         ));
-        for route in &state.transparent_ai_interception_readiness {
+        for route in &state.transparent_interception_readiness {
             output.push_str(&format!(
                 "interception_route {}: {} - {}\n",
                 route.route.target_name, route.readiness, route.message
@@ -2588,7 +2581,10 @@ fn render_network_extension_result(
         plan.backend_status.readiness.tag()
     ));
     output.push_str(&format!("backend_active: {}\n", plan.backend_status.active));
-    output.push_str(&format!("protected_hosts: {}\n", plan.ai_hosts.join(", ")));
+    output.push_str(&format!(
+        "protected_hosts: {}\n",
+        plan.protected_hosts.join(", ")
+    ));
     for command in &plan.commands {
         output.push_str(&format!(
             "command: {} {}\n",
@@ -2834,9 +2830,7 @@ fn enabled_profiles_for_connect_parse(args: &[String]) -> Result<ConnectProfileS
     if connect_args.iter().any(|arg| {
         matches!(
             arg.as_str(),
-            "--openai"
-                | "--anthropic"
-                | "--target-name"
+            "--target-name"
                 | "--provider"
                 | "--upstream"
                 | "--target"
@@ -3058,31 +3052,30 @@ fn validate_connect_apply_profile_matches_proxy(
     proxy: &dam_daemon::ProxyOptions,
     integration_state_dir: Option<&Path>,
 ) -> Result<(), String> {
-    let profile = integration_profile_for_state(
-        profile_id,
-        dam_integrations::DEFAULT_PROXY_URL,
-        integration_state_dir,
-    )?
-    .ok_or_else(|| {
-        format!(
-            "unknown integration profile: {profile_id}\nknown profiles: {}",
-            dam_integrations::profile_ids().join(", ")
-        )
-    })?;
-    let matches_proxy = proxy
-        .targets
-        .as_ref()
-        .map(|targets| {
-            targets
-                .iter()
-                .any(|target| target.provider == profile.provider)
-        })
-        .unwrap_or_else(|| profile.provider == proxy.provider);
-    if !matches_proxy {
+    let expected_app_ids =
+        traffic_app_ids_for_profiles(&[profile_id.to_string()], integration_state_dir)?;
+    if let Some(active_app_ids) = &proxy.traffic_app_ids
+        && !expected_app_ids
+            .iter()
+            .any(|expected| active_app_ids.contains(expected))
+    {
         return Err(format!(
-            "profile {profile_id} uses provider {}, but connect is not configured for that provider",
-            profile.provider
+            "profile {profile_id} is not included in the active traffic app selection"
         ));
+    }
+    if let Some(targets) = &proxy.targets {
+        let expected_targets = proxy_targets_for_traffic_app_ids(&expected_app_ids);
+        if !expected_targets.iter().any(|expected| {
+            targets.iter().any(|target| {
+                target.name == expected.name
+                    && target.provider == expected.provider
+                    && target.upstream == expected.upstream
+            })
+        }) {
+            return Err(format!(
+                "profile {profile_id} is not included in the configured traffic targets"
+            ));
+        }
     }
     Ok(())
 }
@@ -3091,61 +3084,22 @@ fn proxy_targets_for_profiles(
     profile_ids: &[String],
     integration_state_dir: Option<&Path>,
 ) -> Result<Vec<dam_config::ProxyTargetConfig>, String> {
-    let mut targets = Vec::new();
-    for profile_id in profile_ids {
-        let profile = integration_profile_for_state(
-            profile_id,
-            dam_integrations::DEFAULT_PROXY_URL,
-            integration_state_dir,
-        )?
-        .ok_or_else(|| {
-            format!(
-                "unknown enabled integration profile: {profile_id}\nknown profiles: {}",
-                dam_integrations::profile_ids().join(", ")
-            )
-        })?;
-        let options = dam_daemon::parse_proxy_options(profile.connect_args)?;
-        let target = dam_config::ProxyTargetConfig {
-            name: options.target_name,
-            provider: options.provider,
-            upstream: options.upstream,
-            failure_mode: None,
-            api_key_env: None,
-            api_key: None,
-        };
-        if !targets
-            .iter()
-            .any(|existing: &dam_config::ProxyTargetConfig| {
-                existing.name == target.name
-                    && existing.provider == target.provider
-                    && existing.upstream == target.upstream
-            })
-        {
-            targets.push(target);
-        }
-    }
-    for target in proxy_targets_for_traffic_app_ids(&traffic_app_ids_for_profiles(
-        profile_ids,
-        integration_state_dir,
-    )?) {
-        if !targets.iter().any(|existing| {
-            existing.name == target.name
-                && existing.provider == target.provider
-                && existing.upstream == target.upstream
-        }) {
-            targets.push(target);
-        }
-    }
-    Ok(targets)
+    Ok(proxy_targets_for_traffic_app_ids(
+        &traffic_app_ids_for_profiles(profile_ids, integration_state_dir)?,
+    ))
 }
 
 fn proxy_targets_for_traffic_app_ids(app_ids: &[String]) -> Vec<dam_config::ProxyTargetConfig> {
     let profile = dam_net::llm_mvp_profile().with_runtime_enabled_apps(app_ids);
-    let routes = dam_net::ai_routes_from_profile(&profile);
+    let routes = dam_net::traffic_routes_from_profile(&profile);
     let mut seen = BTreeSet::new();
     let mut targets = Vec::new();
     for route in routes {
-        let key = (route.target_name, route.provider, route.upstream);
+        let key = (
+            route.target_name.clone(),
+            route.provider.clone(),
+            route.upstream.clone(),
+        );
         if !seen.insert(key.clone()) {
             continue;
         }
@@ -3154,6 +3108,7 @@ fn proxy_targets_for_traffic_app_ids(app_ids: &[String]) -> Vec<dam_config::Prox
             name,
             provider,
             upstream,
+            auth: route.auth,
             failure_mode: None,
             api_key_env: None,
             api_key: None,
@@ -3301,7 +3256,7 @@ fn usage() -> &'static str {
 }
 
 fn usage_connect() -> &'static str {
-    "Usage: dam connect [--profile PROFILE] [--apply] [--openai|--anthropic] [DAM_OPTIONS]\n\nStarts a background DAM proxy daemon for proxy/interception routing. Enabled app profiles select daemon targets automatically. --apply additionally ensures selected DAM profile files before connecting.\n\nDAM options:\n  --profile <id>          Use integration profile daemon defaults\n  --apply                 Ensure selected or enabled DAM profile files before connecting\n  --openai                Use the OpenAI-compatible target preset (default)\n  --anthropic             Use the Anthropic target preset\n  --config <path>         Load DAM config file before daemon overrides\n  --listen <addr>         Local proxy listen address (default: 127.0.0.1:7828)\n  --network-mode <mode>   Control-plane network mode: explicit_proxy, system_proxy, or tun\n  --trust-mode <mode>     Control-plane trust mode: disabled or local_ca\n  --target-name <name>    Proxy target name (default: openai)\n  --provider <provider>   Provider adapter: openai-compatible or anthropic\n  --upstream <url>        Provider upstream URL\n  --db <path>             Vault SQLite path (default: vault.db)\n  --log <path>            Log SQLite path (default: log.db)\n  --consent-db <path>     Consent SQLite path (default: consent.db)\n  --no-log                Disable DAM log writes\n  --no-resolve-inbound    Leave DAM references unresolved in inbound responses\n  --resolve-inbound       Restore DAM references in inbound responses (default)\n\nKnown profiles: claude-code, codex"
+    "Usage: dam connect [--profile PROFILE] [--apply] [DAM_OPTIONS]\n\nStarts a background DAM proxy daemon for proxy/interception routing. Enabled app profiles select daemon targets automatically. --apply additionally ensures selected DAM profile files before connecting.\n\nDAM options:\n  --profile <id>          Use integration profile daemon defaults\n  --apply                 Ensure selected or enabled DAM profile files before connecting\n  --config <path>         Load DAM config file before daemon overrides\n  --listen <addr>         Local proxy listen address (default: 127.0.0.1:7828)\n  --network-mode <mode>   Control-plane network mode: explicit_proxy, system_proxy, or tun\n  --trust-mode <mode>     Control-plane trust mode: disabled or local_ca\n  --target-name <name>    Low-level proxy target name\n  --provider <provider>   Low-level target label\n  --upstream <url>        Low-level target upstream URL\n  --target <json>         Internal repeated target JSON\n  --db <path>             Vault SQLite path (default: vault.db)\n  --log <path>            Log SQLite path (default: log.db)\n  --consent-db <path>     Consent SQLite path (default: consent.db)\n  --no-log                Disable DAM log writes\n  --no-resolve-inbound    Leave DAM references unresolved in inbound responses\n  --resolve-inbound       Restore DAM references in inbound responses (default)\n\nKnown profiles: claude-code, codex"
 }
 
 fn usage_status() -> &'static str {
@@ -3446,10 +3401,13 @@ mod tests {
     }
 
     #[test]
-    fn parses_connect_with_anthropic_preset() {
+    fn parses_connect_with_low_level_provider_label() {
         let cli = parse_cli([
             "connect".to_string(),
-            "--anthropic".to_string(),
+            "--provider".to_string(),
+            "anthropic".to_string(),
+            "--upstream".to_string(),
+            ANTHROPIC_UPSTREAM.to_string(),
             "--listen".to_string(),
             "127.0.0.1:9000".to_string(),
         ])
@@ -3460,7 +3418,7 @@ mod tests {
         };
         assert_eq!(args.apply_profile_ids, Vec::<String>::new());
         assert_eq!(args.proxy.listen, "127.0.0.1:9000");
-        assert_eq!(args.proxy.target_name, "anthropic");
+        assert_eq!(args.proxy.target_name, "openai");
         assert_eq!(args.proxy.provider, "anthropic");
         assert_eq!(args.proxy.upstream, ANTHROPIC_UPSTREAM);
         assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::ExplicitProxy);
@@ -3511,9 +3469,10 @@ mod tests {
         };
         assert_eq!(args.apply_profile_ids, vec!["claude-code".to_string()]);
         assert_eq!(args.proxy.listen, "127.0.0.1:9000");
-        assert_eq!(args.proxy.target_name, "anthropic");
-        assert_eq!(args.proxy.provider, "anthropic");
-        assert_eq!(args.proxy.upstream, ANTHROPIC_UPSTREAM);
+        let targets = args.proxy.targets.as_ref().unwrap();
+        assert_eq!(targets[0].name, "anthropic");
+        assert_eq!(targets[0].provider, "anthropic");
+        assert_eq!(targets[0].upstream, ANTHROPIC_UPSTREAM);
         assert_eq!(
             args.proxy.traffic_app_ids,
             Some(vec!["anthropic-api".to_string()])
@@ -3540,8 +3499,9 @@ mod tests {
         };
         assert_eq!(args.apply_profile_ids, vec!["claude-code".to_string()]);
         assert_eq!(args.proxy.listen, "127.0.0.1:9000");
-        assert_eq!(args.proxy.provider, "anthropic");
-        assert_eq!(args.proxy.upstream, ANTHROPIC_UPSTREAM);
+        let targets = args.proxy.targets.as_ref().unwrap();
+        assert_eq!(targets[0].provider, "anthropic");
+        assert_eq!(targets[0].upstream, ANTHROPIC_UPSTREAM);
         assert_eq!(
             args.proxy.traffic_app_ids,
             Some(vec!["anthropic-api".to_string()])
@@ -3567,8 +3527,9 @@ mod tests {
         };
         assert_eq!(args.apply_profile_ids, Vec::<String>::new());
         assert_eq!(args.proxy.listen, "127.0.0.1:9000");
-        assert_eq!(args.proxy.provider, "anthropic");
-        assert_eq!(args.proxy.upstream, ANTHROPIC_UPSTREAM);
+        let targets = args.proxy.targets.as_ref().unwrap();
+        assert_eq!(targets[0].provider, "anthropic");
+        assert_eq!(targets[0].upstream, ANTHROPIC_UPSTREAM);
         assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
         assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
     }
@@ -3753,7 +3714,8 @@ mod tests {
         let error = parse_cli([
             "connect".to_string(),
             "--apply".to_string(),
-            "--openai".to_string(),
+            "--provider".to_string(),
+            "openai-compatible".to_string(),
         ])
         .unwrap_err();
 
@@ -3761,17 +3723,23 @@ mod tests {
     }
 
     #[test]
-    fn connect_apply_rejects_profile_provider_mismatch() {
-        let error = parse_cli([
+    fn connect_apply_profile_targets_override_low_level_provider_flag() {
+        let cli = parse_cli([
             "connect".to_string(),
             "--profile".to_string(),
             "claude-code".to_string(),
             "--apply".to_string(),
-            "--openai".to_string(),
+            "--provider".to_string(),
+            "openai-compatible".to_string(),
         ])
-        .unwrap_err();
+        .unwrap();
 
-        assert!(error.contains("connect is not configured for that provider"));
+        let CommandKind::Connect(args) = cli.command else {
+            panic!("expected connect");
+        };
+        let targets = args.proxy.targets.as_ref().unwrap();
+        assert_eq!(targets[0].provider, "anthropic");
+        assert_eq!(targets[0].upstream, ANTHROPIC_UPSTREAM);
     }
 
     #[test]
@@ -4488,14 +4456,14 @@ mod tests {
             proxy_targets: Vec::new(),
             started_at_unix: 0,
             network_mode,
-            transparent_ai_routes: Vec::new(),
-            transparent_ai_routing_readiness: Vec::new(),
+            transparent_routes: Vec::new(),
+            transparent_routing_readiness: Vec::new(),
             trust: dam_trust::TrustState {
                 mode: trust_mode,
                 ..dam_trust::TrustState::default()
             },
-            transparent_ai_trust_readiness: Vec::new(),
-            transparent_ai_interception_readiness: Vec::new(),
+            transparent_trust_readiness: Vec::new(),
+            transparent_interception_readiness: Vec::new(),
             protection_enabled,
             protection_started_at_unix: if protection_enabled { Some(0) } else { None },
         }

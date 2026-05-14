@@ -2,7 +2,7 @@
 
 Status: implemented first extraction.
 
-`dam-diagnostics` owns shared local readiness checks for user-facing status surfaces. It exists so `damctl doctor` and `dam-web /doctor` do not invent separate interpretations of whether DAM is ready to protect local AI traffic.
+`dam-diagnostics` owns shared local readiness checks for user-facing status surfaces. It exists so `damctl doctor` and `dam-web /doctor` do not invent separate interpretations of whether DAM is ready to protect local protected traffic.
 
 ## Responsibilities
 

@@ -47,23 +47,21 @@ Parked work:
 - Decide how imported profiles surface in Settings without making onboarding depend on explicit-proxy profile setup.
 - Add fixtures proving retired profile IDs migrate cleanly and imported profiles cannot introduce secrets, unsafe upstreams, or unsupported protocol claims.
 
-## Generic Adapter And Provider-Crate Cleanup
+## Generic Profile Builder
 
-Current state: `dam-provider-openai` and `dam-provider-anthropic` still contain reusable HTTP forwarding behavior mixed with provider-named auth/header defaults and response transformation assumptions. That was acceptable for the first LLM slice, but it does not match the target model where a random website or service can be mediated from a quick JSON config and the Rust code supplies generic protocol adapters only.
+Current state: HTTP forwarding is generic and auth/header behavior is profile/target data. The app still needs product support for authoring, validating, importing, exporting, and enabling those JSON profiles safely.
 
 Parked work:
 
-- Extract shared HTTP forwarding, timeout, redirect, header-stripping, body-integrity, response transformation, and auth injection behavior into generic adapter/config contracts.
 - Express provider/site differences in traffic-profile or integration-profile JSON: match rules, upstream, adapter kind, timeout, auth header policy, body parser mode, mutation-safe header policy, inbound resolution, and field/path include/exclude rules.
-- Keep OpenAI, Anthropic, Codex, and arbitrary websites as bundled or user-created profiles that consume the generic adapters, not as a reason to add more provider crates.
-- Retire or shrink provider-named crates once compact/Codex, Claude, and API-key paths are reliable and covered by fixtures.
+- Keep OpenAI, Anthropic, Codex, and arbitrary websites as bundled or user-created profiles that consume generic adapters, not as a reason to add provider crates.
 - Add profile-builder validation so unsupported payloads, unsafe upstreams, secrets, and body-signature requirements are surfaced before a user enables a custom config.
 
 ## Security And Privacy Design Work
 
 ### Full-Device Routing And TLS Trust
 
-Current state: local protection is app-layer routing for supported AI harnesses, explicit proxy paths, the macOS `system_proxy` fallback, and macOS Network Extension control-plane support for `tun`. `dam-net` defines capture-mode/backend vocabulary, protocol adapter readiness, routing readiness, and host-only AI traffic classification for the effective traffic profile registry. `dam-tray` owns macOS System Extension activation from `DAM.app`, and `dam-net-macos` can install/remove macOS PAC routing for proxy-capable HTTP/HTTPS traffic with rollback and configure Network Extension capture through a signed helper/app bundle. `dam-proxy` passes unknown hosts through untouched and has a daemon-gated HTTP/1.1 CONNECT/TLS runtime plus Codex ChatGPT-login WebSocket client/server text-frame protection for active traffic profile hosts when routing, trust, and consent are ready. `dam-daemon` tracks pause/resume protection state so `dam disconnect` can stop redaction without removing routing.
+Current state: local protection is app-layer routing for supported AI harnesses, explicit proxy paths, the macOS `system_proxy` fallback, and macOS Network Extension control-plane support for `tun`. `dam-net` defines capture-mode/backend vocabulary, protocol adapter readiness, routing readiness, and host-only traffic-profile classification for the effective traffic profile registry. `dam-tray` owns macOS System Extension activation from `DAM.app`, and `dam-net-macos` can install/remove macOS PAC routing for proxy-capable HTTP/HTTPS traffic with rollback and configure Network Extension capture through a signed helper/app bundle. `dam-proxy` passes unknown hosts through untouched and has a daemon-gated HTTP/1.1 CONNECT/TLS runtime plus Codex ChatGPT-login WebSocket client/server text-frame protection for active traffic profile hosts when routing, trust, and consent are ready. `dam-daemon` tracks pause/resume protection state so `dam disconnect` can stop redaction without removing routing.
 
 Parked work:
 

@@ -10,10 +10,6 @@ pub use capture::*;
 pub use profile::*;
 pub use protocol::*;
 
-pub const OPENAI_COMPATIBLE_PROVIDER: &str = "openai-compatible";
-pub const ANTHROPIC_PROVIDER: &str = "anthropic";
-pub const GENERIC_HTTP_PROVIDER: &str = "generic-http";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum CaptureMode {
@@ -142,7 +138,7 @@ impl fmt::Display for RouteCaptureReadiness {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransparentRouteCaptureReadiness {
-    pub route: AiRoute,
+    pub route: TrafficRoute,
     pub protocol: TrafficProtocol,
     pub mode: CaptureMode,
     pub support: CaptureSupport,
@@ -187,41 +183,51 @@ impl TrafficObservation {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum AiTrafficKind {
-    OpenAiApi,
-    AnthropicApi,
-    XaiApi,
-    ChatGptCodexBackend,
-    #[default]
-    Custom,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AiRoute {
-    pub kind: AiTrafficKind,
+pub struct TrafficRoute {
+    pub adapter: ProtocolAdapterKind,
     #[serde(default)]
     pub host: String,
     pub provider: String,
     pub target_name: String,
     pub upstream: String,
+    #[serde(default)]
+    pub auth: UpstreamAuthConfig,
 }
 
-impl AiRoute {
+impl TrafficRoute {
     pub fn new(
-        kind: AiTrafficKind,
+        adapter: ProtocolAdapterKind,
         host: impl AsRef<str>,
         provider: impl Into<String>,
         target_name: impl Into<String>,
         upstream: impl Into<String>,
     ) -> Self {
+        Self::new_with_auth(
+            adapter,
+            host,
+            provider,
+            target_name,
+            upstream,
+            UpstreamAuthConfig::default(),
+        )
+    }
+
+    pub fn new_with_auth(
+        adapter: ProtocolAdapterKind,
+        host: impl AsRef<str>,
+        provider: impl Into<String>,
+        target_name: impl Into<String>,
+        upstream: impl Into<String>,
+        auth: UpstreamAuthConfig,
+    ) -> Self {
         Self {
-            kind,
+            adapter,
             host: normalize_host(host.as_ref()),
             provider: provider.into(),
             target_name: target_name.into(),
             upstream: upstream.into(),
+            auth,
         }
     }
 
@@ -231,28 +237,54 @@ impl AiRoute {
         target_name: impl Into<String>,
         upstream: impl Into<String>,
     ) -> Self {
-        Self::new(AiTrafficKind::Custom, host, provider, target_name, upstream)
+        Self::new(
+            ProtocolAdapterKind::Http,
+            host,
+            provider,
+            target_name,
+            upstream,
+        )
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpstreamAuthConfig {
+    #[serde(default)]
+    pub caller_headers: Vec<String>,
+    #[serde(default)]
+    pub inject: Option<UpstreamAuthInjection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpstreamAuthInjection {
+    pub header: String,
+    #[serde(default)]
+    pub scheme: Option<String>,
+    #[serde(default)]
+    pub strip_headers: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "decision", rename_all = "snake_case")]
 pub enum TransparentRouteDecision {
-    NonAiTraffic {
+    Unmatched {
         reason: String,
     },
-    IdentifiedAi {
-        route: AiRoute,
+    Matched {
+        route: TrafficRoute,
         tls_visibility: TlsVisibility,
         protectable_without_tls: bool,
     },
 }
 
-pub fn classify_ai_host(host: &str) -> Option<AiRoute> {
-    classify_ai_host_with_routes(host, &known_ai_routes())
+pub fn classify_traffic_host(host: &str) -> Option<TrafficRoute> {
+    classify_traffic_host_with_routes(host, &default_traffic_routes())
 }
 
-pub fn classify_ai_host_with_routes(host: &str, routes: &[AiRoute]) -> Option<AiRoute> {
+pub fn classify_traffic_host_with_routes(
+    host: &str,
+    routes: &[TrafficRoute],
+) -> Option<TrafficRoute> {
     let normalized = normalize_host(host);
     routes
         .iter()
@@ -260,43 +292,43 @@ pub fn classify_ai_host_with_routes(host: &str, routes: &[AiRoute]) -> Option<Ai
         .cloned()
 }
 
-pub fn known_ai_routes() -> Vec<AiRoute> {
-    ai_routes_from_profile(&llm_mvp_profile())
+pub fn default_traffic_routes() -> Vec<TrafficRoute> {
+    traffic_routes_from_profile(&llm_mvp_profile())
 }
 
-pub fn known_ai_hosts() -> Vec<String> {
-    known_ai_routes()
+pub fn default_traffic_hosts() -> Vec<String> {
+    default_traffic_routes()
         .into_iter()
         .map(|route| route.host)
         .collect()
 }
 
-pub fn normalize_ai_host(host: &str) -> String {
+pub fn normalize_traffic_host(host: &str) -> String {
     normalize_host(host)
 }
 
 pub fn decide_transparent_route(observation: &TrafficObservation) -> TransparentRouteDecision {
-    decide_transparent_route_with_routes(observation, &known_ai_routes())
+    decide_transparent_route_with_routes(observation, &default_traffic_routes())
 }
 
 pub fn decide_transparent_route_with_routes(
     observation: &TrafficObservation,
-    routes: &[AiRoute],
+    routes: &[TrafficRoute],
 ) -> TransparentRouteDecision {
-    let Some(route) = classify_ai_host_with_routes(&observation.host, routes) else {
-        return TransparentRouteDecision::NonAiTraffic {
-            reason: "host is not a known AI provider endpoint".to_string(),
+    let Some(route) = classify_traffic_host_with_routes(&observation.host, routes) else {
+        return TransparentRouteDecision::Unmatched {
+            reason: "host is not configured for DAM traffic inspection".to_string(),
         };
     };
 
     if observation.protocol.is_tls() {
-        TransparentRouteDecision::IdentifiedAi {
+        TransparentRouteDecision::Matched {
             route,
             tls_visibility: TlsVisibility::RequiresInterception,
             protectable_without_tls: false,
         }
     } else {
-        TransparentRouteDecision::IdentifiedAi {
+        TransparentRouteDecision::Matched {
             route,
             tls_visibility: TlsVisibility::NotRequired,
             protectable_without_tls: true,
@@ -304,21 +336,21 @@ pub fn decide_transparent_route_with_routes(
     }
 }
 
-pub fn transparent_capture_readiness_for_known_ai_routes(
+pub fn transparent_capture_readiness_for_default_routes(
     mode: CaptureMode,
     system_proxy_active: bool,
     tun_active: bool,
 ) -> Vec<TransparentRouteCaptureReadiness> {
-    transparent_capture_readiness_for_ai_routes(
-        &known_ai_routes(),
+    transparent_capture_readiness_for_routes(
+        &default_traffic_routes(),
         mode,
         system_proxy_active,
         tun_active,
     )
 }
 
-pub fn transparent_capture_readiness_for_ai_routes(
-    routes: &[AiRoute],
+pub fn transparent_capture_readiness_for_routes(
+    routes: &[TrafficRoute],
     mode: CaptureMode,
     system_proxy_active: bool,
     tun_active: bool,
@@ -339,7 +371,7 @@ pub fn transparent_capture_readiness_for_ai_routes(
 }
 
 pub fn transparent_route_capture_readiness(
-    route: AiRoute,
+    route: TrafficRoute,
     protocol: TrafficProtocol,
     mode: CaptureMode,
     system_proxy_active: bool,
@@ -436,37 +468,39 @@ mod tests {
     }
 
     #[test]
-    fn classifies_known_ai_provider_hosts() {
+    fn classifies_configured_hosts() {
         assert_eq!(
-            classify_ai_host("https://api.openai.com/v1/responses")
+            classify_traffic_host("https://api.openai.com/v1/responses")
                 .unwrap()
                 .target_name,
             "openai"
         );
         assert_eq!(
-            classify_ai_host("api.anthropic.com:443").unwrap().provider,
-            ANTHROPIC_PROVIDER.to_string()
+            classify_traffic_host("api.anthropic.com:443")
+                .unwrap()
+                .provider,
+            "anthropic".to_string()
         );
         assert_eq!(
-            classify_ai_host("chatgpt.com").unwrap().kind,
-            AiTrafficKind::ChatGptCodexBackend
+            classify_traffic_host("chatgpt.com").unwrap().adapter,
+            ProtocolAdapterKind::WebSocket
         );
         assert_eq!(
-            classify_ai_host("ab.chatgpt.com").unwrap().kind,
-            AiTrafficKind::ChatGptCodexBackend
+            classify_traffic_host("ab.chatgpt.com").unwrap().adapter,
+            ProtocolAdapterKind::WebSocket
         );
-        assert!(classify_ai_host("API.X.AI.").is_none());
-        assert!(classify_ai_host("example.com").is_none());
+        assert!(classify_traffic_host("API.X.AI.").is_none());
+        assert!(classify_traffic_host("example.com").is_none());
     }
 
     #[test]
-    fn known_ai_routes_are_unique_and_non_empty() {
-        let routes = known_ai_routes();
+    fn default_traffic_routes_are_unique_and_non_empty() {
+        let routes = default_traffic_routes();
 
         assert_eq!(routes.len(), 4);
         assert_eq!(routes[0].host, "api.openai.com");
         assert_eq!(routes[0].target_name, "openai");
-        assert_eq!(known_ai_hosts()[0], "api.openai.com");
+        assert_eq!(default_traffic_hosts()[0], "api.openai.com");
     }
 
     #[test]
@@ -500,17 +534,17 @@ mod tests {
             "#,
         )
         .unwrap();
-        let routes = ai_routes_from_profile(&profile);
+        let routes = traffic_routes_from_profile(&profile);
 
         assert_eq!(routes.len(), 2);
         assert_eq!(
-            classify_ai_host_with_routes("api.internal-ai.example", &routes)
+            classify_traffic_host_with_routes("api.internal-ai.example", &routes)
                 .unwrap()
                 .target_name,
             "internal-ai"
         );
         assert_eq!(
-            classify_ai_host_with_routes("api.openai.com", &routes)
+            classify_traffic_host_with_routes("api.openai.com", &routes)
                 .unwrap()
                 .upstream,
             "https://openai.internal.example"
@@ -518,7 +552,7 @@ mod tests {
     }
 
     #[test]
-    fn transparent_https_ai_traffic_is_identified_but_not_protectable_without_tls() {
+    fn transparent_https_profile_traffic_is_identified_but_not_protectable_without_tls() {
         let decision = decide_transparent_route(&TrafficObservation::new(
             "api.openai.com",
             TrafficProtocol::Https,
@@ -526,8 +560,8 @@ mod tests {
 
         assert_eq!(
             decision,
-            TransparentRouteDecision::IdentifiedAi {
-                route: classify_ai_host("api.openai.com").unwrap(),
+            TransparentRouteDecision::Matched {
+                route: classify_traffic_host("api.openai.com").unwrap(),
                 tls_visibility: TlsVisibility::RequiresInterception,
                 protectable_without_tls: false,
             }
@@ -535,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn transparent_http_ai_traffic_is_protectable_without_tls() {
+    fn transparent_http_profile_traffic_is_protectable_without_tls() {
         let decision = decide_transparent_route(&TrafficObservation::new(
             "api.anthropic.com",
             TrafficProtocol::Http,
@@ -543,8 +577,8 @@ mod tests {
 
         assert_eq!(
             decision,
-            TransparentRouteDecision::IdentifiedAi {
-                route: classify_ai_host("api.anthropic.com").unwrap(),
+            TransparentRouteDecision::Matched {
+                route: classify_traffic_host("api.anthropic.com").unwrap(),
                 tls_visibility: TlsVisibility::NotRequired,
                 protectable_without_tls: true,
             }
@@ -553,7 +587,7 @@ mod tests {
 
     #[test]
     fn explicit_proxy_is_ready_for_configured_clients() {
-        let readiness = transparent_capture_readiness_for_known_ai_routes(
+        let readiness = transparent_capture_readiness_for_default_routes(
             CaptureMode::ExplicitProxy,
             false,
             false,
@@ -569,12 +603,12 @@ mod tests {
 
     #[test]
     fn system_proxy_and_tun_report_missing_route_installation() {
-        let system_proxy = transparent_capture_readiness_for_known_ai_routes(
+        let system_proxy = transparent_capture_readiness_for_default_routes(
             CaptureMode::SystemProxy,
             false,
             false,
         );
-        let tun = transparent_capture_readiness_for_known_ai_routes(CaptureMode::Tun, false, false);
+        let tun = transparent_capture_readiness_for_default_routes(CaptureMode::Tun, false, false);
 
         assert!(
             system_proxy
@@ -589,12 +623,9 @@ mod tests {
 
     #[test]
     fn active_system_proxy_or_tun_marks_transparent_routing_ready() {
-        let system_proxy = transparent_capture_readiness_for_known_ai_routes(
-            CaptureMode::SystemProxy,
-            true,
-            false,
-        );
-        let tun = transparent_capture_readiness_for_known_ai_routes(CaptureMode::Tun, false, true);
+        let system_proxy =
+            transparent_capture_readiness_for_default_routes(CaptureMode::SystemProxy, true, false);
+        let tun = transparent_capture_readiness_for_default_routes(CaptureMode::Tun, false, true);
 
         assert!(
             system_proxy
@@ -618,14 +649,14 @@ mod tests {
 
     #[test]
     fn transparent_readiness_accepts_custom_route_sets() {
-        let routes = vec![AiRoute::custom(
+        let routes = vec![TrafficRoute::custom(
             "api.enterprise-ai.example",
-            OPENAI_COMPATIBLE_PROVIDER,
+            "openai-compatible",
             "enterprise-ai",
             "https://api.enterprise-ai.example",
         )];
 
-        let readiness = transparent_capture_readiness_for_ai_routes(
+        let readiness = transparent_capture_readiness_for_routes(
             &routes,
             CaptureMode::SystemProxy,
             true,

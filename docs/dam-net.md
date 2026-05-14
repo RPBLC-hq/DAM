@@ -78,7 +78,7 @@ chatgpt-codex    -> chatgpt.com, ab.chatgpt.com / WebSocket
 
 Inbound HTTP response mutation is explicit per traffic app. `inbound.resolve_references` controls local restoration of existing DAM references, and `inbound.protect_sensitive_data` controls whether raw inbound response text is redetected/tokenized when no reference resolves. The bundled OpenAI API and Anthropic API apps opt into raw inbound protection; the ChatGPT Codex app does not opt into HTTP inbound protection because its `chatgpt.com` bootstrap and web backend responses are not safe to rewrite generically. WebSocket text-frame protection is handled by the WebSocket adapter's per-connection protection snapshot.
 
-`known_ai_routes()` is now a compatibility view derived from the bundled traffic profile. New mediated services, including private OpenAI-compatible and Anthropic-compatible endpoints, must be added as traffic profile JSON app entries. User-authored profile create/import/export is parked; when it returns, new services should still be validated JSON profile data rather than provider-specific Rust code.
+`default_traffic_routes()` is now a compatibility view derived from the bundled traffic profile. New mediated services, including private OpenAI-compatible and Anthropic-compatible endpoints, must be added as traffic profile JSON app entries. User-authored profile create/import/export is parked; when it returns, new services should still be validated JSON profile data rather than provider-specific Rust code.
 
 For TLS traffic, classification can identify that traffic matches a configured profile, but it cannot protect request bodies without `dam-trust` readiness and a later TLS interception implementation. The explicit decision shape for the bundled LLM MVP is:
 
@@ -120,4 +120,4 @@ This keeps the future transparent proxy honest: host routing alone is not data p
 - provider request/response adapters;
 - detection, policy, vault, consent, logging, or redaction.
 
-Those stay in `dam-daemon`, future platform-specific network modules, `dam-trust`, `dam-proxy`, provider adapters, and `dam-pipeline`.
+Those stay in `dam-daemon`, future platform-specific network modules, `dam-trust`, `dam-proxy`, protocol adapters, and `dam-pipeline`.

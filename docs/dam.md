@@ -18,7 +18,7 @@ The old `dam claude`, `dam codex`, and `dam codex --api` one-shot launchers have
 
 `dam connect` starts a background local daemon that owns a `dam-proxy` until `dam disconnect`.
 
-Background integration profiles configure tools to use the long-running daemon as an HTTP(S) proxy or rely on system proxy routing. The daemon can expose multiple provider targets for selected AI hosts while unknown traffic passes through untouched.
+Background integration profiles configure tools to use the long-running daemon as an HTTP(S) proxy or rely on system proxy routing. The daemon can expose multiple provider targets for selected traffic-profile hosts while unknown traffic passes through untouched.
 
 By default, the daemon proxy redacts outbound requests before they reach the provider. Agent traffic apps can keep inbound DAM references tokenized in the local transcript and can opt into raw inbound response redetection/tokenization through traffic profile `inbound.protect_sensitive_data`. Email-derived domains from the protected outbound request are carried into opted-in inbound redetection passes, including Anthropic/OpenAI `text/event-stream` responses, so a domain-only answer derived from a protected email can stay tokenized without rewriting generic browser/bootstrap responses. Set `proxy.resolve_inbound = false` or use `--no-resolve-inbound` to leave HTTP `[kind:id]` references unresolved for every app; explicit reveal/consent flows are separate from agent transcript protection.
 
@@ -37,7 +37,7 @@ Proxy-managed API key injection still exists in `dam-proxy` for gateway-style de
 ## Commands
 
 ```bash
-dam connect [--openai|--anthropic] [DAM_OPTIONS]
+dam connect [DAM_OPTIONS]
 dam connect --profile <profile> [--apply] [DAM_OPTIONS]
 dam connect --apply [DAM_OPTIONS]
 dam status [--json]
@@ -68,16 +68,14 @@ DAM options:
 ```text
 --profile <id>       Use integration profile daemon defaults (connect only)
 --apply              Ensure selected or enabled DAM profile files before connecting
---openai             Use the OpenAI-compatible daemon preset (default for connect)
---anthropic          Use the Anthropic daemon preset (connect only)
 --config <path>      Load DAM config file before daemon overrides
 --listen <addr>      Local proxy listen address (default: 127.0.0.1:7828)
 --network-mode <mode> Control-plane network mode: explicit_proxy, system_proxy, or tun
 --trust-mode <mode>  Control-plane trust mode: disabled or local_ca
 --target-name <name> Proxy target name (connect only)
---provider <name>    Provider adapter: openai-compatible or anthropic (connect only)
+--provider <name>    Target label for low-level daemon mode
 --upstream <url>     Provider upstream
---target <spec>      Internal daemon target spec: name|provider|upstream
+--target <spec>      Internal daemon target spec: target JSON
 --db <path>          Vault SQLite path (default: vault.db)
 --log <path>         Log SQLite path (default: log.db)
 --consent-db <path>  Consent SQLite path (default: consent.db)
@@ -95,7 +93,7 @@ dam connect --profile codex
 dam profile set claude-code
 dam connect --network-mode tun --trust-mode local_ca
 dam profile status
-dam connect --anthropic
+dam connect --profile claude-code
 dam status
 dam logs
 dam logs --operation <operation_id>

@@ -69,9 +69,17 @@ provider = "openai-compatible"
 upstream = "https://api.openai.com"
 failure_mode = "bypass_on_error"
 api_key_env = "OPENAI_API_KEY"
+
+[proxy.targets.auth]
+caller_headers = ["authorization"]
+
+[proxy.targets.auth.inject]
+header = "authorization"
+scheme = "Bearer"
+strip_headers = ["authorization"]
 ```
 
-Supported first-slice provider values are `generic-http`, `openai-compatible`, and `anthropic`. The local proxy can accept multiple configured targets; `dam-router` selects the OpenAI-compatible or Anthropic route from request path/header shape or from the transparent AI route match. `generic-http` remains a low-level caller-auth pass-through target value for future profile-builder/import work; Settings-created generic website profiles are not wired in the current app.
+Provider values are labels used to match traffic-profile routes to proxy targets. The local proxy can accept multiple configured targets; `dam-router` selects the default target for direct app-layer requests and selects a specific target only when `dam-proxy` passes in a matched traffic-profile route. It no longer infers providers from request paths or provider headers. Caller-auth headers and optional target-key injection are target/profile data. Settings-created generic website profiles are not wired in the current app.
 
 `traffic.profile_path` is optional. Without it, DAM loads the bundled JSON traffic profile at `crates/dam-net/profiles/llm-mvp.json`. A traffic profile contains app entries: each entry names match rules such as domains, IPs, URLs, ports, protocols, and process names; an action such as `inspect` or `bypass`; the protocol adapter; and the generic pipeline steps to run. LLM providers are only the bundled MVP entries, not the shape of the system.
 
@@ -251,7 +259,7 @@ upstream = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"
 ```
 
-`dam-proxy` uses the resolved key if present. If `api_key_env` is configured but missing and the request does not provide provider auth, the proxy returns `config_required`. For `openai-compatible`, provider auth is `Authorization`. For `anthropic`, provider auth is `x-api-key`; `Authorization` is also accepted as caller auth for compatibility but is dropped when DAM injects an Anthropic target key.
+`dam-proxy` uses the resolved key if present and the target defines `auth.inject`. If `api_key_env` is configured but missing and the request does not provide one of the target's configured `auth.caller_headers`, the proxy returns `config_required`. Bundled profiles define the OpenAI-compatible and Anthropic header behavior in JSON rather than Rust provider code.
 
 ## Tests
 
