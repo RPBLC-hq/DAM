@@ -79,6 +79,48 @@ fn native_connect_args_include_state_paths_and_dev_modes() {
 }
 
 #[test]
+fn tray_connect_uses_diagnostics_next_action() {
+    let needed = dam_diagnostics::SetupStep {
+        kind: dam_diagnostics::SetupStepKind::LaunchAtLogin,
+        status: dam_diagnostics::SetupStepStatus::Needed,
+        detail: dam_diagnostics::SetupStepDetail::Unconfigured,
+        message: "choose startup behavior".to_string(),
+        command: None,
+        requires_confirmation: false,
+        changes_system: true,
+    };
+    let blocked = dam_diagnostics::SetupStep {
+        kind: dam_diagnostics::SetupStepKind::NetworkExtension,
+        status: dam_diagnostics::SetupStepStatus::Blocked,
+        detail: dam_diagnostics::SetupStepDetail::Failed,
+        message: "Network Extension status cannot be inspected".to_string(),
+        command: None,
+        requires_confirmation: false,
+        changes_system: false,
+    };
+    let plan = dam_diagnostics::SetupPlan {
+        state: dam_diagnostics::SetupPlanState::Blocked,
+        message: "blocked".to_string(),
+        state_dir: PathBuf::from("/tmp/dam-state"),
+        integration_state_dir: PathBuf::from("/tmp/dam-state/integrations"),
+        proxy_url: "http://127.0.0.1:7828".to_string(),
+        network_mode: dam_net::CaptureMode::Tun,
+        trust_mode: dam_trust::TrustMode::LocalCa,
+        active_profile: None,
+        next_action: Some(blocked.clone()),
+        steps: vec![needed, blocked],
+    };
+
+    let selected = selected_setup_step(&plan).unwrap();
+
+    assert_eq!(
+        selected.kind,
+        dam_diagnostics::SetupStepKind::NetworkExtension
+    );
+    assert_eq!(selected.detail, dam_diagnostics::SetupStepDetail::Failed);
+}
+
+#[test]
 fn native_connect_notice_encoding_is_url_and_js_safe() {
     assert_eq!(
         form_url_encode_component("Connect failed: local trust"),

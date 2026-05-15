@@ -784,13 +784,7 @@ mod macos {
         config_path: Option<&PathBuf>,
     ) -> Result<ConnectOutcome, String> {
         let setup_plan = tray_setup_plan(data_paths, config_path)?;
-        if let Some(step) = setup_plan.steps.iter().find(|step| {
-            matches!(
-                step.status,
-                dam_diagnostics::SetupStepStatus::Needed
-                    | dam_diagnostics::SetupStepStatus::Blocked
-            )
-        }) {
+        if let Some(step) = selected_setup_step(&setup_plan) {
             if step.status == dam_diagnostics::SetupStepStatus::Blocked {
                 return Err(format!("DAM setup is blocked: {}", step.message));
             }
@@ -805,6 +799,12 @@ mod macos {
             "connect DAM",
         )?;
         Ok(ConnectOutcome::Connected)
+    }
+
+    fn selected_setup_step(
+        setup_plan: &dam_diagnostics::SetupPlan,
+    ) -> Option<&dam_diagnostics::SetupStep> {
+        setup_plan.next_action.as_ref()
     }
 
     fn tray_setup_plan(

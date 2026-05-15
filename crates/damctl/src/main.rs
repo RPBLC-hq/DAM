@@ -1385,9 +1385,10 @@ fn render_setup_plan(report: &dam_diagnostics::SetupPlan) -> String {
     ));
     for step in &report.steps {
         output.push_str(&format!(
-            "step {}: {} - {}\n",
+            "step {}: {}.{} - {}\n",
             step.kind.tag(),
             step.status.tag(),
+            step.detail.tag(),
             step.message
         ));
         if let Some(command) = &step.command {

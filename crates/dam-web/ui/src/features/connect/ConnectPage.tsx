@@ -440,7 +440,7 @@ function SetupState({
         blockedAriaLabel={t('connect.stepBlocked')}
         hintAriaLabel={t('connect.hintAriaLabel')}
       />
-      {renderSetupCta({ currentId, isTray, pending, onAction, t })}
+      {renderSetupCta({ current, currentId, isTray, pending, onAction, t })}
     </div>
   )
 }
@@ -462,12 +462,14 @@ function SetupState({
  * entirely — neither action is reachable without the native binary.
  */
 function renderSetupCta({
+  current,
   currentId,
   isTray,
   pending,
   onAction,
   t,
 }: {
+  current?: SetupStep
   currentId: string
   isTray: boolean
   pending: boolean
@@ -485,7 +487,7 @@ function renderSetupCta({
           type="button"
           data-tray-register-login="dam"
         >
-          {t(stepActionKey(currentId))}
+          {t(stepActionKey(current ?? currentId))}
         </Button>
         <Button
           className="dam-connect__choice-skip"
@@ -508,7 +510,7 @@ function renderSetupCta({
         type="button"
         data-tray-restart="dam"
       >
-        {t(stepActionKey(currentId))}
+        {t(stepActionKey(current ?? currentId))}
       </Button>
     ) : null
   }
@@ -522,7 +524,7 @@ function renderSetupCta({
       data-tray-connect={isTray ? 'dam' : undefined}
       onClick={isTray ? undefined : () => onAction(currentId)}
     >
-      {t(stepActionKey(currentId))}
+      {t(stepActionKey(current ?? currentId))}
     </Button>
   )
 }

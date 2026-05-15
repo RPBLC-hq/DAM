@@ -24,6 +24,10 @@ const stepLabelKeys: Record<string, MessageKey> = {
   daemon_start: 'connect.step.daemon_start',
 }
 
+const detailStepLabelKeys: Record<string, MessageKey> = {
+  'ne_install:waiting_for_approval': 'connect.step.ne_approval',
+}
+
 const stepActionKeys: Record<string, MessageKey> = {
   launch_at_login: 'connect.action.launch_at_login',
   ne_install: 'connect.action.ne_install',
@@ -39,6 +43,10 @@ const stepActionKeys: Record<string, MessageKey> = {
   daemon_start: 'connect.action.daemon_start',
 }
 
+const detailStepActionKeys: Record<string, MessageKey> = {
+  'ne_install:waiting_for_approval': 'connect.action.ne_approval',
+}
+
 const stepHintKeys: Record<string, MessageKey> = {
   launch_at_login: 'connect.hint.launch_at_login',
   ne_install: 'connect.hint.ne_install',
@@ -52,6 +60,10 @@ const stepHintKeys: Record<string, MessageKey> = {
   system_proxy: 'connect.hint.system_proxy',
   apply_profiles: 'connect.hint.apply_profiles',
   daemon_start: 'connect.hint.daemon_start',
+}
+
+const detailStepHintKeys: Record<string, MessageKey> = {
+  'ne_install:waiting_for_approval': 'connect.hint.ne_approval',
 }
 
 const errorKeys: Record<string, MessageKey> = {
@@ -73,17 +85,29 @@ export function stateMessageKey(state: ConnectState): MessageKey {
 }
 
 export function stepLabelKey(step: SetupStep): MessageKey {
+  const detailKey = detailStepKey(step)
+  if (detailKey && detailStepLabelKeys[detailKey]) return detailStepLabelKeys[detailKey]
   return stepLabelKeys[step.id] ?? 'connect.step.unknown'
 }
 
-export function stepActionKey(stepId?: string): MessageKey {
-  return stepId ? stepActionKeys[stepId] ?? 'connect.action.unknown' : 'connect.action.unknown'
+export function stepActionKey(step?: SetupStep | string): MessageKey {
+  if (!step) return 'connect.action.unknown'
+  if (typeof step === 'string') return stepActionKeys[step] ?? 'connect.action.unknown'
+  const detailKey = detailStepKey(step)
+  if (detailKey && detailStepActionKeys[detailKey]) return detailStepActionKeys[detailKey]
+  return stepActionKeys[step.id] ?? 'connect.action.unknown'
 }
 
 export function stepHintKey(step: SetupStep): MessageKey | undefined {
+  const detailKey = detailStepKey(step)
+  if (detailKey && detailStepHintKeys[detailKey]) return detailStepHintKeys[detailKey]
   return stepHintKeys[step.id]
 }
 
 export function errorMessageKey(code?: string): MessageKey {
   return code ? errorKeys[code] ?? 'connect.error.unknown' : 'connect.error.unknown'
+}
+
+function detailStepKey(step: SetupStep): string | undefined {
+  return step.detail ? `${step.id}:${step.detail}` : undefined
 }

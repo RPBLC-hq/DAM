@@ -130,6 +130,7 @@ export type MessageKey =
   | 'connect.stepBlocked'
   | 'connect.step.launch_at_login'
   | 'connect.step.ne_install'
+  | 'connect.step.ne_approval'
   | 'connect.step.ne_config'
   | 'connect.step.ne_enable'
   | 'connect.step.ne_start'
@@ -143,6 +144,7 @@ export type MessageKey =
   | 'connect.step.unknown'
   | 'connect.hint.launch_at_login'
   | 'connect.hint.ne_install'
+  | 'connect.hint.ne_approval'
   | 'connect.hint.ne_config'
   | 'connect.hint.ne_enable'
   | 'connect.hint.ne_start'
@@ -157,6 +159,7 @@ export type MessageKey =
   | 'connect.action.launch_at_login'
   | 'connect.action.launch_at_login_skip'
   | 'connect.action.ne_install'
+  | 'connect.action.ne_approval'
   | 'connect.action.ne_config'
   | 'connect.action.ne_enable'
   | 'connect.action.ne_start'
@@ -456,6 +459,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.stepBlocked': 'blocked',
     'connect.step.launch_at_login': 'Choose startup behavior',
     'connect.step.ne_install': 'Install network extension',
+    'connect.step.ne_approval': 'Approve network extension',
     'connect.step.ne_config': 'Add network configuration',
     'connect.step.ne_enable': 'Enable network extension',
     'connect.step.ne_start': 'Enable protection layer',
@@ -471,6 +475,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
       'Add DAM to Open at Login so it comes back automatically after the setup restart, or skip it and continue manually. macOS lists this in System Settings > General > Login Items > Open at Login.',
     'connect.hint.ne_install':
       'Adds a system-level network extension so DAM can mediate every request your apps make to the open internet. macOS will ask you to approve the extension.',
+    'connect.hint.ne_approval':
+      'macOS has the DAM Network Protection request and is waiting for approval in System Settings > General > Login Items & Extensions > Network Extensions.',
     'connect.hint.ne_config':
       'Adds the DAM Network Protection configuration that routes protected traffic through DAM. macOS shows this consent separately from system extension approval.',
     'connect.hint.ne_enable':
@@ -495,6 +501,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.action.launch_at_login': 'Add DAM to Open at Login',
     'connect.action.launch_at_login_skip': 'Skip',
     'connect.action.ne_install': 'Install network extension',
+    'connect.action.ne_approval': 'Open approval settings',
     'connect.action.ne_config': 'Add network configuration',
     'connect.action.ne_enable': 'Enable network extension',
     'connect.action.ne_start': 'Enable protection layer',
@@ -827,6 +834,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.stepBlocked': 'bloqué',
     'connect.step.launch_at_login': 'Choisir le démarrage',
     'connect.step.ne_install': 'Installer l’extension réseau',
+    'connect.step.ne_approval': 'Approuver l’extension réseau',
     'connect.step.ne_config': 'Ajouter la configuration réseau',
     'connect.step.ne_enable': 'Activer l’extension réseau',
     'connect.step.ne_start': 'Activer la couche de protection',
@@ -842,6 +850,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
       'Ajoutez DAM à l’ouverture pour qu’il revienne automatiquement après le redémarrage de configuration, ou ignorez cette étape et continuez manuellement. Visible dans Réglages Système > Général > Éléments d’ouverture > Ouvrir à l’ouverture de session.',
     'connect.hint.ne_install':
       'Ajoute une extension réseau au niveau du système pour que DAM puisse encadrer chaque requête que vos apps envoient sur l’internet ouvert. macOS vous demandera d’approuver l’extension.',
+    'connect.hint.ne_approval':
+      'macOS a reçu la demande DAM Network Protection et attend votre approbation dans Réglages Système > Général > Ouverture et extensions > Extensions réseau.',
     'connect.hint.ne_config':
       'Ajoute la configuration DAM Network Protection qui route le trafic protégé via DAM. macOS demande ce consentement séparément de l’approbation de l’extension système.',
     'connect.hint.ne_enable':
@@ -866,6 +876,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.action.launch_at_login': 'Ajouter DAM à l’ouverture',
     'connect.action.launch_at_login_skip': 'Ignorer',
     'connect.action.ne_install': 'Installer l’extension réseau',
+    'connect.action.ne_approval': 'Ouvrir les réglages',
     'connect.action.ne_config': 'Ajouter la configuration réseau',
     'connect.action.ne_enable': 'Activer l’extension réseau',
     'connect.action.ne_start': 'Activer la couche de protection',
