@@ -917,6 +917,9 @@ fn network_extension_setup_steps(
         .and_then(|status| status.manager_status.as_ref());
     let activation_method = record.map(|record| record.activation_method.as_str());
     let start_rolled_back = activation_method == Some("network_extension_start_failed_rolled_back");
+    let recovery_gate_rolled_back =
+        activation_method == Some("network_extension_recovery_gate_rolled_back");
+    let recovery_gate_failed = activation_method == Some("network_extension_recovery_gate_failed");
     let install_command = network_extension_install_command(config_path);
 
     if dam_net_macos::network_extension_pending_reboot(state_dir)
@@ -998,6 +1001,30 @@ fn network_extension_setup_steps(
         ];
     }
 
+    if recovery_gate_failed {
+        return vec![
+            network_extension_step(
+                SetupStepKind::NetworkExtension,
+                SetupStepStatus::Done,
+                SetupStepDetail::Ready,
+                "DAM Network Protection system extension is approved",
+                None,
+            ),
+            network_extension_step(
+                SetupStepKind::NetworkExtensionConfiguration,
+                SetupStepStatus::Blocked,
+                SetupStepDetail::Failed,
+                "DAM could not verify or roll back Network Protection automatically; run setup repair",
+                Some(vec![
+                    "dam".to_string(),
+                    "setup".to_string(),
+                    "repair".to_string(),
+                    "--yes".to_string(),
+                ]),
+            ),
+        ];
+    }
+
     let manager_configured = manager.map(|status| status.configured).unwrap_or_else(|| {
         !matches!(
             activation_method,
@@ -1020,6 +1047,39 @@ fn network_extension_setup_steps(
     let empty_scope_ready = !has_active_routes
         && activation_method == Some("network_extension_empty_scope_no_capture")
         && manager_configured;
+
+    if recovery_gate_rolled_back {
+        return vec![
+            network_extension_step(
+                SetupStepKind::NetworkExtension,
+                SetupStepStatus::Done,
+                SetupStepDetail::Ready,
+                "DAM Network Protection system extension is approved",
+                None,
+            ),
+            network_extension_step(
+                SetupStepKind::NetworkExtensionConfiguration,
+                SetupStepStatus::Needed,
+                SetupStepDetail::RolledBack,
+                "DAM removed Network Protection after verification failed; add the configuration again to retry safely",
+                Some(install_command.clone()),
+            ),
+            network_extension_step(
+                SetupStepKind::NetworkExtensionEnable,
+                SetupStepStatus::Needed,
+                SetupStepDetail::NeedsEnable,
+                "Enable DAM Network Protection in System Settings",
+                Some(install_command.clone()),
+            ),
+            network_extension_step(
+                SetupStepKind::NetworkExtensionStart,
+                SetupStepStatus::Needed,
+                SetupStepDetail::NeedsStart,
+                "Enable protection layer",
+                Some(install_command),
+            ),
+        ];
+    }
 
     if empty_scope_ready {
         return vec![

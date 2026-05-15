@@ -210,6 +210,87 @@ fn helper_start_failure_records_rolled_back_state() {
 }
 
 #[test]
+fn recovery_gate_rolls_back_when_live_status_is_not_connected() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let calls = dir.path().join("calls.txt");
+    let helper = dir.path().join("helper.sh");
+    fs::write(
+        &helper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\nif [ \"$1\" = \"status\" ]; then echo \"enabled com.rpblc.dam.network-extension disconnected\"; exit 0; fi\nif [ \"$1\" = \"remove\" ]; then echo \"removed com.rpblc.dam.network-extension\"; exit 0; fi\nexit 0\n",
+            calls.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+    let _helper = HelperEnvGuard::with_helper_path(&helper);
+
+    let error = install_network_extension_for_hosts(dir.path(), &["api.openai.com".to_string()])
+        .unwrap_err();
+    let record = read_record(&MacosNetworkExtensionPaths::for_state_dir(dir.path()))
+        .unwrap()
+        .unwrap();
+    let calls = fs::read_to_string(&calls).unwrap();
+
+    assert!(error.to_string().contains("recovery gate failed"));
+    assert!(
+        error
+            .to_string()
+            .contains("removed Network Extension routing")
+    );
+    assert_eq!(
+        record.activation_method,
+        "network_extension_recovery_gate_rolled_back"
+    );
+    assert!(!record.active);
+    assert_eq!(record.protected_hosts, vec!["api.openai.com"]);
+    assert_eq!(
+        calls.lines().collect::<Vec<_>>(),
+        ["install", "status", "remove"]
+    );
+}
+
+#[test]
+fn status_preserves_recovery_gate_rolled_back_record() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = MacosNetworkExtensionPaths::for_state_dir(dir.path());
+    fs::create_dir_all(&paths.directory).unwrap();
+    write_state_record(
+        &paths,
+        &MacosNetworkExtensionStateRecord {
+            version: STATE_VERSION,
+            bundle_identifier: TEST_BUNDLE_ID.to_string(),
+            team_identifier: None,
+            protected_hosts: vec!["api.openai.com".to_string()],
+            installed_at_unix: 1_778_800_000,
+            active: false,
+            activation_method: "network_extension_recovery_gate_rolled_back".to_string(),
+            pending_reboot: false,
+        },
+    )
+    .unwrap();
+    let helper = dir.path().join("status-helper.sh");
+    fs::write(
+        &helper,
+        "#!/bin/sh\nif [ \"$1\" = \"status\" ]; then echo \"not_installed com.rpblc.dam.network-extension\"; fi\nexit 0\n",
+    )
+    .unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+    let _helper = HelperEnvGuard::with_helper_path(&helper);
+
+    let status = network_extension_status(dir.path()).unwrap();
+
+    assert_eq!(
+        status.record.unwrap().activation_method,
+        "network_extension_recovery_gate_rolled_back"
+    );
+}
+
+#[test]
 fn install_plan_passes_runtime_configuration_to_helper() {
     let _helper = HelperEnvGuard::install();
     let dir = tempfile::tempdir().unwrap();

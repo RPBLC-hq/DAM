@@ -8,20 +8,20 @@ Platform rule: DAM must be designed for macOS, Linux, and Windows. Platform-spec
 
 ## Pre-Release Network Extension Recovery Gate
 
-Current state: macOS Network Extension setup can leave the user with broken connectivity if activation succeeds far enough to affect routes but does not reach a verified healthy state. In local testing, disabling the Network Extension restored connectivity. A production user should not need to know what a Network Extension is or how to recover it in System Settings.
+Current state: macOS Network Extension setup has a local recovery gate after helper install. DAM records active capture only after the helper reports the manager configured, enabled, and connected. If that verification fails, DAM asks the helper to remove the DAM Network Extension manager, records `rolled_back`, and returns onboarding to a repair/retry step. If removal fails, setup blocks on the local repair command instead of starting protection. This is covered by unit tests with fake helper status, but still needs installed-app validation against real macOS states before release.
 
-Release blocker: do not ship the macOS Network Extension path as production-default until DAM owns recovery.
+Release blocker: do not ship the macOS Network Extension path as production-default until the local recovery gate is validated in a notarized installed app and the remaining restart/safe-mode cases are covered.
 
 Parked work:
 
-- Add an activation watchdog after the protection layer starts. If the Network Extension does not reach connected status and pass a local network canary within a short timeout, DAM automatically disables/removes the DAM Network Extension configuration and returns onboarding to the correct repair step.
-- Add safe-mode startup detection for interrupted or unverified Network Extension activation. If the previous run did not confirm healthy connectivity, DAM starts with network protection disabled and shows repair/onboarding instead of retrying silently.
+- Validate the activation watchdog after the protection layer starts in a notarized installed app. If the Network Extension does not reach connected status and pass the local readiness gate within a short timeout, DAM must automatically disable/remove the DAM Network Extension configuration and return onboarding to the correct repair step.
+- Add safe-mode startup detection for interrupted activation across app/process restarts. If the previous run did not confirm healthy connectivity, DAM starts with network protection disabled and shows repair/onboarding instead of retrying silently.
 - Add tray UI affordances for the CLI/API/MCP recovery contract: disable network protection, remove DAM network configuration, repair network setup, and export diagnostics.
 - Add a user/admin routing failure policy setting before release. Runtime enforcement now defaults to fail-open and closes already-captured Network Extension flows when DAM is paused, unhealthy, unreachable, or otherwise not `protected`; the remaining parked work is exposing fail-open/fail-closed as an explicit setting and managed-install policy.
 - Replace any long spinner in onboarding with explicit states: requested, waiting for macOS approval, configured, enabled, connected, failed, and rolled back.
 - Keep a degraded fallback where DAM can run without system-wide Network Extension protection and clearly says protection is not active.
 - Document the managed-install path for enterprise/MDM pre-approval, while keeping unmanaged Macs guided and recoverable.
-- Add tests or deterministic fixtures that cover broken activation, deleted/disabled configuration, failed canary, restart after failed activation, and successful rollback.
+- Add tests or deterministic fixtures that cover deleted/disabled configuration, failed local readiness verification, restart after failed activation, failed automatic removal, and successful rollback in the installed-app path.
 
 ## Onboarding UX Test Automation
 

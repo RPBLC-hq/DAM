@@ -453,6 +453,55 @@ fn setup_plan_reports_rolled_back_network_extension_start() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn setup_plan_reports_recovery_gate_rolled_back_network_extension() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+    std::fs::create_dir_all(state_dir.join("startup")).unwrap();
+    std::fs::write(state_dir.join(LOGIN_ITEM_SKIP_MARKER_RELPATH), "skipped\n").unwrap();
+    let paths = dam_net_macos::MacosNetworkExtensionPaths::for_state_dir(&state_dir);
+    std::fs::create_dir_all(&paths.directory).unwrap();
+    std::fs::write(
+        &paths.state_path,
+        r#"{
+  "version": 1,
+  "bundle_identifier": "com.rpblc.dam.network-extension",
+  "team_identifier": null,
+  "protected_hosts": ["api.openai.com"],
+  "installed_at_unix": 1778800000,
+  "active": false,
+  "activation_method": "network_extension_recovery_gate_rolled_back",
+  "pending_reboot": false
+}"#,
+    )
+    .unwrap();
+    let config = proxy_config("https://api.openai.com", "openai-compatible");
+
+    let plan = setup_plan(
+        &config,
+        &SetupPlanOptions {
+            state_dir: Some(state_dir),
+            network_mode: dam_net::CaptureMode::Tun,
+            ..SetupPlanOptions::default()
+        },
+    )
+    .unwrap();
+
+    let step = plan
+        .steps
+        .iter()
+        .find(|step| step.kind == SetupStepKind::NetworkExtensionConfiguration)
+        .unwrap();
+    assert_eq!(step.status, SetupStepStatus::Needed);
+    assert_eq!(step.detail, SetupStepDetail::RolledBack);
+    assert!(step.message.contains("verification failed"));
+    assert_eq!(
+        plan.next_action.as_ref().map(|step| step.kind),
+        Some(SetupStepKind::NetworkExtensionConfiguration)
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn setup_plan_blocks_when_network_extension_status_is_unreadable() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");

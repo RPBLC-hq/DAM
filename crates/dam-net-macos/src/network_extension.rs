@@ -105,6 +105,9 @@ pub enum MacosNetworkExtensionError {
         message: String,
     },
 
+    #[error("Network Extension recovery gate failed: {message}")]
+    RecoveryGateFailed { message: String },
+
     #[error("system clock is before unix epoch")]
     Clock,
 }
@@ -465,6 +468,11 @@ pub fn install_network_extension_for_hosts(
     }
 
     let active = !plan.protected_hosts.is_empty();
+    let verified_status = if active {
+        Some(verify_network_extension_after_install(&plan)?)
+    } else {
+        None
+    };
     let activation_method = if active {
         "app_owned_system_extension_native_helper_config"
     } else {
@@ -486,19 +494,110 @@ pub fn install_network_extension_for_hosts(
         state: MacosNetworkExtensionResultState::Installed,
         plan,
         record: Some(record),
-        manager_status: Some(MacosNetworkExtensionManagerStatus {
-            configured: true,
-            enabled: active,
-            connection_status: if active { "connected" } else { "disabled" }.to_string(),
-            connected: active,
-            message: if active {
-                "macOS Network Extension live status: enabled connected".to_string()
-            } else {
-                "macOS Network Extension live status: disabled for empty app scope".to_string()
-            },
-        }),
+        manager_status: Some(
+            verified_status.unwrap_or(MacosNetworkExtensionManagerStatus {
+                configured: true,
+                enabled: false,
+                connection_status: "disabled".to_string(),
+                connected: false,
+                message: "macOS Network Extension live status: disabled for empty app scope"
+                    .to_string(),
+            }),
+        ),
         system_routes_changed: true,
     })
+}
+
+fn verify_network_extension_after_install(
+    plan: &MacosNetworkExtensionPlan,
+) -> Result<MacosNetworkExtensionManagerStatus, MacosNetworkExtensionError> {
+    let Some(command) = helper_command(
+        "status",
+        &plan.bundle_identifier,
+        plan.team_identifier.as_deref(),
+        &[],
+    )
+    .into_iter()
+    .next() else {
+        return fail_recovery_gate(
+            plan,
+            "no helper status command was available after Network Extension install".to_string(),
+        );
+    };
+
+    match run_helper_status_command(&command) {
+        Ok(status) if status.configured && status.enabled && status.connected => Ok(status),
+        Ok(status) => fail_recovery_gate(
+            plan,
+            format!(
+                "live status did not verify connected after install: {}",
+                status.message
+            ),
+        ),
+        Err(error) => fail_recovery_gate(
+            plan,
+            format!("live status check failed after install: {error}"),
+        ),
+    }
+}
+
+fn fail_recovery_gate<T>(
+    plan: &MacosNetworkExtensionPlan,
+    message: String,
+) -> Result<T, MacosNetworkExtensionError> {
+    let rollback = rollback_network_extension_after_failed_verification(plan);
+    let activation_method = if rollback.is_ok() {
+        "network_extension_recovery_gate_rolled_back"
+    } else {
+        "network_extension_recovery_gate_failed"
+    };
+    record_recovery_gate_state(plan, activation_method)?;
+    let rollback_message = match rollback {
+        Ok(()) => {
+            "DAM removed Network Extension routing so normal networking can resume".to_string()
+        }
+        Err(error) => {
+            format!("automatic rollback failed: {error}; run `dam setup repair --yes`")
+        }
+    };
+    Err(MacosNetworkExtensionError::RecoveryGateFailed {
+        message: format!("{message}; {rollback_message}"),
+    })
+}
+
+fn rollback_network_extension_after_failed_verification(
+    plan: &MacosNetworkExtensionPlan,
+) -> Result<(), MacosNetworkExtensionError> {
+    let Some(command) = helper_command(
+        "remove",
+        &plan.bundle_identifier,
+        plan.team_identifier.as_deref(),
+        &[],
+    )
+    .into_iter()
+    .next() else {
+        return Err(MacosNetworkExtensionError::MissingHelper {
+            bundle_identifier: plan.bundle_identifier.clone(),
+        });
+    };
+    run_helper_command(&command)
+}
+
+fn record_recovery_gate_state(
+    plan: &MacosNetworkExtensionPlan,
+    activation_method: &str,
+) -> Result<(), MacosNetworkExtensionError> {
+    let record = MacosNetworkExtensionStateRecord {
+        version: STATE_VERSION,
+        bundle_identifier: plan.bundle_identifier.clone(),
+        team_identifier: plan.team_identifier.clone(),
+        protected_hosts: plan.protected_hosts.clone(),
+        installed_at_unix: unix_timestamp()?,
+        active: false,
+        activation_method: activation_method.to_string(),
+        pending_reboot: false,
+    };
+    write_state_record(&plan.paths, &record)
 }
 
 fn helper_failure_disabled_manager(error: &MacosNetworkExtensionError) -> bool {
@@ -677,6 +776,22 @@ fn manager_status_activation_method(
     bundle_identifier: &str,
     status: &MacosNetworkExtensionManagerStatus,
 ) -> &'static str {
+    if !status.connected
+        && let Some(record) = record
+    {
+        match record.activation_method.as_str() {
+            "network_extension_start_failed_rolled_back" => {
+                return "network_extension_start_failed_rolled_back";
+            }
+            "network_extension_recovery_gate_rolled_back" => {
+                return "network_extension_recovery_gate_rolled_back";
+            }
+            "network_extension_recovery_gate_failed" => {
+                return "network_extension_recovery_gate_failed";
+            }
+            _ => {}
+        }
+    }
     if !status.configured {
         if record.is_some() {
             return system_extension_activation_method(
