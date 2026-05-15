@@ -181,6 +181,35 @@ fn helper_sigkill_reports_likely_restricted_entitlement_failure() {
 }
 
 #[test]
+fn helper_start_failure_records_rolled_back_state() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let helper = dir.path().join("helper.sh");
+    fs::write(
+        &helper,
+        "#!/bin/sh\nprintf '%s\\n' 'DAM Network Protection is enabled but did not connect: timeout' >&2\nexit 2\n",
+    )
+    .unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+    let _helper = HelperEnvGuard::with_helper_path(&helper);
+
+    let error = install_network_extension_for_hosts(dir.path(), &["api.openai.com".to_string()])
+        .unwrap_err();
+    let record = read_record(&MacosNetworkExtensionPaths::for_state_dir(dir.path()))
+        .unwrap()
+        .unwrap();
+
+    assert!(error.to_string().contains("did not connect"));
+    assert_eq!(
+        record.activation_method,
+        "network_extension_start_failed_rolled_back"
+    );
+    assert!(!record.active);
+    assert_eq!(record.protected_hosts, vec!["api.openai.com"]);
+}
+
+#[test]
 fn install_plan_passes_runtime_configuration_to_helper() {
     let _helper = HelperEnvGuard::install();
     let dir = tempfile::tempdir().unwrap();

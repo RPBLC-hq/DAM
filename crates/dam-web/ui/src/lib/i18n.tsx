@@ -133,6 +133,7 @@ export type MessageKey =
   | 'connect.step.ne_approval'
   | 'connect.step.ne_config'
   | 'connect.step.ne_enable'
+  | 'connect.step.ne_rolled_back'
   | 'connect.step.ne_start'
   | 'connect.step.linux_capture'
   | 'connect.step.windows_capture'
@@ -147,6 +148,7 @@ export type MessageKey =
   | 'connect.hint.ne_approval'
   | 'connect.hint.ne_config'
   | 'connect.hint.ne_enable'
+  | 'connect.hint.ne_rolled_back'
   | 'connect.hint.ne_start'
   | 'connect.hint.linux_capture'
   | 'connect.hint.windows_capture'
@@ -162,6 +164,7 @@ export type MessageKey =
   | 'connect.action.ne_approval'
   | 'connect.action.ne_config'
   | 'connect.action.ne_enable'
+  | 'connect.action.ne_rolled_back'
   | 'connect.action.ne_start'
   | 'connect.action.platform_capture'
   | 'connect.action.ne_reboot'
@@ -462,6 +465,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.step.ne_approval': 'Approve network extension',
     'connect.step.ne_config': 'Add network configuration',
     'connect.step.ne_enable': 'Enable network extension',
+    'connect.step.ne_rolled_back': 'Repair network extension',
     'connect.step.ne_start': 'Enable protection layer',
     'connect.step.linux_capture': 'Set up Linux routing',
     'connect.step.windows_capture': 'Set up Windows routing',
@@ -481,6 +485,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
       'Adds the DAM Network Protection configuration that routes protected traffic through DAM. macOS shows this consent separately from system extension approval.',
     'connect.hint.ne_enable':
       'macOS has added the DAM network configuration but has not started it yet. Enable DAM Network Protection in System Settings > General > Login Items & Extensions > Network Extensions, then continue setup.',
+    'connect.hint.ne_rolled_back':
+      'DAM disabled Network Protection after it failed to start, which keeps normal networking working. Enable it again to retry from a known state.',
     'connect.hint.ne_start':
       'DAM Network Protection is enabled but not connected yet. Continue setup so DAM can start it and verify capture before moving to trust.',
     'connect.hint.linux_capture':
@@ -504,6 +510,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.action.ne_approval': 'Open approval settings',
     'connect.action.ne_config': 'Add network configuration',
     'connect.action.ne_enable': 'Enable network extension',
+    'connect.action.ne_rolled_back': 'Retry network protection',
     'connect.action.ne_start': 'Enable protection layer',
     'connect.action.platform_capture': 'Use explicit proxy mode',
     'connect.action.ne_reboot': 'Restart macOS',
@@ -837,6 +844,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.step.ne_approval': 'Approuver l’extension réseau',
     'connect.step.ne_config': 'Ajouter la configuration réseau',
     'connect.step.ne_enable': 'Activer l’extension réseau',
+    'connect.step.ne_rolled_back': 'Réparer l’extension réseau',
     'connect.step.ne_start': 'Activer la couche de protection',
     'connect.step.linux_capture': 'Configurer le routage Linux',
     'connect.step.windows_capture': 'Configurer le routage Windows',
@@ -856,6 +864,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
       'Ajoute la configuration DAM Network Protection qui route le trafic protégé via DAM. macOS demande ce consentement séparément de l’approbation de l’extension système.',
     'connect.hint.ne_enable':
       'macOS a ajouté la configuration réseau de DAM, mais ne l’a pas encore démarrée. Activez DAM Network Protection dans Réglages Système > Général > Ouverture et extensions > Extensions réseau, puis continuez la configuration.',
+    'connect.hint.ne_rolled_back':
+      'DAM a désactivé Network Protection après un échec de démarrage afin de préserver le réseau normal. Réactivez-le pour réessayer depuis un état connu.',
     'connect.hint.ne_start':
       'DAM Network Protection est activé, mais pas encore connecté. Continuez la configuration pour que DAM le démarre et vérifie la capture avant de passer à la confiance.',
     'connect.hint.linux_capture':
@@ -879,6 +889,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.action.ne_approval': 'Ouvrir les réglages',
     'connect.action.ne_config': 'Ajouter la configuration réseau',
     'connect.action.ne_enable': 'Activer l’extension réseau',
+    'connect.action.ne_rolled_back': 'Réessayer la protection réseau',
     'connect.action.ne_start': 'Activer la couche de protection',
     'connect.action.platform_capture': 'Utiliser le proxy explicite',
     'connect.action.ne_reboot': 'Redémarrer macOS',

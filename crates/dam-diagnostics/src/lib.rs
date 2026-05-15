@@ -132,6 +132,7 @@ pub enum SetupStepDetail {
     Disconnected,
     Stale,
     EmptyScope,
+    RolledBack,
     Unsupported,
     Failed,
     Mismatch,
@@ -156,6 +157,7 @@ impl SetupStepDetail {
             Self::Disconnected => "disconnected",
             Self::Stale => "stale",
             Self::EmptyScope => "empty_scope",
+            Self::RolledBack => "rolled_back",
             Self::Unsupported => "unsupported",
             Self::Failed => "failed",
             Self::Mismatch => "mismatch",
@@ -914,6 +916,7 @@ fn network_extension_setup_steps(
         .as_ref()
         .and_then(|status| status.manager_status.as_ref());
     let activation_method = record.map(|record| record.activation_method.as_str());
+    let start_rolled_back = activation_method == Some("network_extension_start_failed_rolled_back");
     let install_command = network_extension_install_command(config_path);
 
     if dam_net_macos::network_extension_pending_reboot(state_dir)
@@ -1004,7 +1007,10 @@ fn network_extension_setup_steps(
     let manager_enabled = manager.map(|status| status.enabled).unwrap_or_else(|| {
         !matches!(
             activation_method,
-            Some("network_extension_configured_needs_enable")
+            Some(
+                "network_extension_configured_needs_enable"
+                    | "network_extension_start_failed_rolled_back"
+            )
         )
     });
     let manager_connected = status
@@ -1082,12 +1088,18 @@ fn network_extension_setup_steps(
             },
             if !manager_configured {
                 SetupStepDetail::NeedsConfiguration
+            } else if start_rolled_back {
+                SetupStepDetail::RolledBack
             } else if manager_enabled {
                 SetupStepDetail::Enabled
             } else {
                 SetupStepDetail::NeedsEnable
             },
-            "Enable DAM Network Protection in System Settings",
+            if start_rolled_back {
+                "DAM disabled Network Protection after it failed to start; enable it again to retry safely"
+            } else {
+                "Enable DAM Network Protection in System Settings"
+            },
             Some(install_command.clone()),
         ),
         network_extension_step(

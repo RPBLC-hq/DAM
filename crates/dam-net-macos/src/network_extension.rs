@@ -454,7 +454,12 @@ pub fn install_network_extension_for_hosts(
                         system_routes_changed: true,
                     });
                 }
-                other => return Err(other),
+                other => {
+                    if helper_failure_disabled_manager(&other) {
+                        record_start_failed_rollback(&plan)?;
+                    }
+                    return Err(other);
+                }
             }
         }
     }
@@ -494,6 +499,33 @@ pub fn install_network_extension_for_hosts(
         }),
         system_routes_changed: true,
     })
+}
+
+fn helper_failure_disabled_manager(error: &MacosNetworkExtensionError) -> bool {
+    match error {
+        MacosNetworkExtensionError::HelperFailed { stderr, .. } => {
+            stderr.contains("DAM Network Protection is enabled but did not connect")
+                || stderr
+                    .contains("DAM Network Protection is enabled but could not start automatically")
+        }
+        _ => false,
+    }
+}
+
+fn record_start_failed_rollback(
+    plan: &MacosNetworkExtensionPlan,
+) -> Result<(), MacosNetworkExtensionError> {
+    let record = MacosNetworkExtensionStateRecord {
+        version: STATE_VERSION,
+        bundle_identifier: plan.bundle_identifier.clone(),
+        team_identifier: plan.team_identifier.clone(),
+        protected_hosts: plan.protected_hosts.clone(),
+        installed_at_unix: unix_timestamp()?,
+        active: false,
+        activation_method: "network_extension_start_failed_rolled_back".to_string(),
+        pending_reboot: false,
+    };
+    write_state_record(&plan.paths, &record)
 }
 
 pub fn preview_remove_network_extension(

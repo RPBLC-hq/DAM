@@ -26,6 +26,7 @@ const stepLabelKeys: Record<string, MessageKey> = {
 
 const detailStepLabelKeys: Record<string, MessageKey> = {
   'ne_install:waiting_for_approval': 'connect.step.ne_approval',
+  'ne_enable:rolled_back': 'connect.step.ne_rolled_back',
 }
 
 const stepActionKeys: Record<string, MessageKey> = {
@@ -45,6 +46,7 @@ const stepActionKeys: Record<string, MessageKey> = {
 
 const detailStepActionKeys: Record<string, MessageKey> = {
   'ne_install:waiting_for_approval': 'connect.action.ne_approval',
+  'ne_enable:rolled_back': 'connect.action.ne_rolled_back',
 }
 
 const stepHintKeys: Record<string, MessageKey> = {
@@ -64,6 +66,7 @@ const stepHintKeys: Record<string, MessageKey> = {
 
 const detailStepHintKeys: Record<string, MessageKey> = {
   'ne_install:waiting_for_approval': 'connect.hint.ne_approval',
+  'ne_enable:rolled_back': 'connect.hint.ne_rolled_back',
 }
 
 const errorKeys: Record<string, MessageKey> = {
