@@ -81,13 +81,5 @@ fn static_response(body: &'static str, content_type: &'static str) -> Response {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn bundle_assets_are_embedded() {
-        // Sanity: the include_str! values exist (placeholder content is fine).
-        assert!(!BUNDLE_HTML.is_empty());
-        assert!(!FAVICON_SVG.is_empty());
-    }
-}
+#[path = "server_tests.rs"]
+mod tests;

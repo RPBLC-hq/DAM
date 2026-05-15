@@ -711,11 +711,13 @@ async fn dam_connect_apply_restarts_paused_daemon_when_profile_target_changes() 
         .await
         .unwrap();
 
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&response_body).unwrap(),
-        serde_json::from_str::<serde_json::Value>(raw_body).unwrap()
+        serde_json::from_str::<serde_json::Value>(&upstream_body).unwrap()
     );
-    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!response_body.contains("frank@example.com"));
+    assert!(response_body.contains("[email:"));
     assert!(!upstream_body.contains("frank@example.com"));
     assert!(upstream_body.contains("[email:"));
 
@@ -996,7 +998,7 @@ async fn web_api_reads_vault_and_activity_populated_by_filter() {
 }
 
 #[tokio::test]
-async fn proxy_redacts_outbound_and_resolves_inbound_response() {
+async fn proxy_redacts_outbound_and_keeps_inbound_references_tokenized() {
     let dir = tempfile::tempdir().unwrap();
     let vault_path = dir.path().join("vault.db");
     let log_path = dir.path().join("log.db");
@@ -1035,9 +1037,10 @@ async fn proxy_redacts_outbound_and_resolves_inbound_response() {
         .await
         .unwrap();
 
-    assert_eq!(response_body, raw_body);
-
     let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert_eq!(response_body, upstream_body);
+    assert!(!response_body.contains("carol@example.com"));
+    assert!(response_body.contains("[email:"));
     assert!(!upstream_body.contains("carol@example.com"));
     assert!(upstream_body.contains("[email:"));
     let vault_entries = dam_vault::Vault::open(&vault_path).unwrap().list().unwrap();
@@ -1069,8 +1072,6 @@ async fn proxy_redacts_outbound_and_resolves_inbound_response() {
     let logs = dam_log::LogStore::open(&log_path).unwrap().list().unwrap();
     assert!(logs.iter().any(|entry| entry.event_type == "proxy_forward"));
     assert!(logs.iter().any(|entry| entry.event_type == "vault_write"));
-    assert!(logs.iter().any(|entry| entry.event_type == "vault_read"));
-    assert!(logs.iter().any(|entry| entry.event_type == "resolve"));
     assert_logs_do_not_contain(&log_path, &["carol@example.com"]);
 }
 

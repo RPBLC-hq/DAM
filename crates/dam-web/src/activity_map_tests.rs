@@ -1,0 +1,93 @@
+use super::*;
+
+fn entry(event_type: &str, action: Option<&str>) -> dam_log::LogEntry {
+    dam_log::LogEntry {
+        id: 1,
+        timestamp: 0,
+        operation_id: "anthropic-test".into(),
+        level: "info".into(),
+        event_type: event_type.into(),
+        kind: Some("email".into()),
+        reference: None,
+        action: action.map(|s| s.into()),
+        message: "test".into(),
+    }
+}
+
+#[test]
+fn decision_allow_is_granted() {
+    let e = entry("policy_decision", Some("allow"));
+    assert!(matches!(decision_for(&e), Some(Decision::Granted)));
+}
+
+#[test]
+fn decision_tokenize_is_sealed() {
+    let e = entry("policy_decision", Some("tokenize"));
+    assert!(matches!(decision_for(&e), Some(Decision::Sealed)));
+}
+
+#[test]
+fn decision_block_is_denied() {
+    let e = entry("policy_decision", Some("block"));
+    assert!(matches!(decision_for(&e), Some(Decision::Denied)));
+}
+
+#[test]
+fn non_user_event_returns_none() {
+    let e = entry("vault_write", Some("ok"));
+    assert!(decision_for(&e).is_none());
+}
+
+#[test]
+fn proxy_request_without_detections_is_granted_activity() {
+    let e = dam_log::LogEntry {
+        id: 1,
+        timestamp: 0,
+        operation_id: "op-1".into(),
+        level: "info".into(),
+        event_type: "proxy_forward".into(),
+        kind: None,
+        reference: None,
+        action: Some("request_protection".into()),
+        message: "request protection detections=0 replacements=0 tokenized=0 blocked=0".into(),
+    };
+
+    let event = derive_event_with_actor(&e, Some("openai")).unwrap();
+
+    assert!(matches!(event.decision, Decision::Granted));
+    assert_eq!(event.kind, "request");
+    assert_eq!(event.actor, "openai");
+}
+
+#[test]
+fn proxy_request_with_replacements_is_sealed_activity() {
+    let e = dam_log::LogEntry {
+        id: 1,
+        timestamp: 0,
+        operation_id: "op-1".into(),
+        level: "info".into(),
+        event_type: "proxy_forward".into(),
+        kind: None,
+        reference: None,
+        action: Some("request_protection".into()),
+        message: "request protection detections=1 replacements=1 tokenized=1 blocked=0".into(),
+    };
+
+    assert!(matches!(decision_for(&e), Some(Decision::Sealed)));
+}
+
+#[test]
+fn actor_can_be_derived_from_route_message() {
+    assert_eq!(
+        actor_from_message("route target=openai provider=openai-compatible request_bytes=10"),
+        Some("openai".to_string())
+    );
+}
+
+#[test]
+fn day_label_is_iso_date() {
+    // 2026-05-07 ≈ epoch 1_777_276_800
+    let label = day_label(1_777_276_800);
+    assert!(label.starts_with("2026-"));
+    assert_eq!(label.len(), 10);
+}

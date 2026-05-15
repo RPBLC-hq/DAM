@@ -10,6 +10,7 @@ mod insights;
 mod recently_scanned;
 mod requests;
 mod settings;
+mod setup;
 mod system;
 mod wallet;
 
@@ -23,6 +24,9 @@ pub fn router() -> Router<AppState> {
         .route("/bootstrap", get(bootstrap_route::get))
         .route("/connect", get(connect::get))
         .route("/connect/action", post(connect::post_action))
+        .route("/setup/plan", get(setup::plan))
+        .route("/setup/next-action", get(setup::next_action))
+        .route("/setup/rescue", post(setup::rescue))
         .route("/wallet", get(wallet::list))
         .route("/wallet/:key", get(wallet::detail))
         .route("/wallet/:key/allow", post(wallet::allow))

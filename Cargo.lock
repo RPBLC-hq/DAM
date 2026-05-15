@@ -596,6 +596,10 @@ version = "0.1.0"
 dependencies = [
  "dam-config",
  "dam-consent",
+ "dam-daemon",
+ "dam-diagnostics",
+ "dam-net",
+ "dam-trust",
  "dam-vault",
  "serde",
  "serde_json",

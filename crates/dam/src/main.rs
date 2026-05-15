@@ -27,11 +27,13 @@ struct Cli {
 enum CommandKind {
     Connect(ConnectArgs),
     Disconnect(DisconnectArgs),
+    Doctor(DoctorArgs),
     Status(StatusArgs),
     Logs(LogsArgs),
     Profile(ProfileArgs),
     Trust(TrustArgs),
     Network(NetworkArgs),
+    Setup(SetupArgs),
     Startup(StartupArgs),
     Integrations(IntegrationArgs),
     Web(WebArgs),
@@ -47,6 +49,53 @@ struct WebArgs {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct StatusArgs {
     json: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct DoctorArgs {
+    json: bool,
+    config_path: Option<PathBuf>,
+    state_dir: Option<PathBuf>,
+    proxy_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SetupArgs {
+    Status(SetupPlanArgs),
+    Plan(SetupPlanArgs),
+    NextAction(SetupPlanArgs),
+    Resume(SetupPlanArgs),
+    Rescue(SetupRescueArgs),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SetupPlanArgs {
+    json: bool,
+    config_path: Option<PathBuf>,
+    state_dir: Option<PathBuf>,
+    proxy_url: Option<String>,
+    network_mode: dam_net::CaptureMode,
+    trust_mode: dam_trust::TrustMode,
+}
+
+impl Default for SetupPlanArgs {
+    fn default() -> Self {
+        Self {
+            json: false,
+            config_path: None,
+            state_dir: None,
+            proxy_url: None,
+            network_mode: dam_net::CaptureMode::ExplicitProxy,
+            trust_mode: dam_trust::TrustMode::Disabled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SetupRescueArgs {
+    json: bool,
+    yes: bool,
+    state_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -74,11 +123,13 @@ impl Default for LogsArgs {
 struct ConnectArgs {
     proxy: dam_daemon::ProxyOptions,
     apply_profile_ids: Vec<String>,
+    json: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct DisconnectArgs {
     stop_daemon: bool,
+    json: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -205,6 +256,58 @@ struct StartupStatusView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct SetupNextActionView {
+    state: dam_diagnostics::SetupPlanState,
+    message: String,
+    state_dir: PathBuf,
+    proxy_url: String,
+    network_mode: dam_net::CaptureMode,
+    trust_mode: dam_trust::TrustMode,
+    next_action: Option<dam_diagnostics::SetupStep>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ConnectResultView {
+    state: &'static str,
+    message: String,
+    proxy_url: Option<String>,
+    network_mode: dam_net::CaptureMode,
+    trust_mode: dam_trust::TrustMode,
+    protection_enabled: bool,
+    restarted: bool,
+    target: Option<String>,
+    upstream: Option<String>,
+    applied_profiles: Vec<ConnectApplyView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ConnectApplyView {
+    profile_id: String,
+    message: String,
+    rollback_available: bool,
+    changes: Vec<dam_integrations::IntegrationFileChange>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DisconnectResultView {
+    state: &'static str,
+    message: String,
+    stopped: bool,
+    protection_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UnsupportedPlatformView {
+    state: &'static str,
+    support: &'static str,
+    platform: &'static str,
+    backend: &'static str,
+    message: String,
+    fallback_command: Vec<String>,
+    system_routes_changed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct LocalCaGenerateView {
     state: &'static str,
     artifact: dam_trust::LocalCaArtifact,
@@ -268,6 +371,9 @@ async fn run() -> Result<i32, String> {
             command: CommandKind::Disconnect(args),
         } => disconnect(args).await,
         Cli {
+            command: CommandKind::Doctor(args),
+        } => doctor(args).await,
+        Cli {
             command: CommandKind::Status(args),
         } => status(args).await,
         Cli {
@@ -282,6 +388,9 @@ async fn run() -> Result<i32, String> {
         Cli {
             command: CommandKind::Network(args),
         } => network_command(args),
+        Cli {
+            command: CommandKind::Setup(args),
+        } => setup_command(args).await,
         Cli {
             command: CommandKind::Startup(args),
         } => startup_command(args),
@@ -299,6 +408,8 @@ async fn run() -> Result<i32, String> {
 
 async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
     let mut config = dam_daemon::proxy_config(&args.proxy)?;
+    let mut applied_profiles = Vec::new();
+    let mut restarted = false;
 
     match dam_daemon::daemon_status().map_err(|error| error.to_string())? {
         dam_daemon::DaemonStatus::Connected(state) => {
@@ -306,7 +417,10 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
                 || !daemon_transparent_routes_match(&state, &config)
             {
                 ensure_connect_transparent_prerequisites(&args.proxy, &config, None)?;
-                println!("DAM profile traffic scope changed; restarting daemon");
+                if !args.json {
+                    println!("DAM profile traffic scope changed; restarting daemon");
+                }
+                restarted = true;
                 stop_connected_daemon(&state).await?;
             } else if !daemon_executable_matches_current(&state)? {
                 if connect_setup_change_requested(&state, &args.proxy) && state.protection_enabled {
@@ -318,7 +432,10 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
                 args.proxy = proxy_options_for_existing_daemon(&state, &args.proxy);
                 config = dam_daemon::proxy_config(&args.proxy)?;
                 ensure_connect_transparent_prerequisites(&args.proxy, &config, None)?;
-                println!("DAM daemon executable changed; restarting daemon");
+                if !args.json {
+                    println!("DAM daemon executable changed; restarting daemon");
+                }
+                restarted = true;
                 stop_connected_daemon(&state).await?;
             } else {
                 if connect_setup_change_requested(&state, &args.proxy) {
@@ -327,13 +444,29 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
                             .map_err(|error| error.to_string())?;
                         for profile_id in &args.apply_profile_ids {
                             let outcome = apply_connect_profile(profile_id, &state.proxy_url)?;
-                            print!("{}", render_connect_apply_outcome(&outcome));
+                            if !args.json {
+                                print!("{}", render_connect_apply_outcome(&outcome));
+                            }
+                            applied_profiles.push(connect_apply_view(&outcome));
                         }
-                        println!(
-                            "DAM protection enabled at {} using existing network mode {} and trust mode {}",
-                            state.proxy_url, state.network_mode, state.trust.mode
+                        return finish_connect(
+                            &args,
+                            ConnectResultView {
+                                state: "connected",
+                                message: format!(
+                                    "DAM protection enabled at {} using existing network mode {} and trust mode {}",
+                                    state.proxy_url, state.network_mode, state.trust.mode
+                                ),
+                                proxy_url: Some(state.proxy_url),
+                                network_mode: state.network_mode,
+                                trust_mode: state.trust.mode,
+                                protection_enabled: true,
+                                restarted: false,
+                                target: state.target_name,
+                                upstream: state.upstream,
+                                applied_profiles,
+                            },
                         );
-                        return Ok(0);
                     }
                     return Err(format!(
                         "DAM is already connected with network mode {} and trust mode {}; run `dam disconnect --stop` before changing setup",
@@ -343,10 +476,26 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
                 dam_daemon::set_protection_enabled(true).map_err(|error| error.to_string())?;
                 for profile_id in &args.apply_profile_ids {
                     let outcome = apply_connect_profile(profile_id, &state.proxy_url)?;
-                    print!("{}", render_connect_apply_outcome(&outcome));
+                    if !args.json {
+                        print!("{}", render_connect_apply_outcome(&outcome));
+                    }
+                    applied_profiles.push(connect_apply_view(&outcome));
                 }
-                println!("DAM protection enabled at {}", state.proxy_url);
-                return Ok(0);
+                return finish_connect(
+                    &args,
+                    ConnectResultView {
+                        state: "connected",
+                        message: format!("DAM protection enabled at {}", state.proxy_url),
+                        proxy_url: Some(state.proxy_url),
+                        network_mode: state.network_mode,
+                        trust_mode: state.trust.mode,
+                        protection_enabled: true,
+                        restarted: false,
+                        target: state.target_name,
+                        upstream: state.upstream,
+                        applied_profiles,
+                    },
+                );
             }
         }
         dam_daemon::DaemonStatus::Stale(state) => {
@@ -360,7 +509,10 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
     for profile_id in &args.apply_profile_ids {
         let proxy_url = proxy_url_for_connect_apply(&args.proxy)?;
         let outcome = apply_connect_profile(profile_id, &proxy_url)?;
-        print!("{}", render_connect_apply_outcome(&outcome));
+        if !args.json {
+            print!("{}", render_connect_apply_outcome(&outcome));
+        }
+        applied_profiles.push(connect_apply_view(&outcome));
     }
 
     let exe = std::env::current_exe()
@@ -379,15 +531,50 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
         .map_err(|error| format!("failed to start DAM daemon: {error}"))?;
 
     let state = wait_for_daemon_ready(Duration::from_secs(8)).await?;
-    println!("DAM connected at {}", state.proxy_url);
-    if let Some(target) = state.target_name.as_deref() {
-        println!("target: {target}");
-    }
-    if let Some(upstream) = state.upstream.as_deref() {
-        println!("upstream: {upstream}");
+    finish_connect(
+        &args,
+        ConnectResultView {
+            state: "connected",
+            message: format!("DAM connected at {}", state.proxy_url),
+            proxy_url: Some(state.proxy_url),
+            network_mode: state.network_mode,
+            trust_mode: state.trust.mode,
+            protection_enabled: state.protection_enabled,
+            restarted,
+            target: state.target_name,
+            upstream: state.upstream,
+            applied_profiles,
+        },
+    )
+}
+
+fn finish_connect(args: &ConnectArgs, view: ConnectResultView) -> Result<i32, String> {
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&view)
+                .map_err(|error| format!("failed to serialize connect result: {error}"))?
+        );
+        return Ok(0);
     }
 
+    println!("{}", view.message);
+    if let Some(target) = view.target.as_deref() {
+        println!("target: {target}");
+    }
+    if let Some(upstream) = view.upstream.as_deref() {
+        println!("upstream: {upstream}");
+    }
     Ok(0)
+}
+
+fn connect_apply_view(outcome: &ConnectApplyOutcome) -> ConnectApplyView {
+    ConnectApplyView {
+        profile_id: outcome.result.profile_id.clone(),
+        message: outcome.result.message.clone(),
+        rollback_available: outcome.rollback_available,
+        changes: outcome.result.changes.clone(),
+    }
 }
 
 fn proxy_options_for_existing_daemon(
@@ -578,25 +765,73 @@ async fn stop_connected_daemon(state: &dam_daemon::DaemonState) -> Result<(), St
 async fn disconnect(args: DisconnectArgs) -> Result<i32, String> {
     match dam_daemon::daemon_status().map_err(|error| error.to_string())? {
         dam_daemon::DaemonStatus::Disconnected => {
-            println!("DAM is not connected");
+            print_disconnect_result(
+                &args,
+                DisconnectResultView {
+                    state: "disconnected",
+                    message: "DAM is not connected".to_string(),
+                    stopped: false,
+                    protection_enabled: false,
+                },
+            )?;
             Ok(0)
         }
         dam_daemon::DaemonStatus::Stale(state) => {
             dam_daemon::remove_state_if_pid(state.pid).map_err(|error| error.to_string())?;
-            println!("Removed stale DAM daemon state");
+            print_disconnect_result(
+                &args,
+                DisconnectResultView {
+                    state: "stale_removed",
+                    message: "Removed stale DAM daemon state".to_string(),
+                    stopped: true,
+                    protection_enabled: false,
+                },
+            )?;
             Ok(0)
         }
         dam_daemon::DaemonStatus::Connected(state) => {
             if !args.stop_daemon {
                 dam_daemon::set_protection_enabled(false).map_err(|error| error.to_string())?;
-                println!("DAM protection paused; daemon remains active");
+                print_disconnect_result(
+                    &args,
+                    DisconnectResultView {
+                        state: "paused",
+                        message: "DAM protection paused; daemon remains active".to_string(),
+                        stopped: false,
+                        protection_enabled: false,
+                    },
+                )?;
                 return Ok(0);
             }
             stop_connected_daemon(&state).await?;
-            println!("DAM disconnected");
+            print_disconnect_result(
+                &args,
+                DisconnectResultView {
+                    state: "disconnected",
+                    message: "DAM disconnected".to_string(),
+                    stopped: true,
+                    protection_enabled: false,
+                },
+            )?;
             Ok(0)
         }
     }
+}
+
+fn print_disconnect_result(
+    args: &DisconnectArgs,
+    view: DisconnectResultView,
+) -> Result<(), String> {
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&view)
+                .map_err(|error| format!("failed to serialize disconnect result: {error}"))?
+        );
+    } else {
+        println!("{}", view.message);
+    }
+    Ok(())
 }
 
 async fn status(args: StatusArgs) -> Result<i32, String> {
@@ -661,6 +896,116 @@ async fn status(args: StatusArgs) -> Result<i32, String> {
     }
 
     Ok(code)
+}
+
+async fn doctor(args: DoctorArgs) -> Result<i32, String> {
+    let overrides = dam_config::ConfigOverrides {
+        config_path: args.config_path.clone(),
+        ..dam_config::ConfigOverrides::default()
+    };
+    let config = dam_config::load(&overrides).map_err(|error| error.to_string())?;
+    let report = dam_diagnostics::doctor_report(
+        &config,
+        &dam_diagnostics::DoctorOptions {
+            proxy_url: args.proxy_url,
+            state_dir: args.state_dir,
+            config_path: args.config_path,
+        },
+    )
+    .await;
+    let code = if report.state == dam_api::HealthState::Unhealthy {
+        1
+    } else {
+        0
+    };
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&report)
+                .map_err(|error| format!("failed to serialize doctor report: {error}"))?
+        );
+    } else {
+        print!("{}", render_health_report(&report));
+    }
+
+    Ok(code)
+}
+
+async fn setup_command(args: SetupArgs) -> Result<i32, String> {
+    match args {
+        SetupArgs::Status(args) | SetupArgs::Plan(args) => setup_plan_command(args, false),
+        SetupArgs::NextAction(args) | SetupArgs::Resume(args) => setup_plan_command(args, true),
+        SetupArgs::Rescue(args) => setup_rescue_command(args).await,
+    }
+}
+
+fn setup_plan_command(args: SetupPlanArgs, next_action_only: bool) -> Result<i32, String> {
+    let config = dam_config::load(&dam_config::ConfigOverrides {
+        config_path: args.config_path.clone(),
+        ..dam_config::ConfigOverrides::default()
+    })
+    .map_err(|error| error.to_string())?;
+    let plan = dam_diagnostics::setup_plan(
+        &config,
+        &dam_diagnostics::SetupPlanOptions {
+            state_dir: args.state_dir,
+            config_path: args.config_path,
+            proxy_url: args.proxy_url,
+            network_mode: args.network_mode,
+            trust_mode: args.trust_mode,
+        },
+    )?;
+    let code = if plan.state == dam_diagnostics::SetupPlanState::Ready {
+        0
+    } else {
+        1
+    };
+
+    if next_action_only {
+        let view = SetupNextActionView {
+            state: plan.state,
+            message: plan.message,
+            state_dir: plan.state_dir,
+            proxy_url: plan.proxy_url,
+            network_mode: plan.network_mode,
+            trust_mode: plan.trust_mode,
+            next_action: plan.next_action,
+        };
+        if args.json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&view)
+                    .map_err(|error| format!("failed to serialize setup next action: {error}"))?
+            );
+        } else {
+            print!("{}", render_setup_next_action(&view));
+        }
+        return Ok(code);
+    }
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&plan)
+                .map_err(|error| format!("failed to serialize setup plan: {error}"))?
+        );
+    } else {
+        print!("{}", render_setup_plan(&plan));
+    }
+
+    Ok(code)
+}
+
+async fn setup_rescue_command(args: SetupRescueArgs) -> Result<i32, String> {
+    let view = dam_diagnostics::setup_rescue(&dam_diagnostics::SetupRescueOptions {
+        state_dir: args.state_dir,
+        proxy_url: Some(format!("http://{DEFAULT_LISTEN}")),
+        apply: args.yes,
+    })?;
+    print_setup_rescue_view(&view, args.json)?;
+
+    Ok(if view.is_blocked() { 1 } else { 0 })
 }
 
 fn logs_command(args: LogsArgs) -> Result<i32, String> {
@@ -954,6 +1299,14 @@ fn network_command(args: NetworkArgs) -> Result<i32, String> {
             json,
             yes,
         } => {
+            if !cfg!(target_os = "macos") {
+                print_unsupported_platform(
+                    "macos_system_proxy",
+                    "system proxy routing is not implemented on this platform; use explicit proxy mode",
+                    json,
+                )?;
+                return Ok(1);
+            }
             let config = dam_config::load(&dam_config::ConfigOverrides {
                 config_path,
                 ..dam_config::ConfigOverrides::default()
@@ -971,6 +1324,14 @@ fn network_command(args: NetworkArgs) -> Result<i32, String> {
             print_network_result(&result, json, yes)?;
         }
         NetworkArgs::RemoveProxy { json, yes } => {
+            if !cfg!(target_os = "macos") {
+                print_unsupported_platform(
+                    "macos_system_proxy",
+                    "system proxy routing is not implemented on this platform; no system route changes were made",
+                    json,
+                )?;
+                return Ok(1);
+            }
             let result = if yes {
                 dam_net_macos::remove_system_proxy(&state_dir, &proxy_url)
             } else {
@@ -984,6 +1345,14 @@ fn network_command(args: NetworkArgs) -> Result<i32, String> {
             json,
             yes,
         } => {
+            if !cfg!(target_os = "macos") {
+                print_unsupported_platform(
+                    "macos_network_extension",
+                    "Network Extension capture is not implemented on this platform; use explicit proxy mode",
+                    json,
+                )?;
+                return Ok(1);
+            }
             let config = dam_config::load(&dam_config::ConfigOverrides {
                 config_path,
                 ..dam_config::ConfigOverrides::default()
@@ -1003,6 +1372,14 @@ fn network_command(args: NetworkArgs) -> Result<i32, String> {
             }
         }
         NetworkArgs::RemoveNetworkExtension { json, yes } => {
+            if !cfg!(target_os = "macos") {
+                print_unsupported_platform(
+                    "macos_network_extension",
+                    "Network Extension capture is not implemented on this platform; no system route changes were made",
+                    json,
+                )?;
+                return Ok(1);
+            }
             let result = if yes {
                 dam_net_macos::remove_network_extension(&state_dir)
             } else {
@@ -1326,11 +1703,13 @@ fn parse_cli_with_connect_profiles(
         }),
         "connect" => parse_connect_command(&args[1..], connect_profiles),
         "disconnect" => parse_disconnect_command(&args[1..]),
+        "doctor" => parse_doctor_command(&args[1..]),
         "status" => parse_status_command(&args[1..]),
         "logs" => parse_logs_command(&args[1..]),
         "profile" => parse_profile_command(&args[1..]),
         "trust" => parse_trust_command(&args[1..]),
         "network" => parse_network_command(&args[1..]),
+        "setup" => parse_setup_command(&args[1..]),
         "startup" => parse_startup_command(&args[1..]),
         "integrations" => parse_integrations_command(&args[1..]),
         "web" => Ok(Cli {
@@ -1347,18 +1726,27 @@ fn parse_connect_command(
     args: &[String],
     connect_profiles: ConnectProfileSelection,
 ) -> Result<Cli, String> {
-    if matches!(args.first().map(String::as_str), Some("-h" | "--help")) {
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "-h" | "--help"))
+    {
         println!("{}", usage_connect());
         std::process::exit(0);
     }
 
-    let expanded = expand_connect_profile_args(args, &connect_profiles)?;
+    let (args, json) = split_json_flag(args, "connect")?;
+    let expanded = expand_connect_profile_args(&args, &connect_profiles)?;
+    let explicit_upstream = last_option_value(&expanded.args, "--upstream");
     let mut proxy = dam_daemon::parse_proxy_options(expanded.args)?;
     if !expanded.selected_profile_ids.is_empty() && proxy.targets.is_none() {
-        proxy.targets = Some(proxy_targets_for_profiles(
+        let mut targets = proxy_targets_for_profiles(
             &expanded.selected_profile_ids,
             connect_profiles.integration_state_dir.as_deref(),
-        )?);
+        )?;
+        if let Some(upstream) = explicit_upstream {
+            override_single_profile_target_upstream(&mut targets, &upstream)?;
+        }
+        proxy.targets = Some(targets);
     }
     if expanded.traffic_app_ids.is_some() {
         proxy.traffic_app_ids = expanded.traffic_app_ids;
@@ -1374,6 +1762,7 @@ fn parse_connect_command(
         command: CommandKind::Connect(ConnectArgs {
             proxy,
             apply_profile_ids: expanded.apply_profile_ids,
+            json,
         }),
     })
 }
@@ -1393,6 +1782,7 @@ fn parse_disconnect_command(args: &[String]) -> Result<Cli, String> {
     for arg in args {
         match arg.as_str() {
             "--stop" => parsed.stop_daemon = true,
+            "--json" => parsed.json = true,
             _ => return Err(format!("unknown disconnect argument: {arg}")),
         }
     }
@@ -1400,6 +1790,23 @@ fn parse_disconnect_command(args: &[String]) -> Result<Cli, String> {
     Ok(Cli {
         command: CommandKind::Disconnect(parsed),
     })
+}
+
+fn split_json_flag(args: &[String], command: &str) -> Result<(Vec<String>, bool), String> {
+    let mut filtered = Vec::with_capacity(args.len());
+    let mut json = false;
+    for arg in args {
+        if arg == "--json" {
+            json = true;
+        } else if arg == "-h" || arg == "--help" {
+            return Err(format!(
+                "unexpected help flag after {command} parser preflight"
+            ));
+        } else {
+            filtered.push(arg.clone());
+        }
+    }
+    Ok((filtered, json))
 }
 
 fn parse_status_command(args: &[String]) -> Result<Cli, String> {
@@ -1420,6 +1827,135 @@ fn parse_status_command(args: &[String]) -> Result<Cli, String> {
     Ok(Cli {
         command: CommandKind::Status(parsed),
     })
+}
+
+fn parse_doctor_command(args: &[String]) -> Result<Cli, String> {
+    let mut parsed = DoctorArgs::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => parsed.json = true,
+            "--config" => {
+                i += 1;
+                parsed.config_path = Some(PathBuf::from(required_value(args, i, "--config")?));
+            }
+            "--state-dir" => {
+                i += 1;
+                parsed.state_dir = Some(PathBuf::from(required_value(args, i, "--state-dir")?));
+            }
+            "--proxy-url" => {
+                i += 1;
+                parsed.proxy_url = Some(required_value(args, i, "--proxy-url")?.to_string());
+            }
+            "-h" | "--help" => {
+                println!("{}", usage_doctor());
+                std::process::exit(0);
+            }
+            arg => return Err(format!("unknown doctor argument: {arg}")),
+        }
+        i += 1;
+    }
+
+    Ok(Cli {
+        command: CommandKind::Doctor(parsed),
+    })
+}
+
+fn parse_setup_command(args: &[String]) -> Result<Cli, String> {
+    if args.is_empty() || matches!(args.first().map(String::as_str), Some("-h" | "--help")) {
+        println!("{}", usage_setup());
+        std::process::exit(0);
+    }
+
+    match args[0].as_str() {
+        "status" => Ok(Cli {
+            command: CommandKind::Setup(SetupArgs::Status(parse_setup_plan_args(&args[1..])?)),
+        }),
+        "plan" => Ok(Cli {
+            command: CommandKind::Setup(SetupArgs::Plan(parse_setup_plan_args(&args[1..])?)),
+        }),
+        "next-action" => Ok(Cli {
+            command: CommandKind::Setup(SetupArgs::NextAction(parse_setup_plan_args(&args[1..])?)),
+        }),
+        "resume" => Ok(Cli {
+            command: CommandKind::Setup(SetupArgs::Resume(parse_setup_plan_args(&args[1..])?)),
+        }),
+        "rescue" => Ok(Cli {
+            command: CommandKind::Setup(SetupArgs::Rescue(parse_setup_rescue_args(&args[1..])?)),
+        }),
+        command => Err(format!("unknown setup command: {command}")),
+    }
+}
+
+fn parse_setup_plan_args(args: &[String]) -> Result<SetupPlanArgs, String> {
+    let mut parsed = SetupPlanArgs::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => parsed.json = true,
+            "--config" => {
+                i += 1;
+                parsed.config_path = Some(PathBuf::from(required_value(args, i, "--config")?));
+            }
+            "--state-dir" => {
+                i += 1;
+                parsed.state_dir = Some(PathBuf::from(required_value(args, i, "--state-dir")?));
+            }
+            "--proxy-url" => {
+                i += 1;
+                parsed.proxy_url = Some(required_value(args, i, "--proxy-url")?.to_string());
+            }
+            "--network-mode" => {
+                i += 1;
+                parsed.network_mode = required_value(args, i, "--network-mode")?.parse()?;
+            }
+            "--trust-mode" => {
+                i += 1;
+                parsed.trust_mode = required_value(args, i, "--trust-mode")?.parse()?;
+            }
+            "-h" | "--help" => {
+                println!("{}", usage_setup_plan());
+                std::process::exit(0);
+            }
+            arg => return Err(format!("unknown setup argument: {arg}")),
+        }
+        i += 1;
+    }
+    Ok(parsed)
+}
+
+fn parse_setup_rescue_args(args: &[String]) -> Result<SetupRescueArgs, String> {
+    let mut parsed = SetupRescueArgs::default();
+    let mut dry_run_explicit = false;
+    let mut yes_explicit = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--json" => parsed.json = true,
+            "--dry-run" => {
+                dry_run_explicit = true;
+                parsed.yes = false;
+            }
+            "--yes" => {
+                yes_explicit = true;
+                parsed.yes = true;
+            }
+            "--state-dir" => {
+                i += 1;
+                parsed.state_dir = Some(PathBuf::from(required_value(args, i, "--state-dir")?));
+            }
+            "-h" | "--help" => {
+                println!("{}", usage_setup_rescue());
+                std::process::exit(0);
+            }
+            arg => return Err(format!("unknown setup rescue argument: {arg}")),
+        }
+        i += 1;
+    }
+    if dry_run_explicit && yes_explicit {
+        return Err("setup rescue cannot combine --dry-run and --yes".to_string());
+    }
+    Ok(parsed)
 }
 
 fn parse_startup_command(args: &[String]) -> Result<Cli, String> {
@@ -2275,6 +2811,125 @@ fn render_status_view(view: &StatusView) -> String {
     output
 }
 
+fn render_health_report(report: &dam_api::HealthReport) -> String {
+    let mut output = String::new();
+    output.push_str(&format!("state: {}\n", health_state_tag(report.state)));
+    for component in &report.components {
+        output.push_str(&format!(
+            "{}: {} - {}\n",
+            component.component,
+            health_state_tag(component.state),
+            component.message
+        ));
+    }
+    for diagnostic in &report.diagnostics {
+        output.push_str(&format!(
+            "{} {}: {}\n",
+            severity_tag(diagnostic.severity),
+            diagnostic.code,
+            diagnostic.message
+        ));
+    }
+    output
+}
+
+fn render_setup_plan(report: &dam_diagnostics::SetupPlan) -> String {
+    let mut output = String::new();
+    output.push_str(&format!("state: {}\n", report.state.tag()));
+    output.push_str(&format!("message: {}\n", report.message));
+    output.push_str(&format!("state_dir: {}\n", report.state_dir.display()));
+    output.push_str(&format!(
+        "integration_state_dir: {}\n",
+        report.integration_state_dir.display()
+    ));
+    output.push_str(&format!("proxy_url: {}\n", report.proxy_url));
+    output.push_str(&format!("network_mode: {}\n", report.network_mode));
+    output.push_str(&format!("trust_mode: {}\n", report.trust_mode));
+    if let Some(action) = &report.next_action {
+        output.push_str(&format!(
+            "next_action: {} - {}\n",
+            action.kind.tag(),
+            action.message
+        ));
+        if let Some(command) = &action.command {
+            output.push_str(&format!("next_command: {}\n", shell_command(command)));
+        }
+    } else {
+        output.push_str("next_action: none\n");
+    }
+    for step in &report.steps {
+        output.push_str(&format!(
+            "step {}: {} - {}\n",
+            step.kind.tag(),
+            step.status.tag(),
+            step.message
+        ));
+        if let Some(command) = &step.command {
+            output.push_str(&format!("  command: {}\n", shell_command(command)));
+        }
+        output.push_str(&format!(
+            "  requires_confirmation: {}\n",
+            step.requires_confirmation
+        ));
+        output.push_str(&format!("  changes_system: {}\n", step.changes_system));
+    }
+    output
+}
+
+fn render_setup_next_action(view: &SetupNextActionView) -> String {
+    let mut output = String::new();
+    output.push_str(&format!("state: {}\n", view.state.tag()));
+    output.push_str(&format!("message: {}\n", view.message));
+    output.push_str(&format!("state_dir: {}\n", view.state_dir.display()));
+    output.push_str(&format!("proxy_url: {}\n", view.proxy_url));
+    output.push_str(&format!("network_mode: {}\n", view.network_mode));
+    output.push_str(&format!("trust_mode: {}\n", view.trust_mode));
+    if let Some(action) = &view.next_action {
+        output.push_str(&format!("kind: {}\n", action.kind.tag()));
+        output.push_str(&format!("status: {}\n", action.status.tag()));
+        output.push_str(&format!("action: {}\n", action.message));
+        if let Some(command) = &action.command {
+            output.push_str(&format!("command: {}\n", shell_command(command)));
+        }
+        output.push_str(&format!(
+            "requires_confirmation: {}\n",
+            action.requires_confirmation
+        ));
+        output.push_str(&format!("changes_system: {}\n", action.changes_system));
+    } else {
+        output.push_str("action: none\n");
+    }
+    output
+}
+
+fn print_setup_rescue_view(view: &dam_diagnostics::SetupRescue, json: bool) -> Result<(), String> {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(view)
+                .map_err(|error| format!("failed to serialize setup rescue result: {error}"))?
+        );
+    } else {
+        print!("{}", render_setup_rescue_view(view));
+    }
+    Ok(())
+}
+
+fn render_setup_rescue_view(view: &dam_diagnostics::SetupRescue) -> String {
+    let mut output = String::new();
+    output.push_str(&format!("state: {}\n", view.state));
+    output.push_str(&format!("message: {}\n", view.message));
+    output.push_str(&format!("state_dir: {}\n", view.state_dir.display()));
+    for action in &view.actions {
+        output.push_str(&format!(
+            "action {}: {} - {}\n",
+            action.id, action.state, action.message
+        ));
+        output.push_str(&format!("  changes_system: {}\n", action.changes_system));
+    }
+    output
+}
+
 fn print_profile_status_view(view: &ProfileStatusView, json: bool) -> Result<(), String> {
     if json {
         println!(
@@ -2319,6 +2974,46 @@ fn print_network_extension_result(
         );
     } else {
         print!("{}", render_network_extension_result(result, approved));
+    }
+    Ok(())
+}
+
+fn print_unsupported_platform(
+    backend: &'static str,
+    message: &str,
+    json: bool,
+) -> Result<(), String> {
+    let view = UnsupportedPlatformView {
+        state: "unsupported_platform",
+        support: "planned",
+        platform: std::env::consts::OS,
+        backend,
+        message: message.to_string(),
+        fallback_command: vec![
+            "dam".to_string(),
+            "connect".to_string(),
+            "--network-mode".to_string(),
+            "explicit_proxy".to_string(),
+            "--trust-mode".to_string(),
+            "disabled".to_string(),
+        ],
+        system_routes_changed: false,
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&view).map_err(|error| {
+                format!("failed to serialize unsupported platform result: {error}")
+            })?
+        );
+    } else {
+        println!("state: {}", view.state);
+        println!("support: {}", view.support);
+        println!("platform: {}", view.platform);
+        println!("backend: {}", view.backend);
+        println!("message: {}", view.message);
+        println!("fallback: {}", shell_command(&view.fallback_command));
+        println!("system_routes_changed: false");
     }
     Ok(())
 }
@@ -3066,11 +3761,9 @@ fn validate_connect_apply_profile_matches_proxy(
     if let Some(targets) = &proxy.targets {
         let expected_targets = proxy_targets_for_traffic_app_ids(&expected_app_ids);
         if !expected_targets.iter().any(|expected| {
-            targets.iter().any(|target| {
-                target.name == expected.name
-                    && target.provider == expected.provider
-                    && target.upstream == expected.upstream
-            })
+            targets
+                .iter()
+                .any(|target| target.name == expected.name && target.provider == expected.provider)
         }) {
             return Err(format!(
                 "profile {profile_id} is not included in the configured traffic targets"
@@ -3115,6 +3808,34 @@ fn proxy_targets_for_traffic_app_ids(app_ids: &[String]) -> Vec<dam_config::Prox
         });
     }
     targets
+}
+
+fn override_single_profile_target_upstream(
+    targets: &mut [dam_config::ProxyTargetConfig],
+    upstream: &str,
+) -> Result<(), String> {
+    let distinct_targets = targets
+        .iter()
+        .map(|target| (target.name.clone(), target.provider.clone()))
+        .collect::<BTreeSet<_>>();
+    if distinct_targets.len() > 1 {
+        return Err(
+            "--upstream can override only single-target profiles; use --target for multi-target profile tests"
+                .to_string(),
+        );
+    }
+    for target in targets {
+        target.upstream = upstream.to_string();
+    }
+    Ok(())
+}
+
+fn last_option_value(args: &[String], option: &str) -> Option<String> {
+    args.windows(2)
+        .rev()
+        .filter(|window| window[0] == option)
+        .map(|window| window[1].clone())
+        .next()
 }
 
 fn traffic_app_ids_for_profiles(
@@ -3251,16 +3972,41 @@ fn severity_tag(severity: dam_api::DiagnosticSeverity) -> &'static str {
     }
 }
 
+fn health_state_tag(state: dam_api::HealthState) -> &'static str {
+    match state {
+        dam_api::HealthState::Healthy => "healthy",
+        dam_api::HealthState::Degraded => "degraded",
+        dam_api::HealthState::Unhealthy => "unhealthy",
+        dam_api::HealthState::Unknown => "unknown",
+    }
+}
+
 fn usage() -> &'static str {
-    "Usage: dam <command>\n\nCommands:\n  connect       Start or resume the background DAM proxy daemon\n  web           Start the local DAM web UI\n  status        Show background DAM protection status\n  logs          Show concise local DAM operation logs\n  profile       Select and inspect the active harness profile\n  trust         Manage local trust artifacts and approved local trust changes\n  network       Manage local network routing plans and approved changes\n  startup       Inspect or record local startup setup choices\n  disconnect    Pause DAM protection, or stop the daemon with --stop\n  integrations  List and inspect known harness integration profiles\n\nRun `dam connect --help`, `dam web --help`, `dam logs --help`, `dam profile --help`, `dam trust --help`, `dam network --help`, `dam startup --help`, or `dam integrations --help` for command options."
+    "Usage: dam <command>\n\nCommands:\n  connect       Start or resume the background DAM proxy daemon\n  web           Start the local DAM web UI\n  doctor        Run machine-readable local readiness diagnostics\n  status        Show background DAM protection status\n  setup         Inspect or recover the idempotent local setup plan\n  logs          Show concise local DAM operation logs\n  profile       Select and inspect the active harness profile\n  trust         Manage local trust artifacts and approved local trust changes\n  network       Manage local network routing plans and approved changes\n  startup       Inspect or record local startup setup choices\n  disconnect    Pause DAM protection, or stop the daemon with --stop\n  integrations  List and inspect known harness integration profiles\n\nRun `dam connect --help`, `dam web --help`, `dam doctor --help`, `dam setup --help`, `dam logs --help`, `dam profile --help`, `dam trust --help`, `dam network --help`, `dam startup --help`, or `dam integrations --help` for command options."
 }
 
 fn usage_connect() -> &'static str {
-    "Usage: dam connect [--profile PROFILE] [--apply] [DAM_OPTIONS]\n\nStarts a background DAM proxy daemon for proxy/interception routing. Enabled app profiles select daemon targets automatically. --apply additionally ensures selected DAM profile files before connecting.\n\nDAM options:\n  --profile <id>          Use integration profile daemon defaults\n  --apply                 Ensure selected or enabled DAM profile files before connecting\n  --config <path>         Load DAM config file before daemon overrides\n  --listen <addr>         Local proxy listen address (default: 127.0.0.1:7828)\n  --network-mode <mode>   Control-plane network mode: explicit_proxy, system_proxy, or tun\n  --trust-mode <mode>     Control-plane trust mode: disabled or local_ca\n  --target-name <name>    Low-level proxy target name\n  --provider <provider>   Low-level target label\n  --upstream <url>        Low-level target upstream URL\n  --target <json>         Internal repeated target JSON\n  --db <path>             Vault SQLite path (default: vault.db)\n  --log <path>            Log SQLite path (default: log.db)\n  --consent-db <path>     Consent SQLite path (default: consent.db)\n  --no-log                Disable DAM log writes\n  --no-resolve-inbound    Leave DAM references unresolved in inbound responses\n  --resolve-inbound       Restore DAM references in inbound responses (default)\n\nKnown profiles: claude-code, codex"
+    "Usage: dam connect [--profile PROFILE] [--apply] [--json] [DAM_OPTIONS]\n\nStarts a background DAM proxy daemon for proxy/interception routing. Enabled app profiles select daemon targets automatically. --apply additionally ensures selected DAM profile files before connecting.\n\nDAM options:\n  --profile <id>          Use integration profile daemon defaults\n  --apply                 Ensure selected or enabled DAM profile files before connecting\n  --json                  Print a stable machine-readable connect result\n  --config <path>         Load DAM config file before daemon overrides\n  --listen <addr>         Local proxy listen address (default: 127.0.0.1:7828)\n  --network-mode <mode>   Control-plane network mode: explicit_proxy, system_proxy, or tun\n  --trust-mode <mode>     Control-plane trust mode: disabled or local_ca\n  --target-name <name>    Low-level proxy target name\n  --provider <provider>   Low-level target label\n  --upstream <url>        Low-level target upstream URL\n  --target <json>         Internal repeated target JSON\n  --db <path>             Vault SQLite path (default: vault.db)\n  --log <path>            Log SQLite path (default: log.db)\n  --consent-db <path>     Consent SQLite path (default: consent.db)\n  --no-log                Disable DAM log writes\n  --no-resolve-inbound    Leave DAM references unresolved in inbound responses\n  --resolve-inbound       Restore DAM references in inbound responses (default)\n\nKnown profiles: claude-code, codex"
 }
 
 fn usage_status() -> &'static str {
     "Usage: dam status [--json]"
+}
+
+fn usage_doctor() -> &'static str {
+    "Usage: dam doctor [--config PATH] [--state-dir PATH] [--proxy-url URL] [--json]\n\nRuns local readiness diagnostics without calling remote providers. JSON output is stable for agents and installers."
+}
+
+fn usage_setup() -> &'static str {
+    "Usage: dam setup <command>\n\nCommands:\n  status       Alias for plan; print the full idempotent setup checklist\n  plan         Print the full idempotent setup checklist\n  next-action  Print only the next setup action\n  resume       Alias for next-action after restart or interrupted setup\n  rescue       Preview or apply local setup rescue actions"
+}
+
+fn usage_setup_plan() -> &'static str {
+    "Usage: dam setup status|plan|next-action|resume [--config PATH] [--state-dir PATH] [--proxy-url URL] [--network-mode explicit_proxy|system_proxy|tun] [--trust-mode disabled|local_ca] [--json]"
+}
+
+fn usage_setup_rescue() -> &'static str {
+    "Usage: dam setup rescue [--state-dir PATH] [--dry-run|--yes] [--json]\n\nPreviews local recovery by default. Use --yes to stop the DAM daemon and remove DAM-managed macOS routing state so normal networking can resume."
 }
 
 fn usage_logs() -> &'static str {
@@ -3268,7 +4014,7 @@ fn usage_logs() -> &'static str {
 }
 
 fn usage_disconnect() -> &'static str {
-    "Usage: dam disconnect [--stop]\n\nBy default, `dam disconnect` pauses protection while leaving the daemon in pass-through mode so existing clients keep working. Use --stop after restoring routing or app profile setup when the daemon should exit."
+    "Usage: dam disconnect [--stop] [--json]\n\nBy default, `dam disconnect` pauses protection while leaving the daemon in pass-through mode so existing clients keep working. Use --stop after restoring routing or app profile setup when the daemon should exit."
 }
 
 fn usage_profile() -> &'static str {
@@ -3364,1108 +4110,5 @@ fn usage_integrations_rollback() -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const OPENAI_API_UPSTREAM: &str = "https://api.openai.com";
-    const ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
-
-    #[test]
-    fn removed_tool_launchers_are_not_cli_commands() {
-        for command in ["codex", "claude"] {
-            let error = parse_cli([command.to_string()]).unwrap_err();
-
-            assert!(error.contains(&format!("unknown command: {command}")));
-            assert!(!error.contains("one-shot"));
-            assert!(!error.contains("fail"));
-            assert!(!error.contains("dam codex"));
-            assert!(!error.contains("dam claude"));
-        }
-    }
-
-    #[test]
-    fn parses_web_forwarding_command() {
-        let cli = parse_cli([
-            "web".to_string(),
-            "--config".to_string(),
-            "dam.example.toml".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            cli.command,
-            CommandKind::Web(WebArgs {
-                args: vec!["--config".to_string(), "dam.example.toml".to_string()],
-            })
-        );
-    }
-
-    #[test]
-    fn parses_connect_with_low_level_provider_label() {
-        let cli = parse_cli([
-            "connect".to_string(),
-            "--provider".to_string(),
-            "anthropic".to_string(),
-            "--upstream".to_string(),
-            ANTHROPIC_UPSTREAM.to_string(),
-            "--listen".to_string(),
-            "127.0.0.1:9000".to_string(),
-        ])
-        .unwrap();
-
-        let CommandKind::Connect(args) = cli.command else {
-            panic!("expected connect");
-        };
-        assert_eq!(args.apply_profile_ids, Vec::<String>::new());
-        assert_eq!(args.proxy.listen, "127.0.0.1:9000");
-        assert_eq!(args.proxy.target_name, "openai");
-        assert_eq!(args.proxy.provider, "anthropic");
-        assert_eq!(args.proxy.upstream, ANTHROPIC_UPSTREAM);
-        assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::ExplicitProxy);
-        assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::Disabled);
-    }
-
-    #[test]
-    fn parses_connect_with_integration_profile_defaults() {
-        let cli = parse_cli([
-            "connect".to_string(),
-            "--profile".to_string(),
-            "codex".to_string(),
-            "--listen".to_string(),
-            "127.0.0.1:9000".to_string(),
-        ])
-        .unwrap();
-
-        let CommandKind::Connect(args) = cli.command else {
-            panic!("expected connect");
-        };
-        assert_eq!(args.apply_profile_ids, Vec::<String>::new());
-        assert_eq!(args.proxy.listen, "127.0.0.1:9000");
-        assert_eq!(args.proxy.target_name, "openai");
-        assert_eq!(args.proxy.provider, "openai-compatible");
-        assert_eq!(args.proxy.upstream, OPENAI_API_UPSTREAM);
-        assert_eq!(
-            args.proxy.traffic_app_ids,
-            Some(vec!["openai-api".to_string(), "chatgpt-codex".to_string()])
-        );
-        assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
-        assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
-    }
-
-    #[test]
-    fn parses_connect_profile_apply() {
-        let cli = parse_cli([
-            "connect".to_string(),
-            "--profile".to_string(),
-            "claude-code".to_string(),
-            "--apply".to_string(),
-            "--listen".to_string(),
-            "127.0.0.1:9000".to_string(),
-        ])
-        .unwrap();
-
-        let CommandKind::Connect(args) = cli.command else {
-            panic!("expected connect");
-        };
-        assert_eq!(args.apply_profile_ids, vec!["claude-code".to_string()]);
-        assert_eq!(args.proxy.listen, "127.0.0.1:9000");
-        let targets = args.proxy.targets.as_ref().unwrap();
-        assert_eq!(targets[0].name, "anthropic");
-        assert_eq!(targets[0].provider, "anthropic");
-        assert_eq!(targets[0].upstream, ANTHROPIC_UPSTREAM);
-        assert_eq!(
-            args.proxy.traffic_app_ids,
-            Some(vec!["anthropic-api".to_string()])
-        );
-        assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
-        assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
-    }
-
-    #[test]
-    fn parses_connect_apply_with_enabled_profile() {
-        let cli = parse_cli_with_active_profiles(
-            [
-                "connect".to_string(),
-                "--apply".to_string(),
-                "--listen".to_string(),
-                "127.0.0.1:9000".to_string(),
-            ],
-            vec!["claude-code".to_string()],
-        )
-        .unwrap();
-
-        let CommandKind::Connect(args) = cli.command else {
-            panic!("expected connect");
-        };
-        assert_eq!(args.apply_profile_ids, vec!["claude-code".to_string()]);
-        assert_eq!(args.proxy.listen, "127.0.0.1:9000");
-        let targets = args.proxy.targets.as_ref().unwrap();
-        assert_eq!(targets[0].provider, "anthropic");
-        assert_eq!(targets[0].upstream, ANTHROPIC_UPSTREAM);
-        assert_eq!(
-            args.proxy.traffic_app_ids,
-            Some(vec!["anthropic-api".to_string()])
-        );
-        assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
-        assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
-    }
-
-    #[test]
-    fn parses_connect_with_enabled_profile_selecting_targets_only() {
-        let cli = parse_cli_with_active_profiles(
-            [
-                "connect".to_string(),
-                "--listen".to_string(),
-                "127.0.0.1:9000".to_string(),
-            ],
-            vec!["claude-code".to_string()],
-        )
-        .unwrap();
-
-        let CommandKind::Connect(args) = cli.command else {
-            panic!("expected connect");
-        };
-        assert_eq!(args.apply_profile_ids, Vec::<String>::new());
-        assert_eq!(args.proxy.listen, "127.0.0.1:9000");
-        let targets = args.proxy.targets.as_ref().unwrap();
-        assert_eq!(targets[0].provider, "anthropic");
-        assert_eq!(targets[0].upstream, ANTHROPIC_UPSTREAM);
-        assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
-        assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
-    }
-
-    #[test]
-    fn parses_connect_with_explicit_empty_enabled_profiles_as_empty_traffic_scope() {
-        let cli = parse_cli_with_connect_profiles(
-            [
-                "connect".to_string(),
-                "--listen".to_string(),
-                "127.0.0.1:9000".to_string(),
-            ],
-            ConnectProfileSelection {
-                profile_ids: Vec::new(),
-                explicit_selection: true,
-                ..ConnectProfileSelection::default()
-            },
-        )
-        .unwrap();
-
-        let CommandKind::Connect(args) = cli.command else {
-            panic!("expected connect");
-        };
-        assert_eq!(args.apply_profile_ids, Vec::<String>::new());
-        assert_eq!(args.proxy.listen, "127.0.0.1:9000");
-        assert_eq!(args.proxy.traffic_app_ids, Some(Vec::new()));
-    }
-
-    #[test]
-    fn connect_profile_defaults_can_be_overridden_for_explicit_proxy_tests() {
-        let cli = parse_cli_with_active_profiles(
-            [
-                "connect".to_string(),
-                "--apply".to_string(),
-                "--listen".to_string(),
-                "127.0.0.1:9000".to_string(),
-                "--network-mode".to_string(),
-                "explicit_proxy".to_string(),
-                "--trust-mode".to_string(),
-                "disabled".to_string(),
-            ],
-            vec!["claude-code".to_string()],
-        )
-        .unwrap();
-
-        let CommandKind::Connect(args) = cli.command else {
-            panic!("expected connect");
-        };
-        assert_eq!(args.apply_profile_ids, vec!["claude-code".to_string()]);
-        assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::ExplicitProxy);
-        assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::Disabled);
-    }
-
-    #[test]
-    fn parses_connect_apply_with_multiple_enabled_profiles() {
-        let cli = parse_cli_with_active_profiles(
-            [
-                "connect".to_string(),
-                "--apply".to_string(),
-                "--listen".to_string(),
-                "127.0.0.1:9000".to_string(),
-            ],
-            vec!["codex".to_string(), "claude-code".to_string()],
-        )
-        .unwrap();
-
-        let CommandKind::Connect(args) = cli.command else {
-            panic!("expected connect");
-        };
-        assert_eq!(
-            args.apply_profile_ids,
-            vec!["codex".to_string(), "claude-code".to_string()]
-        );
-        assert_eq!(
-            args.proxy.traffic_app_ids,
-            Some(vec![
-                "openai-api".to_string(),
-                "chatgpt-codex".to_string(),
-                "anthropic-api".to_string()
-            ])
-        );
-        let targets = args.proxy.targets.unwrap();
-        assert_eq!(targets.len(), 3);
-        assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
-        assert!(
-            targets
-                .iter()
-                .any(|target| target.provider == "openai-compatible")
-        );
-        assert!(targets.iter().any(|target| target.provider == "anthropic"));
-        assert!(targets.iter().any(|target| target.name == "chatgpt-codex"));
-    }
-
-    #[test]
-    fn connect_setup_change_ignores_implicit_default_modes_for_existing_daemon() {
-        let state = test_daemon_state(
-            dam_net::CaptureMode::Tun,
-            dam_trust::TrustMode::LocalCa,
-            true,
-        );
-        let proxy = dam_daemon::ProxyOptions::default();
-
-        assert!(!connect_setup_change_requested(&state, &proxy));
-    }
-
-    #[test]
-    fn connect_setup_change_honors_explicit_mode_flags() {
-        let state = test_daemon_state(
-            dam_net::CaptureMode::Tun,
-            dam_trust::TrustMode::LocalCa,
-            true,
-        );
-        let proxy = dam_daemon::ProxyOptions {
-            network_mode: dam_net::CaptureMode::ExplicitProxy,
-            network_mode_explicit: true,
-            trust_mode: dam_trust::TrustMode::Disabled,
-            trust_mode_explicit: true,
-            ..dam_daemon::ProxyOptions::default()
-        };
-
-        assert!(connect_setup_change_requested(&state, &proxy));
-    }
-
-    #[test]
-    fn existing_daemon_restart_options_preserve_running_setup() {
-        let mut state = test_daemon_state(
-            dam_net::CaptureMode::Tun,
-            dam_trust::TrustMode::LocalCa,
-            true,
-        );
-        state.listen = "127.0.0.1:9001".to_string();
-        state.vault_path = PathBuf::from("/tmp/dam/vault.db");
-        state.log_path = Some(PathBuf::from("/tmp/dam/log.db"));
-        state.consent_path = Some(PathBuf::from("/tmp/dam/consent.db"));
-        state.proxy_targets = vec![
-            dam_daemon::DaemonProxyTargetState {
-                name: "anthropic".to_string(),
-                provider: "anthropic".to_string(),
-                upstream: ANTHROPIC_UPSTREAM.to_string(),
-            },
-            dam_daemon::DaemonProxyTargetState {
-                name: "openai".to_string(),
-                provider: "openai-compatible".to_string(),
-                upstream: OPENAI_API_UPSTREAM.to_string(),
-            },
-        ];
-
-        let requested = dam_daemon::ProxyOptions::default();
-        let proxy = proxy_options_for_existing_daemon(&state, &requested);
-
-        assert_eq!(proxy.listen, "127.0.0.1:9001");
-        assert_eq!(proxy.network_mode, dam_net::CaptureMode::Tun);
-        assert!(!proxy.network_mode_explicit);
-        assert_eq!(proxy.trust_mode, dam_trust::TrustMode::LocalCa);
-        assert!(!proxy.trust_mode_explicit);
-        assert_eq!(proxy.vault_path, PathBuf::from("/tmp/dam/vault.db"));
-        assert_eq!(proxy.log_path, Some(PathBuf::from("/tmp/dam/log.db")));
-        assert_eq!(
-            proxy.consent_path,
-            Some(PathBuf::from("/tmp/dam/consent.db"))
-        );
-        let targets = proxy.targets.unwrap();
-        assert_eq!(targets.len(), 2);
-        assert!(targets.iter().any(|target| target.name == "anthropic"));
-        assert!(targets.iter().any(|target| target.name == "openai"));
-    }
-
-    #[test]
-    fn daemon_without_recorded_executable_requires_restart() {
-        let mut state = test_daemon_state(
-            dam_net::CaptureMode::ExplicitProxy,
-            dam_trust::TrustMode::Disabled,
-            true,
-        );
-        state.executable_path = None;
-
-        assert!(!daemon_executable_matches_current(&state).unwrap());
-    }
-
-    #[test]
-    fn connect_apply_with_explicit_provider_requires_profile_or_enabled_profiles() {
-        let error = parse_cli([
-            "connect".to_string(),
-            "--apply".to_string(),
-            "--provider".to_string(),
-            "openai-compatible".to_string(),
-        ])
-        .unwrap_err();
-
-        assert!(error.contains("enabled profiles"));
-    }
-
-    #[test]
-    fn connect_apply_profile_targets_override_low_level_provider_flag() {
-        let cli = parse_cli([
-            "connect".to_string(),
-            "--profile".to_string(),
-            "claude-code".to_string(),
-            "--apply".to_string(),
-            "--provider".to_string(),
-            "openai-compatible".to_string(),
-        ])
-        .unwrap();
-
-        let CommandKind::Connect(args) = cli.command else {
-            panic!("expected connect");
-        };
-        let targets = args.proxy.targets.as_ref().unwrap();
-        assert_eq!(targets[0].provider, "anthropic");
-        assert_eq!(targets[0].upstream, ANTHROPIC_UPSTREAM);
-    }
-
-    #[test]
-    fn connect_apply_rejects_dynamic_port() {
-        let options = dam_daemon::ProxyOptions {
-            listen: "127.0.0.1:0".to_string(),
-            ..dam_daemon::ProxyOptions::default()
-        };
-
-        let error = proxy_url_for_connect_apply(&options).unwrap_err();
-
-        assert!(error.contains("fixed --listen port"));
-    }
-
-    #[test]
-    fn connect_preflight_allows_default_explicit_proxy_setup() {
-        let dir = tempfile::tempdir().unwrap();
-        let options = dam_daemon::ProxyOptions::default();
-        let config = dam_daemon::proxy_config(&options).unwrap();
-
-        ensure_connect_transparent_prerequisites(&options, &config, Some(dir.path().join("state")))
-            .unwrap();
-    }
-
-    #[test]
-    fn connect_preflight_blocks_missing_system_proxy_setup() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("dam.toml");
-        std::fs::write(&config_path, "").unwrap();
-        let options = dam_daemon::ProxyOptions {
-            network_mode: dam_net::CaptureMode::SystemProxy,
-            config_path: Some(config_path),
-            ..dam_daemon::ProxyOptions::default()
-        };
-        let config = dam_daemon::proxy_config(&options).unwrap();
-
-        let error = ensure_connect_transparent_prerequisites(
-            &options,
-            &config,
-            Some(dir.path().join("state")),
-        )
-        .unwrap_err();
-
-        assert!(error.contains("system proxy routing needs to be installed"));
-        assert!(error.contains("dam network install-system-proxy"));
-        assert!(error.contains("--config"));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn connect_preflight_blocks_missing_network_extension_setup() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("dam.toml");
-        std::fs::write(&config_path, "").unwrap();
-        let options = dam_daemon::ProxyOptions {
-            network_mode: dam_net::CaptureMode::Tun,
-            config_path: Some(config_path),
-            ..dam_daemon::ProxyOptions::default()
-        };
-        let config = dam_daemon::proxy_config(&options).unwrap();
-
-        let error = ensure_connect_transparent_prerequisites(
-            &options,
-            &config,
-            Some(dir.path().join("state")),
-        )
-        .unwrap_err();
-
-        assert!(error.contains("Network Extension capture needs to be installed"));
-        assert!(error.contains("dam network install-network-extension"));
-        assert!(error.contains("--config"));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn connect_preflight_blocks_missing_network_extension_for_empty_app_scope() {
-        let dir = tempfile::tempdir().unwrap();
-        let state_dir = dir.path().join("state");
-        dam_integrations::set_integration_enabled(
-            "claude-code",
-            false,
-            &state_dir.join("integrations"),
-        )
-        .unwrap();
-        dam_integrations::set_integration_enabled("codex", false, &state_dir.join("integrations"))
-            .unwrap();
-        let options = dam_daemon::ProxyOptions {
-            network_mode: dam_net::CaptureMode::Tun,
-            trust_mode: dam_trust::TrustMode::LocalCa,
-            ..dam_daemon::ProxyOptions::default()
-        };
-        let config = dam_daemon::proxy_config(&options).unwrap();
-
-        let error = ensure_connect_transparent_prerequisites(&options, &config, Some(state_dir))
-            .unwrap_err();
-
-        assert!(error.contains("Network Extension capture needs to be installed"));
-        assert!(error.contains("dam network install-network-extension"));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn connect_preflight_blocks_missing_network_extension_configuration() {
-        let dir = tempfile::tempdir().unwrap();
-        let state_dir = dir.path().join("state");
-        dam_net_macos::record_system_extension_ready(
-            &state_dir,
-            "com.rpblc.dam.network-extension",
-            None,
-            vec!["api.openai.com".to_string()],
-        )
-        .unwrap();
-        let options = dam_daemon::ProxyOptions {
-            network_mode: dam_net::CaptureMode::Tun,
-            ..dam_daemon::ProxyOptions::default()
-        };
-        let config = dam_daemon::proxy_config(&options).unwrap();
-
-        let error = ensure_connect_transparent_prerequisites(&options, &config, Some(state_dir))
-            .unwrap_err();
-
-        assert!(error.contains("configuration"));
-        assert!(error.contains("dam network install-network-extension"));
-    }
-
-    #[test]
-    fn connect_preflight_blocks_missing_local_ca_setup() {
-        let dir = tempfile::tempdir().unwrap();
-        let options = dam_daemon::ProxyOptions {
-            trust_mode: dam_trust::TrustMode::LocalCa,
-            ..dam_daemon::ProxyOptions::default()
-        };
-        let config = dam_daemon::proxy_config(&options).unwrap();
-
-        let error = ensure_connect_transparent_prerequisites(
-            &options,
-            &config,
-            Some(dir.path().join("state")),
-        )
-        .unwrap_err();
-
-        assert!(error.contains("local CA"));
-        if dam_trust::PlatformTrustStore::current() == dam_trust::PlatformTrustStore::MacosKeychain
-        {
-            assert!(error.contains("dam trust install-local-ca"));
-        } else {
-            assert!(error.contains("not implemented"));
-        }
-    }
-
-    #[test]
-    fn parses_integrations_list_json() {
-        let cli = parse_cli([
-            "integrations".to_string(),
-            "list".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            cli.command,
-            CommandKind::Integrations(IntegrationArgs::List {
-                json: true,
-                proxy_url: None,
-            })
-        );
-    }
-
-    #[test]
-    fn parses_integrations_show_with_proxy_url() {
-        let cli = parse_cli([
-            "integrations".to_string(),
-            "show".to_string(),
-            "codex".to_string(),
-            "--proxy-url".to_string(),
-            "http://127.0.0.1:9000".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            cli.command,
-            CommandKind::Integrations(IntegrationArgs::Show {
-                profile_id: "codex".to_string(),
-                json: false,
-                proxy_url: Some("http://127.0.0.1:9000".to_string()),
-            })
-        );
-    }
-
-    #[test]
-    fn parses_integrations_apply_with_dry_run_and_target_path() {
-        let cli = parse_cli([
-            "integrations".to_string(),
-            "apply".to_string(),
-            "codex".to_string(),
-            "--dry-run".to_string(),
-            "--target-path".to_string(),
-            "/tmp/codex.toml".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            cli.command,
-            CommandKind::Integrations(IntegrationArgs::Apply {
-                profile_id: "codex".to_string(),
-                dry_run: true,
-                json: false,
-                proxy_url: None,
-                target_path: Some(PathBuf::from("/tmp/codex.toml")),
-            })
-        );
-    }
-
-    #[test]
-    fn integrations_apply_defaults_to_dry_run_and_requires_write_for_mutation() {
-        let preview = parse_cli([
-            "integrations".to_string(),
-            "apply".to_string(),
-            "codex".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            preview.command,
-            CommandKind::Integrations(IntegrationArgs::Apply {
-                profile_id: "codex".to_string(),
-                dry_run: true,
-                json: false,
-                proxy_url: None,
-                target_path: None,
-            })
-        );
-
-        let write = parse_cli([
-            "integrations".to_string(),
-            "apply".to_string(),
-            "codex".to_string(),
-            "--write".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            write.command,
-            CommandKind::Integrations(IntegrationArgs::Apply {
-                profile_id: "codex".to_string(),
-                dry_run: false,
-                json: false,
-                proxy_url: None,
-                target_path: None,
-            })
-        );
-    }
-
-    #[test]
-    fn integrations_apply_rejects_dry_run_with_write() {
-        let error = parse_cli([
-            "integrations".to_string(),
-            "apply".to_string(),
-            "codex".to_string(),
-            "--dry-run".to_string(),
-            "--write".to_string(),
-        ])
-        .unwrap_err();
-
-        assert!(error.contains("cannot combine"));
-    }
-
-    #[test]
-    fn parses_integrations_rollback_json() {
-        let cli = parse_cli([
-            "integrations".to_string(),
-            "rollback".to_string(),
-            "codex".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            cli.command,
-            CommandKind::Integrations(IntegrationArgs::Rollback {
-                profile_id: "codex".to_string(),
-                json: true,
-            })
-        );
-    }
-
-    #[test]
-    fn integration_profile_render_quotes_spaced_command_args() {
-        let profile = dam_integrations::profile("codex", "http://127.0.0.1:7828").unwrap();
-        let rendered = render_integration_profile(&profile, "http://127.0.0.1:7828");
-
-        assert!(rendered.contains("HTTPS_PROXY=http://127.0.0.1:7828"));
-        assert!(rendered.contains("HTTP_PROXY=http://127.0.0.1:7828"));
-        assert!(!rendered.contains("dam_openai"));
-    }
-
-    #[test]
-    fn parses_status_json() {
-        let cli = parse_cli(["status".to_string(), "--json".to_string()]).unwrap();
-
-        assert_eq!(cli.command, CommandKind::Status(StatusArgs { json: true }));
-    }
-
-    #[test]
-    fn parses_logs_filters() {
-        let cli = parse_cli([
-            "logs".to_string(),
-            "--limit".to_string(),
-            "5".to_string(),
-            "--after-id".to_string(),
-            "42".to_string(),
-            "--operation".to_string(),
-            "abc123".to_string(),
-            "--events".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            cli.command,
-            CommandKind::Logs(LogsArgs {
-                json: true,
-                limit: 5,
-                after_id: Some(42),
-                operation_id: Some("abc123".to_string()),
-                events: true,
-            })
-        );
-    }
-
-    #[test]
-    fn log_summary_collapses_proxy_diagnostics() {
-        let entries = vec![
-            dam_log::LogEntry {
-                id: 3,
-                timestamp: 3,
-                operation_id: "op".to_string(),
-                level: "info".to_string(),
-                event_type: "proxy_forward".to_string(),
-                kind: None,
-                reference: None,
-                action: Some("provider_response".to_string()),
-                message: "provider response status=200 content_type=text/event-stream content_encoding=none streaming=true".to_string(),
-            },
-            dam_log::LogEntry {
-                id: 2,
-                timestamp: 2,
-                operation_id: "op".to_string(),
-                level: "info".to_string(),
-                event_type: "proxy_forward".to_string(),
-                kind: None,
-                reference: None,
-                action: Some("request_protection".to_string()),
-                message: "request protection detections=1 replacements=1 tokenized=1 blocked=0".to_string(),
-            },
-            dam_log::LogEntry {
-                id: 1,
-                timestamp: 1,
-                operation_id: "op".to_string(),
-                level: "info".to_string(),
-                event_type: "proxy_forward".to_string(),
-                kind: None,
-                reference: None,
-                action: Some("route_decision".to_string()),
-                message: "route target=anthropic provider=anthropic protection_enabled=true resolve_inbound=true request_bytes=100".to_string(),
-            },
-        ];
-
-        let summaries = log_operation_summaries(entries, 10);
-
-        assert_eq!(summaries.len(), 1);
-        assert_eq!(summaries[0].events, 3);
-        assert!(summaries[0].summary.contains("route target=anthropic"));
-        assert!(
-            summaries[0]
-                .summary
-                .contains("request protection detections=1")
-        );
-        assert!(
-            summaries[0]
-                .summary
-                .contains("provider response status=200")
-        );
-    }
-
-    #[test]
-    fn parses_profile_status_json() {
-        let cli = parse_cli([
-            "profile".to_string(),
-            "status".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            cli.command,
-            CommandKind::Profile(ProfileArgs::Status { json: true })
-        );
-    }
-
-    #[test]
-    fn parses_profile_set_json() {
-        let cli = parse_cli([
-            "profile".to_string(),
-            "set".to_string(),
-            "claude-code".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            cli.command,
-            CommandKind::Profile(ProfileArgs::Set {
-                profile_id: "claude-code".to_string(),
-                json: true,
-            })
-        );
-    }
-
-    #[test]
-    fn parses_profile_clear_json() {
-        let cli = parse_cli([
-            "profile".to_string(),
-            "clear".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            cli.command,
-            CommandKind::Profile(ProfileArgs::Clear { json: true })
-        );
-    }
-
-    #[test]
-    fn parses_trust_generate_local_ca_json() {
-        let cli = parse_cli([
-            "trust".to_string(),
-            "generate-local-ca".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            cli.command,
-            CommandKind::Trust(TrustArgs::GenerateArtifact { json: true })
-        );
-    }
-
-    #[test]
-    fn parses_trust_delete_local_ca_json() {
-        let cli = parse_cli([
-            "trust".to_string(),
-            "delete-local-ca".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            cli.command,
-            CommandKind::Trust(TrustArgs::DeleteArtifact { json: true })
-        );
-    }
-
-    #[test]
-    fn parses_trust_install_and_remove_local_ca_approval() {
-        let install = parse_cli([
-            "trust".to_string(),
-            "install-local-ca".to_string(),
-            "--yes".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-        let remove = parse_cli([
-            "trust".to_string(),
-            "remove-local-ca".to_string(),
-            "--yes".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            install.command,
-            CommandKind::Trust(TrustArgs::InstallTrust {
-                json: true,
-                yes: true
-            })
-        );
-        assert_eq!(
-            remove.command,
-            CommandKind::Trust(TrustArgs::RemoveTrust {
-                json: true,
-                yes: true
-            })
-        );
-    }
-
-    #[test]
-    fn parses_network_install_and_remove_system_proxy_approval() {
-        let install = parse_cli([
-            "network".to_string(),
-            "install-system-proxy".to_string(),
-            "--yes".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-        let remove = parse_cli([
-            "network".to_string(),
-            "remove-system-proxy".to_string(),
-            "--yes".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            install.command,
-            CommandKind::Network(NetworkArgs::InstallProxy {
-                config_path: None,
-                json: true,
-                yes: true
-            })
-        );
-        assert_eq!(
-            remove.command,
-            CommandKind::Network(NetworkArgs::RemoveProxy {
-                json: true,
-                yes: true
-            })
-        );
-    }
-
-    #[test]
-    fn parses_network_install_config_path() {
-        let cli = parse_cli([
-            "network".to_string(),
-            "install-system-proxy".to_string(),
-            "--config".to_string(),
-            "dam.enterprise.toml".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            cli.command,
-            CommandKind::Network(NetworkArgs::InstallProxy {
-                config_path: Some(PathBuf::from("dam.enterprise.toml")),
-                json: true,
-                yes: false
-            })
-        );
-    }
-
-    #[test]
-    fn parses_network_extension_commands() {
-        let install = parse_cli([
-            "network".to_string(),
-            "install-network-extension".to_string(),
-            "--config".to_string(),
-            "dam.enterprise.toml".to_string(),
-            "--yes".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-        let remove = parse_cli([
-            "network".to_string(),
-            "remove-network-extension".to_string(),
-            "--yes".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-        let status = parse_cli([
-            "network".to_string(),
-            "status".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            install.command,
-            CommandKind::Network(NetworkArgs::InstallNetworkExtension {
-                config_path: Some(PathBuf::from("dam.enterprise.toml")),
-                json: true,
-                yes: true
-            })
-        );
-        assert_eq!(
-            remove.command,
-            CommandKind::Network(NetworkArgs::RemoveNetworkExtension {
-                json: true,
-                yes: true
-            })
-        );
-        assert_eq!(
-            status.command,
-            CommandKind::Network(NetworkArgs::Status { json: true })
-        );
-    }
-
-    #[test]
-    fn parses_startup_commands() {
-        let status = parse_cli([
-            "startup".to_string(),
-            "status".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-        let skip = parse_cli([
-            "startup".to_string(),
-            "skip-open-at-login".to_string(),
-            "--json".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(
-            status.command,
-            CommandKind::Startup(StartupArgs::Status { json: true })
-        );
-        assert_eq!(
-            skip.command,
-            CommandKind::Startup(StartupArgs::SkipOpenAtLogin { json: true })
-        );
-    }
-
-    #[test]
-    fn startup_skip_open_at_login_records_marker() {
-        let dir = tempfile::tempdir().unwrap();
-        let marker = write_startup_skip_marker(dir.path()).unwrap();
-
-        assert!(marker.exists());
-        let view = startup_status_view(dir.path());
-        assert_eq!(view.state, "skipped");
-        assert_eq!(view.marker, Some(marker));
-    }
-
-    #[test]
-    fn local_ca_generate_and_delete_outputs_do_not_install_local_trust() {
-        let dir = tempfile::tempdir().unwrap();
-
-        let generated = generate_local_ca_output(dir.path(), false).unwrap();
-        assert!(generated.contains("state: generated"));
-        assert!(generated.contains("local_trust: unchanged"));
-        assert!(generated.contains("fingerprint_sha256: "));
-
-        let deleted = delete_local_ca_output(dir.path(), false).unwrap();
-        assert!(deleted.contains("state: deleted"));
-        assert!(deleted.contains("local_trust: unchanged"));
-
-        let missing = delete_local_ca_output(dir.path(), true).unwrap();
-        let report: serde_json::Value = serde_json::from_str(&missing).unwrap();
-        assert_eq!(report["state"], "missing");
-        assert_eq!(report["deleted"], false);
-    }
-
-    #[test]
-    fn local_ca_install_and_remove_preview_require_approval() {
-        let dir = tempfile::tempdir().unwrap();
-
-        let install = install_local_ca_output(dir.path(), false, false).unwrap();
-        assert!(install.contains("state: preview"));
-        assert!(install.contains("will_generate_artifact: true"));
-        assert!(install.contains("local_trust: unchanged"));
-        assert!(install.contains("approval: rerun with --yes"));
-
-        let generated = generate_local_ca_output(dir.path(), false).unwrap();
-        assert!(generated.contains("state: generated"));
-
-        let remove = remove_local_ca_output(dir.path(), true, false).unwrap();
-        let report: serde_json::Value = serde_json::from_str(&remove).unwrap();
-        assert_eq!(report["state"], "preview");
-        assert_eq!(report["system_trust_changed"], false);
-        assert_eq!(report["plan"]["can_execute"], false);
-    }
-
-    #[test]
-    fn parses_daemon_run_as_internal_proxy_options() {
-        let cli = parse_cli([
-            "daemon-run".to_string(),
-            "--target-name".to_string(),
-            "custom-openai".to_string(),
-            "--provider".to_string(),
-            "openai-compatible".to_string(),
-            "--upstream".to_string(),
-            "https://api.custom.example".to_string(),
-        ])
-        .unwrap();
-
-        let CommandKind::DaemonRun(args) = cli.command else {
-            panic!("expected daemon run");
-        };
-        assert_eq!(args.target_name, "custom-openai");
-        assert_eq!(args.upstream, "https://api.custom.example");
-    }
-
-    fn test_daemon_state(
-        network_mode: dam_net::CaptureMode,
-        trust_mode: dam_trust::TrustMode,
-        protection_enabled: bool,
-    ) -> dam_daemon::DaemonState {
-        dam_daemon::DaemonState {
-            version: 4,
-            pid: 1,
-            executable_path: Some(PathBuf::from("/usr/local/bin/dam")),
-            executable_sha256: Some("abc123".to_string()),
-            listen: "127.0.0.1:7828".to_string(),
-            proxy_url: "http://127.0.0.1:7828".to_string(),
-            config_path: None,
-            vault_path: PathBuf::from("vault.db"),
-            log_path: Some(PathBuf::from("log.db")),
-            consent_path: Some(PathBuf::from("consent.db")),
-            resolve_inbound: true,
-            target_name: Some("openai".to_string()),
-            target_provider: Some("openai-compatible".to_string()),
-            upstream: Some(OPENAI_API_UPSTREAM.to_string()),
-            proxy_targets: Vec::new(),
-            started_at_unix: 0,
-            network_mode,
-            transparent_routes: Vec::new(),
-            transparent_routing_readiness: Vec::new(),
-            trust: dam_trust::TrustState {
-                mode: trust_mode,
-                ..dam_trust::TrustState::default()
-            },
-            transparent_trust_readiness: Vec::new(),
-            transparent_interception_readiness: Vec::new(),
-            protection_enabled,
-            protection_started_at_unix: if protection_enabled { Some(0) } else { None },
-        }
-    }
-}
+#[path = "main_tests.rs"]
+mod tests;

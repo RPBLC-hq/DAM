@@ -34,8 +34,22 @@ Do not grow single-file libraries for non-trivial modules. When a crate adds mea
 - Keep `src/lib.rs` as the public contract/re-export surface, not as the implementation dumping ground.
 - Keep `src/main.rs` as command wiring and process startup, not business logic.
 - Prefer small module files with narrow ownership over broad "manager" files.
+- Keep structs, enums, traits, and impl blocks focused on one purpose. If a type starts coordinating unrelated concerns, split the concern behind a smaller module or helper type.
+- Avoid catch-all helpers, generic "util" modules, and mixed-purpose files. Name modules by the domain responsibility they own.
+- Keep reusable behavior in the crate that owns the contract, not copied into command, web, tray, or platform glue.
 - Update the matching docs when module boundaries change so future agents can find the implementation quickly.
-- A large file should be broken down in more manageable sized files.
+- Break large files into manageable pieces before they become difficult to review or reuse.
+
+## Test Organization
+
+Keep tests outside production module bodies.
+
+- Unit tests that need private access should live in sibling `*_tests.rs` files and be included from the production file with `#[cfg(test)]` plus `#[path = "..."] mod tests;`.
+- Integration and CLI tests should live under each crate's `tests/` directory.
+- Do not add new inline `mod tests { ... }` blocks to production files.
+- Before removing or materially changing a test, stop and identify what else it may protect: edge cases, migration behavior, privacy guarantees, security boundaries, failure modes, platform behavior, or a secondary contract not obvious from the test name.
+- Prefer preserving test intent when refactoring. If a test is obsolete, update or replace it with coverage for the current contract instead of deleting it casually.
+- When test fixtures contain sensitive-looking values, keep them synthetic and verify logs, errors, and reports do not persist raw sensitive values unless the test is explicitly about vault storage.
 
 ## Architecture Sync
 

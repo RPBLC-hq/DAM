@@ -69,7 +69,7 @@ pub struct SetupStep {
     pub reason_code: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[allow(dead_code)]
 pub enum SetupStepState {
@@ -317,30 +317,37 @@ fn map_setup_plan(plan: &dam_diagnostics::SetupPlan) -> SetupPlan {
         .map(map_setup_step)
         .collect();
 
-    // The diagnostics plan returns steps in execution order. The first
-    // outstanding step (Todo, Blocked, or Failed) is the one the user
-    // can advance — promote its state to `Current` so the SPA's
-    // SetupChecklist highlights it and the "Continue setup" CTA below
-    // the list knows which action_id to dispatch.
-    if let Some(idx) = steps.iter().position(|step| {
-        matches!(
-            step.state,
-            SetupStepState::Todo | SetupStepState::Blocked | SetupStepState::Failed
-        )
-    }) && matches!(steps[idx].state, SetupStepState::Todo)
+    // The diagnostics next_action is the source of truth. In blocked
+    // plans it intentionally points at the blocker before later
+    // needed steps, so the SPA must not re-derive "current" from list
+    // order.
+    let next_action_id = plan.next_action.as_ref().map(setup_step_id);
+    if let Some(idx) = next_action_id
+        .and_then(|id| steps.iter().position(|step| step.id == id))
+        .or_else(|| {
+            steps.iter().position(|step| {
+                matches!(
+                    step.state,
+                    SetupStepState::Todo | SetupStepState::Blocked | SetupStepState::Failed
+                )
+            })
+        })
+        && matches!(steps[idx].state, SetupStepState::Todo)
     {
         steps[idx].state = SetupStepState::Current;
     }
 
-    let current_step_id = steps
-        .iter()
-        .find(|step| {
-            matches!(
-                step.state,
-                SetupStepState::Current | SetupStepState::Blocked | SetupStepState::Failed
-            )
-        })
-        .map(|step| step.id.clone());
+    let current_step_id = next_action_id.map(str::to_string).or_else(|| {
+        steps
+            .iter()
+            .find(|step| {
+                matches!(
+                    step.state,
+                    SetupStepState::Current | SetupStepState::Blocked | SetupStepState::Failed
+                )
+            })
+            .map(|step| step.id.clone())
+    });
 
     SetupPlan {
         steps,
@@ -348,8 +355,8 @@ fn map_setup_plan(plan: &dam_diagnostics::SetupPlan) -> SetupPlan {
     }
 }
 
-fn map_setup_step(step: &dam_diagnostics::SetupStep) -> SetupStep {
-    let id = match step.kind {
+fn setup_step_id(step: &dam_diagnostics::SetupStep) -> &'static str {
+    match step.kind {
         dam_diagnostics::SetupStepKind::LaunchAtLogin => "launch_at_login",
         dam_diagnostics::SetupStepKind::NetworkExtension
             if step.message.starts_with("Enable DAM Network Protection") =>
@@ -372,7 +379,10 @@ fn map_setup_step(step: &dam_diagnostics::SetupStep) -> SetupStep {
         dam_diagnostics::SetupStepKind::Daemon => "daemon_start",
         dam_diagnostics::SetupStepKind::SystemProxy => "system_proxy",
     }
-    .to_string();
+}
+
+fn map_setup_step(step: &dam_diagnostics::SetupStep) -> SetupStep {
+    let id = setup_step_id(step).to_string();
 
     let label = step.message.clone();
     let (state, reason_code) = match step.status {
@@ -394,109 +404,5 @@ fn map_setup_step(step: &dam_diagnostics::SetupStep) -> SetupStep {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn active_grants_count_uses_current_unrevoked_consents() {
-        let store = dam_consent::ConsentStore::open_in_memory().unwrap();
-        let active = store
-            .grant(&dam_consent::GrantConsent {
-                kind: dam_core::SensitiveType::Email,
-                value: "ada@example.test".to_string(),
-                vault_key: None,
-                ttl_seconds: 60,
-                created_by: "test".to_string(),
-                reason: None,
-            })
-            .unwrap();
-        let revoked = store
-            .grant(&dam_consent::GrantConsent {
-                kind: dam_core::SensitiveType::Phone,
-                value: "+1 415 555 0142".to_string(),
-                vault_key: None,
-                ttl_seconds: 60,
-                created_by: "test".to_string(),
-                reason: None,
-            })
-            .unwrap();
-
-        assert!(store.revoke(&revoked.id).unwrap());
-
-        assert_eq!(active_grants_count(Some(&store)), 1);
-        assert!(
-            store
-                .active_for_value(active.kind, "ada@example.test")
-                .unwrap()
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn redacted_today_count_uses_current_utc_day_redaction_rows() {
-        let today = 2 * 86_400 + 60;
-        let yesterday = today - 86_400;
-        let entries = vec![
-            log_entry(
-                1,
-                today,
-                "redaction",
-                Some("tokenized"),
-                "email",
-                "replacement applied",
-            ),
-            log_entry(
-                2,
-                today,
-                "policy_decision",
-                Some("tokenize"),
-                "email",
-                "policy decision is not the replacement row",
-            ),
-            log_entry(3, yesterday, "redaction", Some("tokenized"), "email", "old"),
-            log_entry(
-                4,
-                today,
-                "proxy_failure",
-                Some("provider_down"),
-                "provider",
-                "provider down is not a redaction",
-            ),
-        ];
-
-        assert_eq!(redacted_today_count(&entries, today), 1);
-    }
-
-    #[test]
-    fn apps_mediated_count_reads_enabled_integrations() {
-        let dir = tempfile::tempdir().unwrap();
-        let integration_state_dir = dir.path().join("integrations");
-
-        dam_integrations::set_integration_enabled("claude-code", true, &integration_state_dir)
-            .unwrap();
-        dam_integrations::set_integration_enabled("codex", true, &integration_state_dir).unwrap();
-
-        assert_eq!(apps_mediated_count_from(&integration_state_dir).unwrap(), 2);
-    }
-
-    fn log_entry(
-        id: i64,
-        timestamp: i64,
-        event_type: &str,
-        action: Option<&str>,
-        kind: &str,
-        message: &str,
-    ) -> dam_log::LogEntry {
-        dam_log::LogEntry {
-            id,
-            timestamp,
-            operation_id: format!("op-{id}"),
-            level: "info".to_string(),
-            event_type: event_type.to_string(),
-            kind: Some(kind.to_string()),
-            reference: None,
-            action: action.map(ToOwned::to_owned),
-            message: message.to_string(),
-        }
-    }
-}
+#[path = "connect_tests.rs"]
+mod tests;
