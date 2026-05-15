@@ -16,7 +16,7 @@ DAM is designed for macOS, Linux, and Windows. Platform-specific routing, trust,
 - [dam-config](dam-config.md): layered runtime config for defaults, TOML, env, and CLI overrides.
 - [dam-consent](dam-consent.md): canonical-value passthrough grants with TTL and revocation.
 - [dam-daemon](dam-daemon.md): background local proxy lifecycle, pause/resume protection state, state file, and `dam connect/status/disconnect` support.
-- [dam-diagnostics](dam-diagnostics.md): shared local readiness checks for `damctl doctor` and `dam-web /doctor`.
+- [dam-diagnostics](dam-diagnostics.md): shared local readiness checks and setup-plan/next-action contract for CLI, web/API, and MCP.
 - [dam-intercept](dam-intercept.md): guarded TLS interception activation contract for transparent routes.
 - [dam-integrations](dam-integrations.md): JSON local harness profiles, enabled app state, and legacy active profile state for `dam integrations`, `dam profile`, and `dam connect --profile`.
 - [damctl](damctl.md): local status and config diagnostics CLI.
@@ -38,7 +38,7 @@ DAM is designed for macOS, Linux, and Windows. Platform-specific routing, trust,
 - [dam-proxy](dam-proxy.md): generic mediation runtime with MVP LLM HTTP/WebSocket adapters plus daemon-gated HTTP/1.1 CONNECT/TLS for ready profile routes.
 - [dam-web](dam-web.md): local web UI for setup-plan-driven Connect/app controls, Settings, protected values, Allowed values, log events, and diagnostics.
 - [dam-tray](dam-tray.md): native desktop shell that hosts the Connect surface from the local web UI.
-- [dam-mcp](dam-mcp.md): MCP tools for agent-managed consent operations.
+- [dam-mcp](dam-mcp.md): MCP tools for agent status/setup inspection and consent operations.
 
 ## Current Pipeline
 
@@ -127,6 +127,14 @@ dam logs
   -> local dam-log SQLite store
   -> concise non-sensitive operation summaries or event timelines
 
+dam doctor / dam setup status / dam setup plan / dam setup next-action / dam setup resume / dam setup rescue
+  -> dam-diagnostics
+  -> machine-readable install/resume/recovery contract
+
+/api/v1/setup/rescue / dam_setup_rescue
+  -> dam-diagnostics setup_rescue
+  -> confirmed local recovery for API/MCP agents
+
 dam profile
   -> enabled JSON app profile state and legacy active harness profile state
 
@@ -192,6 +200,14 @@ dam-web /health
   -> dam-diagnostics
   -> dam-proxy /health when enabled
   -> dam-api HealthReport + ProxyReport
+
+dam-web /api/v1/setup/plan and /api/v1/setup/next-action
+  -> dam-diagnostics setup plan
+  -> agent-readable setup state without UI copy dependencies
+
+dam-mcp
+  -> read-only status/setup tools
+  -> gated consent tools
 ```
 
 ## Config Precedence

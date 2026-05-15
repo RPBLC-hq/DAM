@@ -235,6 +235,6 @@ cargo test -p dam-proxy
 - Local CA management and OS route installation.
 - VPN/TUN/network-extension routing.
 - binary/non-UTF-8 upload endpoints until a profile adapter defines safe parsing behavior.
-- inbound, fragmented, or compressed WebSocket payload protection beyond the Codex MVP client text-frame adapter.
+- fragmented, binary, or compressed WebSocket payload transformation beyond the Codex MVP unfragmented text-frame adapter.
 - Additional generic adapters for arbitrary web traffic beyond HTTP/WebSocket provider traffic.
 - exact token-by-token provider-aware streaming/SSE response transforms and raw inbound redetection across split response chunks/events.

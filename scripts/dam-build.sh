@@ -15,6 +15,7 @@ Usage: scripts/dam-build.sh <command> [options]
 Commands:
   check          Run the standard local/CI verification suite
   dev           Build source-tree debug binaries used by local DAM runs
+  npm-native    Build and stage current-platform binaries under npm/native
   macos-app     Build signed DAM.app through native/macos packaging
   notarize      Notarize and staple an existing DAM.app
   release-macos Run checks, build signed DAM.app, notarize, staple, and zip it
@@ -68,6 +69,8 @@ cmd_check() {
     run npm ci --prefix "$ROOT/crates/dam-web/ui"
     run npm run build --prefix "$ROOT/crates/dam-web/ui"
   fi
+  run npm test --prefix "$ROOT"
+  run npm pack --dry-run --ignore-scripts "$ROOT"
   run cargo fmt --all --check
   run cargo clippy --workspace -- -D warnings
   run cargo test --workspace
@@ -78,6 +81,28 @@ cmd_check() {
 
 cmd_dev() {
   run cargo build -p dam -p damctl -p dam-web -p dam-tray
+}
+
+cmd_npm_native() {
+  run cargo build --release -p dam -p damctl -p dam-web -p dam-proxy -p dam-mcp -p dam-tray
+  local platform_dir exe_suffix native_out bin source
+  platform_dir="$(node -p "process.platform + '-' + process.arch")"
+  exe_suffix=""
+  if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* || "$(uname -s)" == CYGWIN* ]]; then
+    exe_suffix=".exe"
+  fi
+  native_out="$ROOT/npm/native/$platform_dir"
+  mkdir -p "$native_out"
+  for bin in dam damctl dam-web dam-proxy dam-mcp dam-tray; do
+    source="$ROOT/target/release/$bin$exe_suffix"
+    if [[ ! -f "$source" ]]; then
+      echo "missing release binary: $source" >&2
+      exit 1
+    fi
+    run cp "$source" "$native_out/$bin$exe_suffix"
+    chmod 755 "$native_out/$bin$exe_suffix"
+  done
+  printf 'Staged npm native binaries: %s\n' "$native_out"
 }
 
 cmd_macos_app() {
@@ -197,6 +222,7 @@ mkdir -p "$OUT_DIR" "$MACOS_OUT"
 case "$COMMAND" in
   check) cmd_check ;;
   dev) cmd_dev ;;
+  npm-native) cmd_npm_native ;;
   macos-app) cmd_macos_app ;;
   notarize) cmd_notarize ;;
   release-macos) cmd_release_macos ;;

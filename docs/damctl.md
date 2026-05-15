@@ -220,6 +220,7 @@ It reports:
 - effective proxy URL;
 - requested network mode and trust mode;
 - active integration profile when one is selected;
+- `next_action`, the first blocked setup step when setup cannot continue or otherwise the first needed setup step;
 - setup steps for app selection, system proxy or Network Extension routing, local CA trust, and daemon lifecycle.
 
 Each step reports:
@@ -230,6 +231,8 @@ Each step reports:
 - `skipped`: the step is not required for the selected mode.
 
 Use `--network-mode explicit_proxy|system_proxy|tun` and `--trust-mode disabled|local_ca` to preview a richer local setup path. `system_proxy`, `tun`, and `local_ca` steps are marked as system-changing when they require installation. `tun` reports the macOS Network Extension install step and still requires the signed helper/app bundle before it can become active.
+
+The same shared plan is exposed through `dam setup status --json` and `dam setup plan --json`. `dam setup next-action --json` and `dam setup resume --json` return only the next-action projection for autonomous installers.
 
 Exit codes:
 

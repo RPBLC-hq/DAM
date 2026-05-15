@@ -7,15 +7,18 @@
 ```bash
 scripts/dam-build.sh check
 scripts/dam-build.sh dev
+scripts/dam-build.sh npm-native
 scripts/dam-build.sh macos-app --mode developer-id
 scripts/dam-build.sh notarize --app target/dam-build/macos/DAM.app --notary-profile DAM-notary
 scripts/dam-build.sh release-macos --mode developer-id
 scripts/dam-build.sh deploy-local --mode development
 ```
 
-`check` runs the repository verification suite: React/Vite UI dependency install and build for the embedded `dam-web` asset, Rust formatting, workspace clippy, workspace tests, and macOS Swift package tests when running on macOS.
+`check` runs the repository verification suite: React/Vite UI dependency install and build for the embedded `dam-web` asset, npm package shim smoke tests, npm pack dry-run, Rust formatting, workspace clippy, workspace tests, and macOS Swift package tests when running on macOS.
 
 `dev` builds the source-tree binaries used by local daemon/tray runs: `dam`, `damctl`, `dam-web`, and `dam-tray`.
+
+`npm-native` builds current-platform release binaries for `dam`, `damctl`, `dam-web`, `dam-proxy`, `dam-mcp`, and `dam-tray`, then stages them under `npm/native/<platform>-<arch>/` for package smoke testing and release assembly.
 
 `macos-app` delegates signed app assembly to `native/macos/scripts/package-dam-app.sh`, keeping entitlement and provisioning validation in the native macOS packaging script.
 

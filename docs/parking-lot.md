@@ -33,6 +33,18 @@ Parked work:
 - Add a deterministic macOS helper/status fixture so tests can simulate deleted, disabled, enabled-disconnected, and connected Network Extension manager states without changing the developer machine.
 - Verify the tray-width layout and CTA transitions in Playwright screenshots before treating onboarding UX as seamless.
 
+## Codebase Structure And Test Division Cleanup
+
+Current state: many Rust unit tests have been moved out of production module bodies into sibling `*_tests.rs` files, but the codebase still needs a deliberate readability pass over crate/module boundaries, large files, and type responsibilities. The goal is not churn; it is to make each crate easier to review, test, and reuse before more platform and protocol work lands.
+
+Parked work:
+
+- Review each crate for oversized `lib.rs`, `main.rs`, broad manager modules, and mixed-purpose files. Split meaningful behavior into focused files with clear ownership, keeping public contracts and command wiring thin.
+- Review large structs, enums, traits, and impl blocks for unrelated responsibilities. Split coordination, state, protocol handling, platform glue, and persistence into smaller types or modules where that improves readability and reuse.
+- Normalize test placement after the extraction pass: private-access unit tests stay in sibling test files, integration and CLI tests stay under each crate's `tests/` directory, and production files should not regain inline test modules.
+- Before removing or materially rewriting any test during cleanup, identify whether it protects edge cases, migration behavior, privacy guarantees, security boundaries, failure modes, platform behavior, or another secondary contract. Preserve the test intent when the current assertion is obsolete.
+- Update crate docs and architecture docs as module boundaries change so future agents can find the implementation without rediscovering the split from source alone.
+
 ## Integration Profile Catalog And Portability
 
 Current state: the visible bundled app profile catalog is intentionally narrow: `claude-code` and the merged `codex` profile are available, but only `claude-code` is enabled by default when no user app-selection state exists. The merged Codex profile covers both OpenAI API-key traffic and ChatGPT subscription/login traffic through separate traffic app IDs, and must be explicitly enabled for now. Generic OpenAI-compatible, generic Anthropic-compatible, xAI-compatible, and split Codex API/ChatGPT-login profiles are removed from the visible catalog for now. Existing local state that references retired profile IDs is normalized where possible so upgrades do not break the Settings or Connect views.

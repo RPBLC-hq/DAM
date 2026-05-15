@@ -89,8 +89,11 @@ Install globally for normal persistent local state when native package binaries 
 
 ```bash
 npm install -g @rpblc/dam
+dam package-doctor --json
+dam doctor --json
+dam setup next-action --json
 dam connect
-dam status
+dam status --json
 dam integrations list
 ```
 
@@ -216,7 +219,7 @@ The tray shell uses `$DAM_STATE_DIR` or `$HOME/.dam` for persistent local state 
 
 ## MCP
 
-DAM ships an MCP server so an agent can manage consent when enabled:
+DAM ships an MCP server so an agent can inspect DAM and manage consent when enabled:
 
 ```bash
 cargo run -p damctl -- mcp config
@@ -225,6 +228,9 @@ cargo run -p dam-mcp -- --config dam.example.toml
 
 Current tools:
 
+- `dam_status`
+- `dam_setup_plan`
+- `dam_setup_next_action`
 - `dam_consent_list`
 - `dam_consent_grant`
 - `dam_consent_revoke`
@@ -237,8 +243,14 @@ Background local endpoint:
 
 ```bash
 dam connect [DAM_OPTIONS]
-dam connect --profile <profile> [--apply] [DAM_OPTIONS]
-dam connect --apply [DAM_OPTIONS]
+dam connect --profile <profile> [--apply] [--json] [DAM_OPTIONS]
+dam connect --apply [--json] [DAM_OPTIONS]
+dam doctor [--config PATH] [--state-dir PATH] [--proxy-url URL] [--json]
+dam setup status [--network-mode MODE] [--trust-mode MODE] [--json]
+dam setup plan [--network-mode MODE] [--trust-mode MODE] [--json]
+dam setup next-action [--network-mode MODE] [--trust-mode MODE] [--json]
+dam setup resume [--network-mode MODE] [--trust-mode MODE] [--json]
+dam setup rescue [--dry-run|--yes] [--json]
 dam status [--json]
 dam profile status [--json]
 dam profile set <profile> [--json]
@@ -252,7 +264,7 @@ dam network remove-system-proxy [--dry-run|--yes] [--json]
 dam network install-network-extension [--config PATH] [--dry-run|--yes] [--json]
 dam network remove-network-extension [--dry-run|--yes] [--json]
 dam network status [--json]
-dam disconnect
+dam disconnect [--stop] [--json]
 dam integrations list [--json]
 dam integrations show <profile> [--json]
 dam integrations apply <profile> [--write|--dry-run]
@@ -279,7 +291,7 @@ DAM options:
 --resolve-inbound     Restore known DAM references in inbound responses (default)
 ```
 
-Local CA artifact commands create/delete DAM-managed certificate/key files. `dam trust install-local-ca` and `dam trust remove-local-ca` preview by default and require `--yes` before changing macOS system trust. `dam network install-network-extension` previews before activating macOS `tun` capture through the signed helper/app bundle, or `DAM_MACOS_NE_HELPER` in source builds. `dam network install-system-proxy` and `dam network remove-system-proxy` remain PAC fallback/diagnostic commands. Installing routing or trust does not enable TLS interception by itself.
+Local CA artifact commands create/delete DAM-managed certificate/key files. `dam trust install-local-ca` and `dam trust remove-local-ca` preview by default and require `--yes` before changing macOS system trust. `dam network install-network-extension` previews before activating macOS `tun` capture through the signed helper/app bundle, or `DAM_MACOS_NE_HELPER` in source builds. `dam network install-system-proxy` and `dam network remove-system-proxy` remain PAC fallback/diagnostic commands. `dam setup rescue --yes` stops DAM and removes DAM-managed local routing so normal networking can resume; it leaves local CA trust and vault data untouched. Installing routing or trust does not enable TLS interception by itself.
 
 Auxiliary binaries are available from a source build and native distributions:
 
@@ -317,14 +329,15 @@ Policy maps detections to `tokenize`, `redact`, `allow`, or `block`. The default
 - DAM protects clients configured to use DAM as an HTTP(S) proxy, the macOS PAC fallback, and the macOS `tun`/Network Extension path when the signed helper is available. Unknown hosts pass through untouched, and active traffic profile matches are decrypted and protected only when routing, local CA trust, consent, and the TLS/protocol adapter are ready.
 - `dam disconnect` pauses protection while leaving the daemon active in pass-through mode so running clients keep network connectivity. When protection resumes, DAM closes pass-through tunnels for matched routes that were opened while paused so the client reconnects through the protected path. `dam disconnect --stop` is reserved for explicit restore/stop flows after routing or app profile setup has been restored.
 - DAM is designed for macOS, Linux, and Windows, but platform-specific routing, trust, tray, and packaging implementations are staged. Partial or delayed platform behavior is tracked in `docs/parking-lot.md` or the relevant module parking-lot doc until implementation, docs, and tests agree.
+- On Linux and Windows, transparent capture setup reports stable planned/unsupported states and explicit-proxy fallback commands instead of silently attempting macOS-specific routing.
 - `dam profile set <id>` selects the legacy active harness profile for the local user. The web/tray Settings flow persists enabled app profiles for simultaneous app protection; `dam connect` uses enabled profiles when present and falls back to the legacy active profile when no enabled state exists.
-- `dam connect` starts a local proxy/interception endpoint. Enabled profiles select daemon targets and active traffic app IDs so multiple selected providers can share one daemon. Tray/web Connect uses Network Extension capture as the primary path and keeps DAM-owned profile catalog JSON for source builds and unsupported environments. Resume/default connect is idempotent for the current daemon setup; explicit mismatched `--network-mode` or `--trust-mode` flags require `dam disconnect --stop` first. Transparent modes preflight routing and local CA trust before startup. `dam integrations apply <profile>` previews by default; add `--write` to ensure the DAM-managed catalog file, or pass `--target-path` to write a rendered JSON export with rollback support.
+- `dam connect` starts a local proxy/interception endpoint. Enabled profiles select daemon targets and active traffic app IDs so multiple selected providers can share one daemon. Tray/web Connect uses Network Extension capture as the primary path and keeps DAM-owned profile catalog JSON for source builds and unsupported environments. Resume/default connect is idempotent for the current daemon setup; explicit mismatched `--network-mode` or `--trust-mode` flags require `dam disconnect --stop` first. Transparent modes preflight routing and local CA trust before startup. `dam connect --json`, `dam disconnect --json`, `dam doctor --json`, `dam setup status --json`, `dam setup next-action --json`, and `dam setup rescue --json` are the headless agent contract for install/resume/recovery workflows. Rescue uses the same payload through `/api/v1/setup/rescue` and MCP `dam_setup_rescue`; mutating API/MCP calls require `confirm: "remove_dam_network_setup"`. `dam integrations apply <profile>` previews by default; add `--write` to ensure the DAM-managed catalog file, or pass `--target-path` to write a rendered JSON export with rollback support.
 - The one-shot `dam claude`, `dam codex`, and `dam codex --api` launchers have been removed because DAM no longer protects by rewriting provider API base URLs or Codex provider config.
 - Codex ChatGPT-login mode is covered by the merged `codex` profile and the WebSocket adapter for `chatgpt.com` and `ab.chatgpt.com`. The MVP adapter freezes protection at WebSocket connection start, strips WebSocket extension negotiation, protects unfragmented client and server text frames for protected connections, and closes protected connections instead of forwarding fragmented, binary, or compressed frames.
 - Known DAM references are resolved locally by default in inbound HTTP provider responses, including provider-escaped JSON/JSON-lines string values and provider SSE text fields; use `--no-resolve-inbound` to leave them unresolved. Raw inbound HTTP response redetection/tokenization is route opt-in through traffic profile `inbound.protect_sensitive_data`, so browser/bootstrap responses such as ChatGPT HTML are not mutated unless a route explicitly asks for it.
 - The current vault/log/consent stores are local SQLite implementations.
 - The detector does not yet cover names, addresses, organizations, private keys, JWTs, API keys, IBANs, or IP addresses.
-- The npm package is a Node entry point around native DAM binaries; release packaging must include the platform binaries under `npm/native`.
+- The npm package is a Node entry point around native DAM binaries. It exposes shims for `dam`, `damctl`, `dam-web`, `dam-proxy`, `dam-mcp`, and `dam-tray`; `dam package-doctor --json` validates shim resolution, and `scripts/dam-build.sh npm-native` stages current-platform release binaries under `npm/native/<platform>-<arch>/`.
 
 ## What To Do Next
 

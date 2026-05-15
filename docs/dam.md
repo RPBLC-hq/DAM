@@ -6,6 +6,8 @@ It currently supports the background daemon UX, integration profiles, and concis
 
 ```bash
 cargo run -p dam -- connect
+cargo run -p dam -- doctor --json
+cargo run -p dam -- setup next-action --json
 cargo run -p dam -- status
 cargo run -p dam -- logs
 cargo run -p dam -- disconnect
@@ -38,8 +40,14 @@ Proxy-managed API key injection still exists in `dam-proxy` for gateway-style de
 
 ```bash
 dam connect [DAM_OPTIONS]
-dam connect --profile <profile> [--apply] [DAM_OPTIONS]
-dam connect --apply [DAM_OPTIONS]
+dam connect --profile <profile> [--apply] [--json] [DAM_OPTIONS]
+dam connect --apply [--json] [DAM_OPTIONS]
+dam doctor [--config PATH] [--state-dir PATH] [--proxy-url URL] [--json]
+dam setup status [--config PATH] [--state-dir PATH] [--network-mode MODE] [--trust-mode MODE] [--json]
+dam setup plan [--config PATH] [--state-dir PATH] [--network-mode MODE] [--trust-mode MODE] [--json]
+dam setup next-action [--config PATH] [--state-dir PATH] [--network-mode MODE] [--trust-mode MODE] [--json]
+dam setup resume [--config PATH] [--state-dir PATH] [--network-mode MODE] [--trust-mode MODE] [--json]
+dam setup rescue [--dry-run|--yes] [--json]
 dam status [--json]
 dam logs [--limit N] [--after-id ID] [--operation OPERATION_ID] [--events] [--json]
 dam profile status [--json]
@@ -56,7 +64,7 @@ dam network remove-network-extension [--dry-run|--yes] [--json]
 dam network status [--json]
 dam startup status [--json]
 dam startup skip-open-at-login [--json]
-dam disconnect
+dam disconnect [--stop] [--json]
 dam integrations list [--json]
 dam integrations show <profile> [--json]
 dam integrations apply <profile> [--write|--dry-run]
@@ -90,6 +98,11 @@ Examples:
 dam connect
 dam connect --profile claude-code
 dam connect --profile codex
+dam doctor --json
+dam setup status --network-mode tun --trust-mode local_ca --json
+dam setup next-action --network-mode tun --trust-mode local_ca --json
+dam setup rescue --json
+dam setup rescue --yes --json
 dam profile set claude-code
 dam connect --network-mode tun --trust-mode local_ca
 dam profile status
@@ -113,11 +126,16 @@ dam disconnect
 
 The npm package entry point is a small Node wrapper around native DAM binaries. It does not own protection behavior.
 
+The package exposes shims for `dam`, `damctl`, `dam-web`, `dam-proxy`, `dam-mcp`, and `dam-tray`. `dam package-doctor --json` validates that the installed shims resolve to native binaries. `dam doctor --json` is forwarded to the native `dam` binary and reports local readiness.
+
 The previous one-shot `npx @rpblc/dam claude` and `npx @rpblc/dam codex --api` trial launchers have been removed because they depended on provider base-url rewriting. Use the installed `dam connect` / tray flow for protected traffic interception.
 
 ## Current Limits
 
 - `dam connect` can start one daemon with multiple proxy targets when multiple app profiles are enabled. `--profile <id>` selects one explicit profile. `--apply` ensures selected DAM-owned catalog profile JSON before connecting; tray/web Connect uses Network Extension capture as the primary path and keeps explicit-proxy fallback commands for source builds and unsupported environments. If the enabled-profile state exists but contains no profiles, `dam connect` and `dam network install-*` use an explicit empty traffic scope instead of the bundled default routes.
+- `dam doctor --json`, `dam setup status --json`, `dam setup plan --json`, `dam setup next-action --json`, and `dam setup resume --json` are the headless install/resume contract. They do not mutate system state and include command tokens, confirmation flags, and `changes_system` for the next action. `status` and `plan` return the same full checklist.
+- `dam setup rescue` is the local recovery contract. It previews by default; `--yes` stops the DAM daemon if needed and removes DAM-managed macOS system proxy and Network Extension routing state so normal networking can resume. It accepts `--state-dir` for support and test sessions. It does not remove local CA trust or delete the vault. The same rescue payload is exposed through `/api/v1/setup/rescue` and `dam_setup_rescue` for local agents; mutating API/MCP calls require the `remove_dam_network_setup` confirmation string.
+- `dam connect --json` and `dam disconnect --json` return stable machine-readable lifecycle results for agent and script callers.
 - `dam logs` reads the local SQLite log and renders concise non-sensitive operation summaries by default. `--operation <id>` shows one operation's event timeline, and `--json` keeps the same data machine-readable for local debugging.
 - `dam disconnect` pauses protection without stopping the daemon. `dam connect` resumes a paused daemon using its existing routing/trust setup. If the connected daemon was launched by a missing or different `dam` executable path/fingerprint, Connect restarts it from the current executable while preserving that setup, so source builds and app updates do not keep running stale proxy code. Use `dam disconnect --stop` before intentionally changing setup.
 - `dam profile set <id>` persists the legacy active local harness profile. The tray/web Settings flow persists enabled app profiles; when no state exists, DAM defaults to Claude Code enabled only.
@@ -128,6 +146,7 @@ The previous one-shot `npx @rpblc/dam claude` and `npx @rpblc/dam codex --api` t
 - `dam trust install-local-ca` and `dam trust remove-local-ca` preview by default. On macOS only, `--yes` applies the System keychain change and may require administrator approval.
 - `dam network install-network-extension` and `dam network remove-network-extension` preview by default. On macOS, `--yes` requires a signed helper from the app bundle or `DAM_MACOS_NE_HELPER` in source builds; without it, install fails closed. Packaged Connect submits System Extension activation only from `DAM.app`, then the helper configures `tun` capture and writes state only after success.
 - `dam network install-system-proxy` and `dam network remove-system-proxy` preview by default. On macOS, `--yes` applies or removes PAC routing for proxy-capable traffic with rollback state; this remains a fallback and diagnostic mode.
+- On Linux and Windows, macOS-specific network mutation commands return a stable `unsupported_platform` JSON result with `support: planned`, the current platform, and an explicit-proxy fallback command.
 - `dam startup status` reports whether the startup choice is registered, skipped, or unconfigured. `dam startup skip-open-at-login` records the same choice as the tray Skip button so scripted installs can continue without adding DAM to Open at Login.
 - `dam integrations apply <profile>` previews by default. Add `--write` to ensure the DAM-managed catalog JSON file, or pass `--target-path` to write a rendered JSON export with rollback support. This profile-file setup is not part of the normal Connect onboarding path.
 - The one-shot `dam claude`, `dam codex`, and `dam codex --api` launchers have been removed; the background `dam connect` flow can run multiple provider targets in one daemon.
@@ -142,4 +161,6 @@ The previous one-shot `npx @rpblc/dam claude` and `npx @rpblc/dam codex --api` t
 cargo test -p dam
 cargo test -p dam-daemon
 cargo test -p dam-e2e dam_tool_launchers_are_removed_from_cli
+npm test
+npm pack --dry-run --ignore-scripts
 ```

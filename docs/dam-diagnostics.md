@@ -34,15 +34,17 @@ The plan states are:
 
 - `ready`: no setup action is needed.
 - `needs_action`: DAM can continue after the listed next command or user confirmation.
-- `blocked`: setup needs review before the local connect flow should continue.
+- `blocked`: setup needs review before the local connect flow should continue. Network Extension inspection failures are blocked rather than guessed as install-needed so agents do not retry the wrong mutation.
 
-Each setup step reports `kind`, `status`, `message`, optional `command`, `requires_confirmation`, and `changes_system`. Step messages are English diagnostic/support text; UI surfaces map stable step ids to localized English and French labels.
+The setup plan also includes `next_action`, the first `blocked` step when setup cannot continue or otherwise the first `needed` step. Each setup step reports `kind`, `status`, `message`, optional `command`, `requires_confirmation`, and `changes_system`. Step messages are English diagnostic/support text; UI surfaces map stable step ids to localized English and French labels.
+
+`setup_rescue` is the shared local recovery contract used by CLI/API/MCP surfaces. Preview mode reports the daemon, macOS system proxy, and macOS Network Extension recovery actions without mutating state. Apply mode stops a running or stale DAM daemon and removes DAM-managed routing while leaving local CA trust and vault data intact. It never contacts remote providers.
 
 ## Boundaries
 
 The crate does not:
 
-- start or stop `dam-proxy`;
+- start `dam-proxy`; the only lifecycle mutation is `setup_rescue` stopping a local DAM daemon during explicit recovery;
 - mutate policy, vault entries, log entries, or consent grants;
 - call real model providers;
 - inspect request bodies;
@@ -57,7 +59,17 @@ Those concerns stay in `damctl`, `dam-web`, `dam-proxy`, and future daemon/integ
 - `damctl config check`
 - `damctl doctor`
 - `damctl setup plan`
+- `dam doctor`
+- `dam setup status`
+- `dam setup plan`
+- `dam setup next-action`
+- `dam setup resume`
+- `dam setup rescue`
 - `dam-web /doctor`
+- `dam-web /api/v1/setup/plan`
+- `dam-web /api/v1/setup/next-action`
+- `dam-web /api/v1/setup/rescue`
+- `dam-mcp` setup tools
 
 ## Testing
 

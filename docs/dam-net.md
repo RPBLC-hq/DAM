@@ -35,6 +35,8 @@ Current implementation status:
 - `system_proxy`: macOS PAC routing is implemented in `dam-net-macos` for proxy-capable HTTP/HTTPS traffic. Unknown/non-configured hosts pass through DAM untouched; HTTPS body visibility for configured hosts still requires TLS trust and interception.
 - `tun`: platform capture backend mode. macOS Network Extension control-plane support is implemented in `dam-net-macos`; activation requires the signed native helper/app bundle. Linux and Windows have distinct onboarding contracts under the same setup-plan vocabulary, but their transparent routing backends are still planned and currently direct users to explicit proxy mode.
 
+On Linux and Windows, macOS-specific mutation commands return stable unsupported/planned JSON with an explicit-proxy fallback command. They must not report success or mutate state for a backend that is not implemented on the current platform.
+
 Protocol adapters are reported separately from capture. HTTP is implemented for the first bidirectional protected LLM traffic, and the Codex ChatGPT-login WebSocket MVP protects unfragmented client and server text frames on protected connections. gRPC, email, media/audio, and other chat protocols are profile-level adapter kinds with planned runtime support.
 
 ## Full-Traffic Mediation

@@ -9,9 +9,23 @@ const { spawnSync } = require("child_process");
 const ROOT = path.resolve(__dirname, "..", "..");
 const NATIVE_DIR = path.join(ROOT, "npm", "native");
 const TRIAL_COMMANDS = new Set();
+const WRAPPED_BINARIES = new Set([
+  "dam",
+  "damctl",
+  "dam-web",
+  "dam-proxy",
+  "dam-mcp",
+  "dam-tray",
+]);
 
 function main() {
   const rawArgs = process.argv.slice(2);
+  const invoked = invokedBinaryName();
+  if (invoked !== "dam") {
+    runNative(invoked, rawArgs);
+    return;
+  }
+
   const command = rawArgs[0];
 
   if (!command || command === "-h" || command === "--help" || command === "help") {
@@ -19,8 +33,13 @@ function main() {
     return;
   }
 
-  if (command === "doctor") {
-    doctor();
+  if (command === "package-doctor") {
+    doctor(rawArgs.slice(1));
+    return;
+  }
+
+  if (command === "doctor" && rawArgs.includes("--package")) {
+    doctor(rawArgs.slice(1).filter((arg) => arg !== "--package"));
     return;
   }
 
@@ -36,6 +55,18 @@ function main() {
   }
 
   runNative("dam", flags.args);
+}
+
+function invokedBinaryName() {
+  if (process.env.DAM_WRAPPER_NAME && WRAPPED_BINARIES.has(process.env.DAM_WRAPPER_NAME)) {
+    return process.env.DAM_WRAPPER_NAME;
+  }
+  const script = path.basename(process.argv[1] || "dam");
+  const withoutExtension = script.replace(/\.(?:js|cmd|ps1|exe)$/i, "");
+  if (WRAPPED_BINARIES.has(withoutExtension)) {
+    return withoutExtension;
+  }
+  return "dam";
 }
 
 function splitWrapperFlags(args) {
@@ -130,37 +161,71 @@ function ensureOption(args, option, value) {
   args.push(option, value);
 }
 
-function doctor() {
+function doctor(args = []) {
+  const json = args.includes("--json");
   const rows = [];
   rows.push(checkBinary("dam"));
+  rows.push(checkBinary("damctl"));
   rows.push(checkBinary("dam-proxy"));
   rows.push(checkBinary("dam-web"));
   rows.push(checkBinary("dam-mcp"));
-  rows.push(checkOnPath("claude", "Claude Code"));
-  rows.push(checkOnPath("codex", "Codex"));
+  rows.push(checkBinary("dam-tray"));
+  rows.push(checkOnPath("claude", "Claude Code", false));
+  rows.push(checkOnPath("codex", "Codex", false));
+  const state = rows.every((row) => row.ok || row.required === false)
+    ? "ready"
+    : "missing_requirements";
+
+  if (json) {
+    process.stdout.write(`${JSON.stringify({
+      state,
+      package: packageInfo(),
+      binaries: rows,
+    }, null, 2)}\n`);
+    process.exit(state === "ready" ? 0 : 1);
+  }
 
   process.stdout.write("DAM doctor\n\n");
   for (const row of rows) {
     process.stdout.write(`${row.ok ? "✓" : "!"} ${row.label}${row.detail ? `: ${row.detail}` : ""}\n`);
   }
 
-  process.exit(rows.every((row) => row.ok) ? 0 : 1);
+  process.exit(state === "ready" ? 0 : 1);
 }
 
 function checkBinary(name) {
   try {
-    return { ok: true, label: `${name} binary`, detail: resolveNative(name) };
+    return { ok: true, required: true, name, label: `${name} binary`, detail: resolveNative(name) };
   } catch (error) {
-    return { ok: false, label: `${name} binary`, detail: error.message };
+    return { ok: false, required: true, name, label: `${name} binary`, detail: error.message };
   }
 }
 
-function checkOnPath(name, label) {
+function checkOnPath(name, label, required = true) {
   const found = findOnPath(nativeName(name));
   return {
     ok: Boolean(found),
+    required,
+    name,
     label,
     detail: found || "not found on PATH",
+  };
+}
+
+function packageInfo() {
+  let manifest = {};
+  try {
+    manifest = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8"));
+  } catch {
+    manifest = {};
+  }
+  return {
+    name: manifest.name || "@rpblc/dam",
+    version: manifest.version || "0.0.0",
+    platform: process.platform,
+    arch: process.arch,
+    platform_dir: `${process.platform}-${process.arch}`,
+    native_dir: NATIVE_DIR,
   };
 }
 
