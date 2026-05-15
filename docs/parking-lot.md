@@ -16,7 +16,7 @@ Parked work:
 
 - Add an activation watchdog after the protection layer starts. If the Network Extension does not reach connected status and pass a local network canary within a short timeout, DAM automatically disables/removes the DAM Network Extension configuration and returns onboarding to the correct repair step.
 - Add safe-mode startup detection for interrupted or unverified Network Extension activation. If the previous run did not confirm healthy connectivity, DAM starts with network protection disabled and shows repair/onboarding instead of retrying silently.
-- Add always-available local rescue controls in tray and CLI: disable network protection, remove DAM network configuration, repair network setup, and export diagnostics.
+- Add tray UI affordances for the CLI/API/MCP recovery contract: disable network protection, remove DAM network configuration, repair network setup, and export diagnostics.
 - Add a user/admin routing failure policy setting before release. Runtime enforcement now defaults to fail-open and closes already-captured Network Extension flows when DAM is paused, unhealthy, unreachable, or otherwise not `protected`; the remaining parked work is exposing fail-open/fail-closed as an explicit setting and managed-install policy.
 - Replace any long spinner in onboarding with explicit states: requested, waiting for macOS approval, configured, enabled, connected, failed, and rolled back.
 - Keep a degraded fallback where DAM can run without system-wide Network Extension protection and clearly says protection is not active.

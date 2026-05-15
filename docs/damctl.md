@@ -232,7 +232,7 @@ Each step reports:
 
 Use `--network-mode explicit_proxy|system_proxy|tun` and `--trust-mode disabled|local_ca` to preview a richer local setup path. `system_proxy`, `tun`, and `local_ca` steps are marked as system-changing when they require installation. `tun` reports the macOS Network Extension install step and still requires the signed helper/app bundle before it can become active.
 
-The same shared plan is exposed through `dam setup status --json` and `dam setup plan --json`. `dam setup next-action --json` and `dam setup resume --json` return only the next-action projection for autonomous installers.
+The same shared plan is exposed through `dam setup status --json` and `dam setup plan --json`. `dam setup next-action --json` and `dam setup resume --json` return only the next-action projection for autonomous installers. User-facing `dam setup` steps include stable `kind`, `status`, and `detail` fields for machine callers; `dam setup repair --json` combines rescue preview/apply with a fresh setup plan, and `dam setup export-diagnostics --json` returns the offline doctor/setup/rescue-preview bundle.
 
 Exit codes:
 

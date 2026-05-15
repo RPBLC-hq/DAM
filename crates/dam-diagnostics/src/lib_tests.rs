@@ -225,8 +225,31 @@ fn setup_plan_defaults_to_daemon_start_when_disconnected() {
     assert!(plan.steps.iter().any(|step| {
         step.kind == SetupStepKind::Daemon
             && step.status == SetupStepStatus::Needed
+            && step.detail == SetupStepDetail::Disconnected
             && step.command == Some(vec!["dam".to_string(), "connect".to_string()])
     }));
+}
+
+#[test]
+fn setup_repair_previews_rescue_and_plan_together() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = proxy_config("https://api.openai.com", "openai-compatible");
+
+    let repair = setup_repair(
+        &config,
+        &SetupRepairOptions {
+            setup: SetupPlanOptions {
+                state_dir: Some(dir.path().join("state")),
+                ..SetupPlanOptions::default()
+            },
+            apply: false,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(repair.state, "preview");
+    assert_eq!(repair.rescue.state, "preview");
+    assert_eq!(repair.setup_plan.state, SetupPlanState::NeedsAction);
 }
 
 #[test]

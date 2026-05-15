@@ -48,6 +48,8 @@ dam setup plan [--config PATH] [--state-dir PATH] [--network-mode MODE] [--trust
 dam setup next-action [--config PATH] [--state-dir PATH] [--network-mode MODE] [--trust-mode MODE] [--json]
 dam setup resume [--config PATH] [--state-dir PATH] [--network-mode MODE] [--trust-mode MODE] [--json]
 dam setup rescue [--dry-run|--yes] [--json]
+dam setup repair [--dry-run|--yes] [--json]
+dam setup export-diagnostics [--config PATH] [--state-dir PATH] [--network-mode MODE] [--trust-mode MODE] [--json]
 dam status [--json]
 dam logs [--limit N] [--after-id ID] [--operation OPERATION_ID] [--events] [--json]
 dam profile status [--json]
@@ -103,6 +105,8 @@ dam setup status --network-mode tun --trust-mode local_ca --json
 dam setup next-action --network-mode tun --trust-mode local_ca --json
 dam setup rescue --json
 dam setup rescue --yes --json
+dam setup repair --json
+dam setup export-diagnostics --json
 dam profile set claude-code
 dam connect --network-mode tun --trust-mode local_ca
 dam profile status
@@ -133,8 +137,8 @@ The previous one-shot `npx @rpblc/dam claude` and `npx @rpblc/dam codex --api` t
 ## Current Limits
 
 - `dam connect` can start one daemon with multiple proxy targets when multiple app profiles are enabled. `--profile <id>` selects one explicit profile. `--apply` ensures selected DAM-owned catalog profile JSON before connecting; tray/web Connect uses Network Extension capture as the primary path and keeps explicit-proxy fallback commands for source builds and unsupported environments. If the enabled-profile state exists but contains no profiles, `dam connect` and `dam network install-*` use an explicit empty traffic scope instead of the bundled default routes.
-- `dam doctor --json`, `dam setup status --json`, `dam setup plan --json`, `dam setup next-action --json`, and `dam setup resume --json` are the headless install/resume contract. They do not mutate system state and include command tokens, confirmation flags, and `changes_system` for the next action. `status` and `plan` return the same full checklist.
-- `dam setup rescue` is the local recovery contract. It previews by default; `--yes` stops the DAM daemon if needed and removes DAM-managed macOS system proxy and Network Extension routing state so normal networking can resume. It accepts `--state-dir` for support and test sessions. It does not remove local CA trust or delete the vault. The same rescue payload is exposed through `/api/v1/setup/rescue` and `dam_setup_rescue` for local agents; mutating API/MCP calls require the `remove_dam_network_setup` confirmation string.
+- `dam doctor --json`, `dam setup status --json`, `dam setup plan --json`, `dam setup next-action --json`, and `dam setup resume --json` are the headless install/resume contract. They do not mutate system state and include command tokens, confirmation flags, and `changes_system` for the next action. `status` and `plan` return the same full checklist. Each setup step includes stable `kind`, `status`, and `detail` fields for machine callers; English `message` text remains diagnostic/support copy only.
+- `dam setup rescue` is the local recovery contract. It previews by default; `--yes` stops the DAM daemon if needed and removes DAM-managed macOS system proxy and Network Extension routing state so normal networking can resume. It accepts `--state-dir` for support and test sessions. It does not remove local CA trust or delete the vault. `dam setup repair` wraps the same rescue preview/apply result together with a fresh setup plan, and `dam setup export-diagnostics` emits an offline doctor/setup/rescue-preview bundle for support and autonomous installers. The same payload family is exposed through `/api/v1/setup/rescue`, `/api/v1/setup/repair`, `/api/v1/setup/diagnostics`, `dam_setup_rescue`, `dam_setup_repair`, and `dam_setup_export_diagnostics` for local agents; mutating API/MCP rescue or repair calls require the `remove_dam_network_setup` confirmation string.
 - `dam connect --json` and `dam disconnect --json` return stable machine-readable lifecycle results for agent and script callers.
 - `dam logs` reads the local SQLite log and renders concise non-sensitive operation summaries by default. `--operation <id>` shows one operation's event timeline, and `--json` keeps the same data machine-readable for local debugging.
 - `dam disconnect` pauses protection without stopping the daemon. `dam connect` resumes a paused daemon using its existing routing/trust setup. If the connected daemon was launched by a missing or different `dam` executable path/fingerprint, Connect restarts it from the current executable while preserving that setup, so source builds and app updates do not keep running stale proxy code. Use `dam disconnect --stop` before intentionally changing setup.

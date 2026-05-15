@@ -134,6 +134,41 @@ fn parses_doctor_and_setup_agent_commands() {
             state_dir: Some(PathBuf::from("/tmp/dam-rescue")),
         }))
     );
+
+    let repair = parse_cli([
+        "setup".to_string(),
+        "repair".to_string(),
+        "--state-dir".to_string(),
+        "/tmp/dam-repair".to_string(),
+        "--dry-run".to_string(),
+        "--json".to_string(),
+    ])
+    .unwrap();
+    assert_eq!(
+        repair.command,
+        CommandKind::Setup(SetupArgs::Repair(SetupRepairArgs {
+            plan: SetupPlanArgs {
+                json: true,
+                state_dir: Some(PathBuf::from("/tmp/dam-repair")),
+                ..SetupPlanArgs::default()
+            },
+            yes: false,
+        }))
+    );
+
+    let export = parse_cli([
+        "setup".to_string(),
+        "export-diagnostics".to_string(),
+        "--json".to_string(),
+    ])
+    .unwrap();
+    assert_eq!(
+        export.command,
+        CommandKind::Setup(SetupArgs::ExportDiagnostics(SetupPlanArgs {
+            json: true,
+            ..SetupPlanArgs::default()
+        }))
+    );
 }
 
 #[test]

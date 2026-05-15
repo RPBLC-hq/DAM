@@ -27,6 +27,8 @@ pub fn router() -> Router<AppState> {
         .route("/setup/plan", get(setup::plan))
         .route("/setup/next-action", get(setup::next_action))
         .route("/setup/rescue", post(setup::rescue))
+        .route("/setup/repair", post(setup::repair))
+        .route("/setup/diagnostics", get(setup::diagnostics))
         .route("/wallet", get(wallet::list))
         .route("/wallet/:key", get(wallet::detail))
         .route("/wallet/:key/allow", post(wallet::allow))

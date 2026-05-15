@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
@@ -113,10 +113,61 @@ impl SetupStepStatus {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SetupStepDetail {
+    Ready,
+    NotRequired,
+    Unconfigured,
+    Requested,
+    WaitingForApproval,
+    WaitingForReboot,
+    NeedsInstall,
+    NeedsConfiguration,
+    Configured,
+    NeedsEnable,
+    Enabled,
+    NeedsStart,
+    Connected,
+    Disconnected,
+    Stale,
+    EmptyScope,
+    Unsupported,
+    Failed,
+    Mismatch,
+}
+
+impl SetupStepDetail {
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::NotRequired => "not_required",
+            Self::Unconfigured => "unconfigured",
+            Self::Requested => "requested",
+            Self::WaitingForApproval => "waiting_for_approval",
+            Self::WaitingForReboot => "waiting_for_reboot",
+            Self::NeedsInstall => "needs_install",
+            Self::NeedsConfiguration => "needs_configuration",
+            Self::Configured => "configured",
+            Self::NeedsEnable => "needs_enable",
+            Self::Enabled => "enabled",
+            Self::NeedsStart => "needs_start",
+            Self::Connected => "connected",
+            Self::Disconnected => "disconnected",
+            Self::Stale => "stale",
+            Self::EmptyScope => "empty_scope",
+            Self::Unsupported => "unsupported",
+            Self::Failed => "failed",
+            Self::Mismatch => "mismatch",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SetupStep {
     pub kind: SetupStepKind,
     pub status: SetupStepStatus,
+    pub detail: SetupStepDetail,
     pub message: String,
     pub command: Option<Vec<String>>,
     pub requires_confirmation: bool,
@@ -164,6 +215,28 @@ pub struct SetupRescueAction {
     pub state: String,
     pub message: String,
     pub changes_system: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SetupRepairOptions {
+    pub setup: SetupPlanOptions,
+    pub apply: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SetupRepair {
+    pub state: String,
+    pub message: String,
+    pub rescue: SetupRescue,
+    pub setup_plan: SetupPlan,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SetupDiagnosticsExport {
+    pub generated_at_unix: u64,
+    pub doctor: dam_api::HealthReport,
+    pub setup_plan: SetupPlan,
+    pub rescue_preview: SetupRescue,
 }
 
 pub async fn doctor_report(
@@ -345,6 +418,63 @@ pub fn setup_rescue(options: &SetupRescueOptions) -> Result<SetupRescue, String>
         message: message.to_string(),
         state_dir,
         actions,
+    })
+}
+
+pub fn setup_repair(
+    config: &dam_config::DamConfig,
+    options: &SetupRepairOptions,
+) -> Result<SetupRepair, String> {
+    let rescue = setup_rescue(&SetupRescueOptions {
+        state_dir: options.setup.state_dir.clone(),
+        proxy_url: options.setup.proxy_url.clone(),
+        apply: options.apply,
+    })?;
+    let setup_plan = setup_plan(config, &options.setup)?;
+    let state = if rescue.is_blocked() {
+        "blocked"
+    } else if options.apply {
+        "repaired"
+    } else {
+        "preview"
+    };
+    let message = if rescue.is_blocked() {
+        "repair is blocked before local network setup can be reset"
+    } else if options.apply {
+        "repair actions applied; follow setup_plan.next_action to continue"
+    } else {
+        "previewed repair actions and current setup plan"
+    };
+
+    Ok(SetupRepair {
+        state: state.to_string(),
+        message: message.to_string(),
+        rescue,
+        setup_plan,
+    })
+}
+
+pub async fn setup_diagnostics_export(
+    config: &dam_config::DamConfig,
+    doctor_options: &DoctorOptions,
+    setup_options: &SetupPlanOptions,
+) -> Result<SetupDiagnosticsExport, String> {
+    let doctor = doctor_report(config, doctor_options).await;
+    let setup_plan = setup_plan(config, setup_options)?;
+    let rescue_preview = setup_rescue(&SetupRescueOptions {
+        state_dir: setup_options.state_dir.clone(),
+        proxy_url: setup_options.proxy_url.clone(),
+        apply: false,
+    })?;
+
+    Ok(SetupDiagnosticsExport {
+        generated_at_unix: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0),
+        doctor,
+        setup_plan,
+        rescue_preview,
     })
 }
 
@@ -561,6 +691,7 @@ fn launch_at_login_setup_step(
         return SetupStep {
             kind: SetupStepKind::LaunchAtLogin,
             status: SetupStepStatus::Skipped,
+            detail: SetupStepDetail::NotRequired,
             message: "launch-at-login is only required before Network Extension setup".to_string(),
             command: None,
             requires_confirmation: false,
@@ -571,6 +702,7 @@ fn launch_at_login_setup_step(
         return SetupStep {
             kind: SetupStepKind::LaunchAtLogin,
             status: SetupStepStatus::Skipped,
+            detail: SetupStepDetail::NotRequired,
             message: "launch-at-login is only registered on macOS".to_string(),
             command: None,
             requires_confirmation: false,
@@ -587,6 +719,7 @@ fn launch_at_login_setup_step(
         SetupStep {
             kind: SetupStepKind::LaunchAtLogin,
             status: SetupStepStatus::Done,
+            detail: SetupStepDetail::Ready,
             message: "DAM is registered to open at login".to_string(),
             command: None,
             requires_confirmation: false,
@@ -596,6 +729,7 @@ fn launch_at_login_setup_step(
         SetupStep {
             kind: SetupStepKind::LaunchAtLogin,
             status: SetupStepStatus::Done,
+            detail: SetupStepDetail::Ready,
             message: "Open at Login was skipped for this install".to_string(),
             command: None,
             requires_confirmation: false,
@@ -605,6 +739,7 @@ fn launch_at_login_setup_step(
         SetupStep {
             kind: SetupStepKind::LaunchAtLogin,
             status: SetupStepStatus::Needed,
+            detail: SetupStepDetail::Unconfigured,
             message: "Choose whether DAM should open at login before setup asks macOS to restart."
                 .to_string(),
             command: None,
@@ -623,6 +758,7 @@ fn system_proxy_setup_step(
         dam_net::CaptureMode::ExplicitProxy => SetupStep {
             kind: SetupStepKind::SystemProxy,
             status: SetupStepStatus::Skipped,
+            detail: SetupStepDetail::NotRequired,
             message: "system proxy routing is not required in explicit proxy mode".to_string(),
             command: None,
             requires_confirmation: false,
@@ -631,6 +767,7 @@ fn system_proxy_setup_step(
         dam_net::CaptureMode::Tun => SetupStep {
             kind: SetupStepKind::SystemProxy,
             status: SetupStepStatus::Skipped,
+            detail: SetupStepDetail::NotRequired,
             message: "system proxy routing is not used in tun mode".to_string(),
             command: None,
             requires_confirmation: false,
@@ -641,6 +778,7 @@ fn system_proxy_setup_step(
                 return SetupStep {
                     kind: SetupStepKind::SystemProxy,
                     status: SetupStepStatus::Done,
+                    detail: SetupStepDetail::Ready,
                     message: "macOS PAC system proxy routing is installed".to_string(),
                     command: None,
                     requires_confirmation: false,
@@ -660,6 +798,7 @@ fn system_proxy_setup_step(
             SetupStep {
                 kind: SetupStepKind::SystemProxy,
                 status: SetupStepStatus::Needed,
+                detail: SetupStepDetail::NeedsInstall,
                 message: "macOS PAC system proxy routing needs to be installed".to_string(),
                 command: Some(command),
                 requires_confirmation: true,
@@ -687,6 +826,7 @@ fn routing_setup_steps(
         return vec![SetupStep {
             kind: SetupStepKind::SystemProxy,
             status: SetupStepStatus::Skipped,
+            detail: SetupStepDetail::EmptyScope,
             message: "platform capture is not required while no app profiles are enabled"
                 .to_string(),
             command: None,
@@ -730,6 +870,7 @@ fn platform_capture_planned_step(kind: SetupStepKind, message: &str) -> SetupSte
     SetupStep {
         kind,
         status: SetupStepStatus::Blocked,
+        detail: SetupStepDetail::Unsupported,
         message: message.to_string(),
         command: Some(vec![
             "dam".to_string(),
@@ -755,6 +896,7 @@ fn network_extension_setup_steps(
             return vec![SetupStep {
                 kind: SetupStepKind::NetworkExtension,
                 status: SetupStepStatus::Blocked,
+                detail: SetupStepDetail::Failed,
                 message: format!("macOS Network Extension status cannot be inspected: {error}"),
                 command: Some(vec![
                     "dam".to_string(),
@@ -781,30 +923,35 @@ fn network_extension_setup_steps(
             network_extension_step(
                 SetupStepKind::NetworkExtension,
                 SetupStepStatus::Done,
+                SetupStepDetail::Ready,
                 "DAM Network Protection system extension is approved",
                 None,
             ),
             network_extension_step(
                 SetupStepKind::NetworkExtensionReboot,
                 SetupStepStatus::Needed,
+                SetupStepDetail::WaitingForReboot,
                 "Restart macOS to finish the Network Extension system change. DAM will re-check setup after restart.",
                 None,
             ),
             network_extension_step(
                 SetupStepKind::NetworkExtensionConfiguration,
                 SetupStepStatus::Needed,
+                SetupStepDetail::NeedsConfiguration,
                 "Add the DAM Network Protection configuration in macOS",
                 Some(install_command.clone()),
             ),
             network_extension_step(
                 SetupStepKind::NetworkExtensionEnable,
                 SetupStepStatus::Needed,
+                SetupStepDetail::NeedsEnable,
                 "Enable DAM Network Protection in System Settings",
                 Some(install_command.clone()),
             ),
             network_extension_step(
                 SetupStepKind::NetworkExtensionStart,
                 SetupStepStatus::Needed,
+                SetupStepDetail::NeedsStart,
                 "Enable protection layer",
                 Some(install_command),
             ),
@@ -816,24 +963,32 @@ fn network_extension_setup_steps(
             network_extension_step(
                 SetupStepKind::NetworkExtension,
                 SetupStepStatus::Needed,
+                if record.is_none() {
+                    SetupStepDetail::NeedsInstall
+                } else {
+                    SetupStepDetail::WaitingForApproval
+                },
                 "macOS Network Extension capture needs to be installed and approved",
                 Some(install_command.clone()),
             ),
             network_extension_step(
                 SetupStepKind::NetworkExtensionConfiguration,
                 SetupStepStatus::Needed,
+                SetupStepDetail::NeedsConfiguration,
                 "Add the DAM Network Protection configuration in macOS",
                 Some(install_command.clone()),
             ),
             network_extension_step(
                 SetupStepKind::NetworkExtensionEnable,
                 SetupStepStatus::Needed,
+                SetupStepDetail::NeedsEnable,
                 "Enable DAM Network Protection in System Settings",
                 Some(install_command.clone()),
             ),
             network_extension_step(
                 SetupStepKind::NetworkExtensionStart,
                 SetupStepStatus::Needed,
+                SetupStepDetail::NeedsStart,
                 "Enable protection layer",
                 Some(install_command),
             ),
@@ -865,24 +1020,28 @@ fn network_extension_setup_steps(
             network_extension_step(
                 SetupStepKind::NetworkExtension,
                 SetupStepStatus::Done,
+                SetupStepDetail::Ready,
                 "DAM Network Protection system extension is approved",
                 None,
             ),
             network_extension_step(
                 SetupStepKind::NetworkExtensionConfiguration,
                 SetupStepStatus::Done,
+                SetupStepDetail::EmptyScope,
                 "DAM Network Protection is configured with no protected app traffic",
                 None,
             ),
             network_extension_step(
                 SetupStepKind::NetworkExtensionEnable,
                 SetupStepStatus::Skipped,
+                SetupStepDetail::NotRequired,
                 "Network Extension enablement is deferred until an app profile is enabled",
                 None,
             ),
             network_extension_step(
                 SetupStepKind::NetworkExtensionStart,
                 SetupStepStatus::Skipped,
+                SetupStepDetail::NotRequired,
                 "Protection layer start is deferred until an app profile is enabled",
                 None,
             ),
@@ -893,6 +1052,7 @@ fn network_extension_setup_steps(
         network_extension_step(
             SetupStepKind::NetworkExtension,
             SetupStepStatus::Done,
+            SetupStepDetail::Ready,
             "DAM Network Protection system extension is approved",
             None,
         ),
@@ -902,6 +1062,11 @@ fn network_extension_setup_steps(
                 SetupStepStatus::Done
             } else {
                 SetupStepStatus::Needed
+            },
+            if manager_configured {
+                SetupStepDetail::Configured
+            } else {
+                SetupStepDetail::NeedsConfiguration
             },
             "Add the DAM Network Protection configuration in macOS",
             Some(install_command.clone()),
@@ -915,6 +1080,13 @@ fn network_extension_setup_steps(
             } else {
                 SetupStepStatus::Needed
             },
+            if !manager_configured {
+                SetupStepDetail::NeedsConfiguration
+            } else if manager_enabled {
+                SetupStepDetail::Enabled
+            } else {
+                SetupStepDetail::NeedsEnable
+            },
             "Enable DAM Network Protection in System Settings",
             Some(install_command.clone()),
         ),
@@ -927,6 +1099,15 @@ fn network_extension_setup_steps(
             } else {
                 SetupStepStatus::Needed
             },
+            if !manager_configured {
+                SetupStepDetail::NeedsConfiguration
+            } else if !manager_enabled {
+                SetupStepDetail::NeedsEnable
+            } else if manager_connected {
+                SetupStepDetail::Connected
+            } else {
+                SetupStepDetail::NeedsStart
+            },
             "Enable protection layer",
             Some(install_command),
         ),
@@ -936,12 +1117,14 @@ fn network_extension_setup_steps(
 fn network_extension_step(
     kind: SetupStepKind,
     status: SetupStepStatus,
+    detail: SetupStepDetail,
     message: &str,
     command: Option<Vec<String>>,
 ) -> SetupStep {
     SetupStep {
         kind,
         status,
+        detail,
         message: message.to_string(),
         command,
         requires_confirmation: matches!(status, SetupStepStatus::Needed),
@@ -972,6 +1155,7 @@ fn local_ca_setup_step(
         dam_trust::TrustMode::Disabled => SetupStep {
             kind: SetupStepKind::LocalCa,
             status: SetupStepStatus::Skipped,
+            detail: SetupStepDetail::NotRequired,
             message: "local CA trust is not required while trust mode is disabled".to_string(),
             command: None,
             requires_confirmation: false,
@@ -984,6 +1168,7 @@ fn local_ca_setup_step(
                     return SetupStep {
                         kind: SetupStepKind::LocalCa,
                         status: SetupStepStatus::Blocked,
+                        detail: SetupStepDetail::Failed,
                         message: format!("local CA trust cannot be inspected: {error}"),
                         command: Some(vec![
                             "damctl".to_string(),
@@ -1004,6 +1189,7 @@ fn local_ca_setup_step(
                 return SetupStep {
                     kind: SetupStepKind::LocalCa,
                     status: SetupStepStatus::Done,
+                    detail: SetupStepDetail::Ready,
                     message: "DAM local CA is installed in system trust".to_string(),
                     command: None,
                     requires_confirmation: false,
@@ -1014,6 +1200,7 @@ fn local_ca_setup_step(
                 return SetupStep {
                     kind: SetupStepKind::LocalCa,
                     status: SetupStepStatus::Blocked,
+                    detail: SetupStepDetail::Unsupported,
                     message: plan.message,
                     command: None,
                     requires_confirmation: false,
@@ -1023,6 +1210,7 @@ fn local_ca_setup_step(
             SetupStep {
                 kind: SetupStepKind::LocalCa,
                 status: SetupStepStatus::Needed,
+                detail: SetupStepDetail::NeedsInstall,
                 message: plan.message,
                 command: Some(vec![
                     "dam".to_string(),
@@ -1049,6 +1237,7 @@ fn daemon_setup_step(
                 return SetupStep {
                     kind: SetupStepKind::Daemon,
                     status: SetupStepStatus::Done,
+                    detail: SetupStepDetail::Connected,
                     message: format!("daemon is connected at {}", state.proxy_url),
                     command: None,
                     requires_confirmation: false,
@@ -1058,6 +1247,7 @@ fn daemon_setup_step(
             return SetupStep {
                 kind: SetupStepKind::Daemon,
                 status: SetupStepStatus::Blocked,
+                detail: SetupStepDetail::Mismatch,
                 message: format!(
                     "daemon is already running with network mode {} and trust mode {}; disconnect before changing setup",
                     state.network_mode, state.trust.mode
@@ -1073,6 +1263,7 @@ fn daemon_setup_step(
             return SetupStep {
                 kind: SetupStepKind::Daemon,
                 status: SetupStepStatus::Blocked,
+                detail: SetupStepDetail::Failed,
                 message: "daemon state is unreadable".to_string(),
                 command: Some(vec![
                     "damctl".to_string(),
@@ -1097,6 +1288,11 @@ fn daemon_setup_step(
     SetupStep {
         kind: SetupStepKind::Daemon,
         status: SetupStepStatus::Needed,
+        detail: if status == "stale" {
+            SetupStepDetail::Stale
+        } else {
+            SetupStepDetail::Disconnected
+        },
         message: format!("DAM is {status}; start DAM"),
         command: Some(command),
         requires_confirmation: false,

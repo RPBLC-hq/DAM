@@ -65,6 +65,7 @@ pub struct SetupStep {
     pub id: String,
     pub label: String,
     pub state: SetupStepState,
+    pub detail: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason_code: Option<String>,
 }
@@ -399,6 +400,7 @@ fn map_setup_step(step: &dam_diagnostics::SetupStep) -> SetupStep {
         id,
         label,
         state,
+        detail: step.detail.tag().to_string(),
         reason_code,
     }
 }

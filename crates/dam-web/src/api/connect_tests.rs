@@ -86,6 +86,7 @@ fn setup_plan_mapping_uses_diagnostics_next_action_for_current_step() {
     let blocked = dam_diagnostics::SetupStep {
         kind: dam_diagnostics::SetupStepKind::NetworkExtension,
         status: dam_diagnostics::SetupStepStatus::Blocked,
+        detail: dam_diagnostics::SetupStepDetail::Failed,
         message: "macOS Network Extension status cannot be inspected".to_string(),
         command: None,
         requires_confirmation: false,
@@ -105,6 +106,7 @@ fn setup_plan_mapping_uses_diagnostics_next_action_for_current_step() {
             dam_diagnostics::SetupStep {
                 kind: dam_diagnostics::SetupStepKind::LaunchAtLogin,
                 status: dam_diagnostics::SetupStepStatus::Needed,
+                detail: dam_diagnostics::SetupStepDetail::Unconfigured,
                 message: "Choose whether DAM should open at login".to_string(),
                 command: None,
                 requires_confirmation: false,
@@ -119,8 +121,10 @@ fn setup_plan_mapping_uses_diagnostics_next_action_for_current_step() {
     assert_eq!(mapped.current_step_id.as_deref(), Some("ne_install"));
     assert_eq!(mapped.steps[0].id, "launch_at_login");
     assert_eq!(mapped.steps[0].state, SetupStepState::Todo);
+    assert_eq!(mapped.steps[0].detail, "unconfigured");
     assert_eq!(mapped.steps[1].id, "ne_install");
     assert_eq!(mapped.steps[1].state, SetupStepState::Blocked);
+    assert_eq!(mapped.steps[1].detail, "failed");
 }
 
 fn log_entry(

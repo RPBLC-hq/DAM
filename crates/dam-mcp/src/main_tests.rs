@@ -9,6 +9,12 @@ fn lists_tools() {
     assert!(response.to_string().contains("dam_consent_grant"));
     assert!(response.to_string().contains("dam_consent_revoke"));
     assert!(response.to_string().contains("dam_setup_rescue"));
+    assert!(response.to_string().contains("dam_setup_repair"));
+    assert!(
+        response
+            .to_string()
+            .contains("dam_setup_export_diagnostics")
+    );
 }
 
 #[test]
@@ -16,6 +22,15 @@ fn setup_rescue_apply_requires_explicit_confirmation() {
     let config = dam_config::DamConfig::default();
 
     let error = call_tool(&config, "dam_setup_rescue", &json!({ "apply": true })).unwrap_err();
+
+    assert!(error.contains("confirm must be remove_dam_network_setup"));
+}
+
+#[test]
+fn setup_repair_apply_requires_explicit_confirmation() {
+    let config = dam_config::DamConfig::default();
+
+    let error = call_tool(&config, "dam_setup_repair", &json!({ "apply": true })).unwrap_err();
 
     assert!(error.contains("confirm must be remove_dam_network_setup"));
 }

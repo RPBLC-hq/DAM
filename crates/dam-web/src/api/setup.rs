@@ -58,16 +58,53 @@ pub async fn rescue(
     .map_err(|_| WebError::new(WebErrorCode::Unknown))
 }
 
-fn setup_plan(state: &AppState) -> Result<dam_diagnostics::SetupPlan, WebError> {
-    dam_diagnostics::setup_plan(
+pub async fn repair(
+    State(state): State<AppState>,
+    Json(body): Json<SetupRescueRequest>,
+) -> WebResult<dam_diagnostics::SetupRepair> {
+    let apply = body.apply.unwrap_or(false);
+    if apply && body.confirm.as_deref() != Some("remove_dam_network_setup") {
+        return Err(WebError::new(WebErrorCode::InvalidRequest));
+    }
+    dam_diagnostics::setup_repair(
         &state.config,
-        &dam_diagnostics::SetupPlanOptions {
-            state_dir: None,
-            config_path: state.config_path.clone(),
-            proxy_url: None,
-            network_mode: dam_net::CaptureMode::ExplicitProxy,
-            trust_mode: dam_trust::TrustMode::Disabled,
+        &dam_diagnostics::SetupRepairOptions {
+            setup: setup_options(&state),
+            apply,
         },
     )
+    .map(Ok::new)
     .map_err(|_| WebError::new(WebErrorCode::Unknown))
+}
+
+pub async fn diagnostics(
+    State(state): State<AppState>,
+) -> WebResult<dam_diagnostics::SetupDiagnosticsExport> {
+    dam_diagnostics::setup_diagnostics_export(
+        &state.config,
+        &dam_diagnostics::DoctorOptions {
+            proxy_url: None,
+            state_dir: None,
+            config_path: state.config_path.clone(),
+        },
+        &setup_options(&state),
+    )
+    .await
+    .map(Ok::new)
+    .map_err(|_| WebError::new(WebErrorCode::Unknown))
+}
+
+fn setup_plan(state: &AppState) -> Result<dam_diagnostics::SetupPlan, WebError> {
+    dam_diagnostics::setup_plan(&state.config, &setup_options(state))
+        .map_err(|_| WebError::new(WebErrorCode::Unknown))
+}
+
+fn setup_options(state: &AppState) -> dam_diagnostics::SetupPlanOptions {
+    dam_diagnostics::SetupPlanOptions {
+        state_dir: None,
+        config_path: state.config_path.clone(),
+        proxy_url: None,
+        network_mode: dam_net::CaptureMode::ExplicitProxy,
+        trust_mode: dam_trust::TrustMode::Disabled,
+    }
 }

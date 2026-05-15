@@ -16,7 +16,7 @@ DAM is designed for macOS, Linux, and Windows. Platform-specific routing, trust,
 - [dam-config](dam-config.md): layered runtime config for defaults, TOML, env, and CLI overrides.
 - [dam-consent](dam-consent.md): canonical-value passthrough grants with TTL and revocation.
 - [dam-daemon](dam-daemon.md): background local proxy lifecycle, pause/resume protection state, state file, and `dam connect/status/disconnect` support.
-- [dam-diagnostics](dam-diagnostics.md): shared local readiness checks and setup-plan/next-action contract for CLI, web/API, and MCP.
+- [dam-diagnostics](dam-diagnostics.md): shared local readiness checks, setup-plan/next-action, repair, rescue, and diagnostics-export contract for CLI, web/API, and MCP.
 - [dam-intercept](dam-intercept.md): guarded TLS interception activation contract for transparent routes.
 - [dam-integrations](dam-integrations.md): JSON local harness profiles, enabled app state, and legacy active profile state for `dam integrations`, `dam profile`, and `dam connect --profile`.
 - [damctl](damctl.md): local status and config diagnostics CLI.
@@ -127,13 +127,21 @@ dam logs
   -> local dam-log SQLite store
   -> concise non-sensitive operation summaries or event timelines
 
-dam doctor / dam setup status / dam setup plan / dam setup next-action / dam setup resume / dam setup rescue
+dam doctor / dam setup status / dam setup plan / dam setup next-action / dam setup resume / dam setup rescue / dam setup repair / dam setup export-diagnostics
   -> dam-diagnostics
   -> machine-readable install/resume/recovery contract
 
 /api/v1/setup/rescue / dam_setup_rescue
   -> dam-diagnostics setup_rescue
   -> confirmed local recovery for API/MCP agents
+
+/api/v1/setup/repair / dam_setup_repair
+  -> dam-diagnostics setup_repair
+  -> confirmed local recovery plus a fresh setup plan
+
+/api/v1/setup/diagnostics / dam_setup_export_diagnostics
+  -> dam-diagnostics setup_diagnostics_export
+  -> offline doctor/setup/rescue-preview bundle for support and agents
 
 dam profile
   -> enabled JSON app profile state and legacy active harness profile state

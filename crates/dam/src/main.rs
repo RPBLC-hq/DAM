@@ -66,6 +66,8 @@ enum SetupArgs {
     NextAction(SetupPlanArgs),
     Resume(SetupPlanArgs),
     Rescue(SetupRescueArgs),
+    Repair(SetupRepairArgs),
+    ExportDiagnostics(SetupPlanArgs),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +98,12 @@ struct SetupRescueArgs {
     json: bool,
     yes: bool,
     state_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SetupRepairArgs {
+    plan: SetupPlanArgs,
+    yes: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -937,6 +945,8 @@ async fn setup_command(args: SetupArgs) -> Result<i32, String> {
         SetupArgs::Status(args) | SetupArgs::Plan(args) => setup_plan_command(args, false),
         SetupArgs::NextAction(args) | SetupArgs::Resume(args) => setup_plan_command(args, true),
         SetupArgs::Rescue(args) => setup_rescue_command(args).await,
+        SetupArgs::Repair(args) => setup_repair_command(args),
+        SetupArgs::ExportDiagnostics(args) => setup_export_diagnostics_command(args).await,
     }
 }
 
@@ -1006,6 +1016,81 @@ async fn setup_rescue_command(args: SetupRescueArgs) -> Result<i32, String> {
     print_setup_rescue_view(&view, args.json)?;
 
     Ok(if view.is_blocked() { 1 } else { 0 })
+}
+
+fn setup_repair_command(args: SetupRepairArgs) -> Result<i32, String> {
+    let config = dam_config::load(&dam_config::ConfigOverrides {
+        config_path: args.plan.config_path.clone(),
+        ..dam_config::ConfigOverrides::default()
+    })
+    .map_err(|error| error.to_string())?;
+    let view = dam_diagnostics::setup_repair(
+        &config,
+        &dam_diagnostics::SetupRepairOptions {
+            setup: dam_diagnostics::SetupPlanOptions {
+                state_dir: args.plan.state_dir,
+                config_path: args.plan.config_path,
+                proxy_url: args.plan.proxy_url,
+                network_mode: args.plan.network_mode,
+                trust_mode: args.plan.trust_mode,
+            },
+            apply: args.yes,
+        },
+    )?;
+    let code = if view.rescue.is_blocked()
+        || view.setup_plan.state != dam_diagnostics::SetupPlanState::Ready
+    {
+        1
+    } else {
+        0
+    };
+
+    if args.plan.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&view)
+                .map_err(|error| format!("failed to serialize setup repair result: {error}"))?
+        );
+    } else {
+        print!("{}", render_setup_repair_view(&view));
+    }
+    Ok(code)
+}
+
+async fn setup_export_diagnostics_command(args: SetupPlanArgs) -> Result<i32, String> {
+    let config = dam_config::load(&dam_config::ConfigOverrides {
+        config_path: args.config_path.clone(),
+        ..dam_config::ConfigOverrides::default()
+    })
+    .map_err(|error| error.to_string())?;
+    let view = dam_diagnostics::setup_diagnostics_export(
+        &config,
+        &dam_diagnostics::DoctorOptions {
+            proxy_url: args.proxy_url.clone(),
+            state_dir: args.state_dir.clone(),
+            config_path: args.config_path.clone(),
+        },
+        &dam_diagnostics::SetupPlanOptions {
+            state_dir: args.state_dir,
+            config_path: args.config_path,
+            proxy_url: args.proxy_url,
+            network_mode: args.network_mode,
+            trust_mode: args.trust_mode,
+        },
+    )
+    .await?;
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&view).map_err(|error| {
+                format!("failed to serialize setup diagnostics export: {error}")
+            })?
+        );
+    } else {
+        print!("{}", render_setup_diagnostics_export(&view));
+    }
+    Ok(0)
 }
 
 fn logs_command(args: LogsArgs) -> Result<i32, String> {
@@ -1883,6 +1968,14 @@ fn parse_setup_command(args: &[String]) -> Result<Cli, String> {
         "rescue" => Ok(Cli {
             command: CommandKind::Setup(SetupArgs::Rescue(parse_setup_rescue_args(&args[1..])?)),
         }),
+        "repair" => Ok(Cli {
+            command: CommandKind::Setup(SetupArgs::Repair(parse_setup_repair_args(&args[1..])?)),
+        }),
+        "export-diagnostics" => Ok(Cli {
+            command: CommandKind::Setup(SetupArgs::ExportDiagnostics(parse_setup_plan_args(
+                &args[1..],
+            )?)),
+        }),
         command => Err(format!("unknown setup command: {command}")),
     }
 }
@@ -1956,6 +2049,37 @@ fn parse_setup_rescue_args(args: &[String]) -> Result<SetupRescueArgs, String> {
         return Err("setup rescue cannot combine --dry-run and --yes".to_string());
     }
     Ok(parsed)
+}
+
+fn parse_setup_repair_args(args: &[String]) -> Result<SetupRepairArgs, String> {
+    let mut plan_args = Vec::new();
+    let mut dry_run_explicit = false;
+    let mut yes_explicit = false;
+    let mut yes = false;
+    for arg in args {
+        match arg.as_str() {
+            "--dry-run" => {
+                dry_run_explicit = true;
+                yes = false;
+            }
+            "--yes" => {
+                yes_explicit = true;
+                yes = true;
+            }
+            "-h" | "--help" => {
+                println!("{}", usage_setup_repair());
+                std::process::exit(0);
+            }
+            _ => plan_args.push(arg.clone()),
+        }
+    }
+    if dry_run_explicit && yes_explicit {
+        return Err("setup repair cannot combine --dry-run and --yes".to_string());
+    }
+    Ok(SetupRepairArgs {
+        plan: parse_setup_plan_args(&plan_args)?,
+        yes,
+    })
 }
 
 fn parse_startup_command(args: &[String]) -> Result<Cli, String> {
@@ -2847,8 +2971,9 @@ fn render_setup_plan(report: &dam_diagnostics::SetupPlan) -> String {
     output.push_str(&format!("trust_mode: {}\n", report.trust_mode));
     if let Some(action) = &report.next_action {
         output.push_str(&format!(
-            "next_action: {} - {}\n",
+            "next_action: {}.{} - {}\n",
             action.kind.tag(),
+            action.detail.tag(),
             action.message
         ));
         if let Some(command) = &action.command {
@@ -2859,9 +2984,10 @@ fn render_setup_plan(report: &dam_diagnostics::SetupPlan) -> String {
     }
     for step in &report.steps {
         output.push_str(&format!(
-            "step {}: {} - {}\n",
+            "step {}: {}.{} - {}\n",
             step.kind.tag(),
             step.status.tag(),
+            step.detail.tag(),
             step.message
         ));
         if let Some(command) = &step.command {
@@ -2887,6 +3013,7 @@ fn render_setup_next_action(view: &SetupNextActionView) -> String {
     if let Some(action) = &view.next_action {
         output.push_str(&format!("kind: {}\n", action.kind.tag()));
         output.push_str(&format!("status: {}\n", action.status.tag()));
+        output.push_str(&format!("detail: {}\n", action.detail.tag()));
         output.push_str(&format!("action: {}\n", action.message));
         if let Some(command) = &action.command {
             output.push_str(&format!("command: {}\n", shell_command(command)));
@@ -2927,6 +3054,32 @@ fn render_setup_rescue_view(view: &dam_diagnostics::SetupRescue) -> String {
         ));
         output.push_str(&format!("  changes_system: {}\n", action.changes_system));
     }
+    output
+}
+
+fn render_setup_repair_view(view: &dam_diagnostics::SetupRepair) -> String {
+    let mut output = String::new();
+    output.push_str(&format!("state: {}\n", view.state));
+    output.push_str(&format!("message: {}\n", view.message));
+    output.push_str("\nrescue:\n");
+    for action in &view.rescue.actions {
+        output.push_str(&format!(
+            "  action {}: {} - {}\n",
+            action.id, action.state, action.message
+        ));
+    }
+    output.push_str("\nsetup:\n");
+    output.push_str(&render_setup_plan(&view.setup_plan));
+    output
+}
+
+fn render_setup_diagnostics_export(view: &dam_diagnostics::SetupDiagnosticsExport) -> String {
+    let mut output = String::new();
+    output.push_str(&format!("generated_at_unix: {}\n", view.generated_at_unix));
+    output.push_str(&format!("doctor: {:?}\n", view.doctor.state));
+    output.push_str(&format!("setup: {}\n", view.setup_plan.state.tag()));
+    output.push_str(&format!("rescue: {}\n", view.rescue_preview.state));
+    output.push_str("Use --json for the complete offline diagnostics payload.\n");
     output
 }
 
@@ -3998,15 +4151,19 @@ fn usage_doctor() -> &'static str {
 }
 
 fn usage_setup() -> &'static str {
-    "Usage: dam setup <command>\n\nCommands:\n  status       Alias for plan; print the full idempotent setup checklist\n  plan         Print the full idempotent setup checklist\n  next-action  Print only the next setup action\n  resume       Alias for next-action after restart or interrupted setup\n  rescue       Preview or apply local setup rescue actions"
+    "Usage: dam setup <command>\n\nCommands:\n  status              Alias for plan; print the full idempotent setup checklist\n  plan                Print the full idempotent setup checklist\n  next-action         Print only the next setup action\n  resume              Alias for next-action after restart or interrupted setup\n  rescue              Preview or apply local setup rescue actions\n  repair              Preview or apply rescue, then print the current setup plan\n  export-diagnostics  Export offline setup diagnostics"
 }
 
 fn usage_setup_plan() -> &'static str {
-    "Usage: dam setup status|plan|next-action|resume [--config PATH] [--state-dir PATH] [--proxy-url URL] [--network-mode explicit_proxy|system_proxy|tun] [--trust-mode disabled|local_ca] [--json]"
+    "Usage: dam setup status|plan|next-action|resume|export-diagnostics [--config PATH] [--state-dir PATH] [--proxy-url URL] [--network-mode explicit_proxy|system_proxy|tun] [--trust-mode disabled|local_ca] [--json]"
 }
 
 fn usage_setup_rescue() -> &'static str {
     "Usage: dam setup rescue [--state-dir PATH] [--dry-run|--yes] [--json]\n\nPreviews local recovery by default. Use --yes to stop the DAM daemon and remove DAM-managed macOS routing state so normal networking can resume."
+}
+
+fn usage_setup_repair() -> &'static str {
+    "Usage: dam setup repair [--config PATH] [--state-dir PATH] [--proxy-url URL] [--network-mode explicit_proxy|system_proxy|tun] [--trust-mode disabled|local_ca] [--dry-run|--yes] [--json]\n\nPreviews rescue plus the current setup plan by default. Use --yes to apply local rescue first, then follow the returned setup_plan.next_action."
 }
 
 fn usage_logs() -> &'static str {

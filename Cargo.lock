@@ -603,6 +603,7 @@ dependencies = [
  "dam-vault",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

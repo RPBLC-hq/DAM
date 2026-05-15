@@ -100,6 +100,25 @@ fn tools(config: &dam_config::DamConfig) -> Vec<Value> {
             }
         }),
         json!({
+            "name": "dam_setup_repair",
+            "description": "Preview or apply rescue, then return the current setup plan.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "apply": { "type": "boolean" },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required as remove_dam_network_setup when apply is true."
+                    }
+                }
+            }
+        }),
+        json!({
+            "name": "dam_setup_export_diagnostics",
+            "description": "Export offline DAM setup diagnostics for agent repair workflows.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
             "name": "dam_consent_list",
             "description": "List DAM passthrough consents.",
             "inputSchema": { "type": "object", "properties": {} }
@@ -171,6 +190,8 @@ fn call_tool(
         "dam_setup_plan" => dam_setup_plan_tool(config),
         "dam_setup_next_action" => dam_setup_next_action_tool(config),
         "dam_setup_rescue" => dam_setup_rescue_tool(arguments),
+        "dam_setup_repair" => dam_setup_repair_tool(config, arguments),
+        "dam_setup_export_diagnostics" => dam_setup_export_diagnostics_tool(config),
         "dam_consent_list" => {
             let store = open_consent_store(config)?;
             let entries = store.list().map_err(|error| error.to_string())?;
@@ -213,6 +234,44 @@ fn call_tool(
 }
 
 fn dam_setup_rescue_tool(arguments: &Value) -> Result<String, String> {
+    let apply = confirmed_apply(arguments)?;
+    let rescue = dam_diagnostics::setup_rescue(&dam_diagnostics::SetupRescueOptions {
+        state_dir: None,
+        proxy_url: None,
+        apply,
+    })?;
+    Ok(serde_json::to_string(&rescue).unwrap())
+}
+
+fn dam_setup_repair_tool(
+    config: &dam_config::DamConfig,
+    arguments: &Value,
+) -> Result<String, String> {
+    let apply = confirmed_apply(arguments)?;
+    let repair = dam_diagnostics::setup_repair(
+        config,
+        &dam_diagnostics::SetupRepairOptions {
+            setup: dam_diagnostics::SetupPlanOptions::default(),
+            apply,
+        },
+    )?;
+    Ok(serde_json::to_string(&repair).unwrap())
+}
+
+fn dam_setup_export_diagnostics_tool(config: &dam_config::DamConfig) -> Result<String, String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("failed to start diagnostics runtime: {error}"))?;
+    let export = runtime.block_on(dam_diagnostics::setup_diagnostics_export(
+        config,
+        &dam_diagnostics::DoctorOptions::default(),
+        &dam_diagnostics::SetupPlanOptions::default(),
+    ))?;
+    Ok(serde_json::to_string(&export).unwrap())
+}
+
+fn confirmed_apply(arguments: &Value) -> Result<bool, String> {
     let apply = arguments
         .get("apply")
         .and_then(Value::as_bool)
@@ -221,12 +280,7 @@ fn dam_setup_rescue_tool(arguments: &Value) -> Result<String, String> {
     {
         return Err("confirm must be remove_dam_network_setup when apply is true".to_string());
     }
-    let rescue = dam_diagnostics::setup_rescue(&dam_diagnostics::SetupRescueOptions {
-        state_dir: None,
-        proxy_url: None,
-        apply,
-    })?;
-    Ok(serde_json::to_string(&rescue).unwrap())
+    Ok(apply)
 }
 
 fn dam_status_tool() -> Result<String, String> {

@@ -14,3 +14,4 @@ dam-trust.workspace = true
 dam-vault.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tokio.workspace = true
