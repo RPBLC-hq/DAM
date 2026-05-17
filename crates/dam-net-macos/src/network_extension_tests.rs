@@ -291,6 +291,51 @@ fn status_preserves_recovery_gate_rolled_back_record() {
 }
 
 #[test]
+fn status_preserves_empty_scope_record_when_manager_is_disabled() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let paths = MacosNetworkExtensionPaths::for_state_dir(dir.path());
+    fs::create_dir_all(&paths.directory).unwrap();
+    write_state_record(
+        &paths,
+        &MacosNetworkExtensionStateRecord {
+            version: STATE_VERSION,
+            bundle_identifier: TEST_BUNDLE_ID.to_string(),
+            team_identifier: None,
+            protected_hosts: Vec::new(),
+            installed_at_unix: 1_778_800_000,
+            active: false,
+            activation_method: "network_extension_empty_scope_no_capture".to_string(),
+            pending_reboot: false,
+        },
+    )
+    .unwrap();
+    let helper = dir.path().join("status-helper.sh");
+    fs::write(
+        &helper,
+        "#!/bin/sh\nif [ \"$1\" = \"status\" ]; then echo \"disabled com.rpblc.dam.network-extension disconnected\"; fi\nexit 0\n",
+    )
+    .unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+    let _helper = HelperEnvGuard::with_helper_path(&helper);
+
+    let status = network_extension_status(dir.path()).unwrap();
+    let record = status.record.unwrap();
+
+    assert_eq!(
+        record.activation_method,
+        "network_extension_empty_scope_no_capture"
+    );
+    assert!(!record.active);
+    assert!(record.protected_hosts.is_empty());
+    let manager = status.manager_status.unwrap();
+    assert!(manager.configured);
+    assert!(!manager.enabled);
+    assert!(!manager.connected);
+}
+
+#[test]
 fn install_plan_passes_runtime_configuration_to_helper() {
     let _helper = HelperEnvGuard::install();
     let dir = tempfile::tempdir().unwrap();

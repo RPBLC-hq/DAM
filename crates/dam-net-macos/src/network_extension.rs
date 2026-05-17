@@ -780,6 +780,11 @@ fn manager_status_activation_method(
         && let Some(record) = record
     {
         match record.activation_method.as_str() {
+            "network_extension_empty_scope_no_capture"
+                if status.configured && empty_scope_no_capture_record(record) =>
+            {
+                return "network_extension_empty_scope_no_capture";
+            }
             "network_extension_start_failed_rolled_back" => {
                 return "network_extension_start_failed_rolled_back";
             }
@@ -818,6 +823,12 @@ fn manager_status_activation_method(
             method => method,
         }
     }
+}
+
+fn empty_scope_no_capture_record(record: &MacosNetworkExtensionStateRecord) -> bool {
+    !record.active
+        && normalized_protected_hosts(&record.protected_hosts).is_empty()
+        && record.activation_method == "network_extension_empty_scope_no_capture"
 }
 
 fn system_extension_activation_method(
