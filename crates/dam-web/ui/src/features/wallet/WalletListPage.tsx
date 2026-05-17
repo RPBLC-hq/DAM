@@ -74,6 +74,7 @@ export function WalletListPage() {
     preY: number
   } | null>(null)
   const closeTimerRef = useRef<number | null>(null)
+  const pendingAddedScrollId = useRef<string | null>(null)
 
   useEffect(() => {
     if (surface === 'web') inputRef.current?.focus()
@@ -89,7 +90,9 @@ export function WalletListPage() {
     mutationFn: (body: { kind: WalletKind; value: string }) =>
       apiPost<WalletDetail>('/wallet', body),
     onSuccess: (detail) => {
+      pendingAddedScrollId.current = detail.item.id
       setAdding(false)
+      setQuery('')
       setStateFilter('all')
       setActiveId(detail.item.id)
       void queryClient.invalidateQueries({ queryKey: ['wallet'] })
@@ -192,6 +195,25 @@ export function WalletListPage() {
       scroller.scrollTop += delta
     }
   }, [activeId])
+
+  useLayoutEffect(() => {
+    const id = pendingAddedScrollId.current
+    if (!id) return
+    const list = listRef.current
+    if (!list) return
+    const target = list.querySelector<HTMLElement>(
+      `[data-row-id="${cssEscape(id)}"]`,
+    )
+    if (!target) return
+    pendingAddedScrollId.current = null
+    const handle = window.requestAnimationFrame(() => {
+      target.scrollIntoView({
+        block: 'center',
+        behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+      })
+    })
+    return () => window.cancelAnimationFrame(handle)
+  }, [items, openId])
 
   return (
     <section className="dam-wallet" aria-label={t('wallet.aria')}>
@@ -506,4 +528,11 @@ function scrollableAncestor(el: HTMLElement): HTMLElement | null {
   }
   // Fall back to documentElement so we still adjust on web.
   return document.scrollingElement as HTMLElement | null
+}
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  )
 }

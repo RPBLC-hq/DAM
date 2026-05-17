@@ -43,7 +43,7 @@ The Activity page polls this endpoint and uses catalog-driven English/French lab
 
 `GET /api/v1/wallet?q=&state=&sort=&dir=` reads `dam-vault`, joins consent state from `dam-consent`, and returns protected, allowed, revoked, and expired value rows. The React Wallet surface owns stored-value management: users can add a value directly to the vault, filter to allowed values, inspect the sharing roster, revoke access for one recorded party, protect from everyone, or remove the value from the wallet. Removing a value revokes active grants for that vault key before deleting the vault row.
 
-`POST /api/v1/wallet` adds a stored value with `{ kind, value }`. `POST /api/v1/wallet/:key/remove` removes that vault value. Mutating wallet routes notify the Wallet and Connect event topics so the list and Connect counts refresh.
+`POST /api/v1/wallet` adds a stored value with `{ kind, value }`. After a successful add, the React Wallet clears any active search/state filter, opens the returned value detail, and scrolls the row into view. The Wallet search/filter header is sticky so long wallet lists stay controllable while scrolling. `POST /api/v1/wallet/:key/remove` removes that vault value. Mutating wallet routes notify the Wallet and Connect event topics so the list and Connect counts refresh.
 
 `GET /api/v1/allowed?q=&sort=&dir=` remains as a compatibility/headless API that reads `dam-consent`, groups grants into active, expired, and revoked buckets, and joins each grant to `dam-vault` when the grant has a vault key. The old Allowed React page has been removed; `/allowed` redirects to `/wallet?state=allowed`.
 
