@@ -63,7 +63,7 @@ fn decision_for(entry: &dam_log::LogEntry) -> Option<Decision> {
 }
 
 fn actor_from_entry(entry: &dam_log::LogEntry) -> Option<String> {
-    // Best-effort extraction from the operation_id ("anthropic-1234") or
+    // Best-effort extraction from the operation_id ("profile-1234") or
     // the message. Real wiring belongs in a follow-up that adds an
     // actor field to log entries.
     if let Some((actor, _)) = entry.operation_id.split_once('-')

@@ -47,6 +47,7 @@ export function WalletListPage() {
   // state. Tray uses a memory router; the helper degrades to a noop on
   // memory history because there is no real URL to update.
   const [query, setQuery] = useUrlSearchString('q')
+  const [focusId, setFocusId] = useUrlSearchString('focus')
   const [stateFilter, setStateFilter] = useUrlSearchParam(
     'state',
     'all',
@@ -80,6 +81,7 @@ export function WalletListPage() {
   const pendingAddedRevealId = useRef<string | null>(null)
   const pendingAddedOpenTimerRef = useRef<number | null>(null)
   const pendingAddedRevealTimerRef = useRef<number | null>(null)
+  const [revealRequestSeq, setRevealRequestSeq] = useState(0)
 
   useEffect(() => {
     if (surface === 'web') inputRef.current?.focus()
@@ -91,15 +93,10 @@ export function WalletListPage() {
       api<WalletList>(walletPath(query, stateFilter), { signal }),
   })
 
-  const addValue = useMutation({
-    mutationFn: (body: { kind: WalletKind; value: string }) =>
-      apiPost<WalletDetail>('/wallet', body),
-    onSuccess: (detail) => {
-      pendingAddedOpenId.current = detail.item.id
-      pendingAddedRevealId.current = detail.item.id
-      setAdding(false)
-      setQuery('')
-      setStateFilter('all')
+  const queueValueReveal = useCallback(
+    (id: string) => {
+      pendingAddedOpenId.current = id
+      pendingAddedRevealId.current = id
       if (activeId) {
         setClosingId(activeId)
         if (closeTimerRef.current != null)
@@ -109,6 +106,19 @@ export function WalletListPage() {
         }, INLINE_DETAIL_ANIM_MS)
       }
       setActiveId(null)
+      setRevealRequestSeq((current) => current + 1)
+    },
+    [activeId],
+  )
+
+  const addValue = useMutation({
+    mutationFn: (body: { kind: WalletKind; value: string }) =>
+      apiPost<WalletDetail>('/wallet', body),
+    onSuccess: (detail) => {
+      queueValueReveal(detail.item.id)
+      setAdding(false)
+      setQuery('')
+      setStateFilter('all')
       void queryClient.invalidateQueries({ queryKey: ['wallet'] })
       void queryClient.invalidateQueries({ queryKey: ['connect'] })
     },
@@ -128,6 +138,14 @@ export function WalletListPage() {
       setOpenId(null)
     }
   }, [items, activeId])
+
+  useEffect(() => {
+    if (!focusId) return
+    queueValueReveal(focusId)
+    setQuery('')
+    setStateFilter('all')
+    setFocusId('')
+  }, [focusId, queueValueReveal, setFocusId, setQuery, setStateFilter])
 
   useEffect(() => {
     return () => {
@@ -253,7 +271,7 @@ export function WalletListPage() {
       }
     })
     return () => window.cancelAnimationFrame(handle)
-  }, [items])
+  }, [items, revealRequestSeq])
 
   useLayoutEffect(() => {
     const id = pendingAddedRevealId.current

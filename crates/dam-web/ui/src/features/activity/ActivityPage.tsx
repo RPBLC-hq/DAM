@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import {
   Button,
   EmptyTile,
@@ -9,7 +10,7 @@ import {
   SegmentedControl,
 } from '@rpblc/design'
 
-import { ApiError, api } from '@/lib/api/client'
+import { ApiError, api, apiPost } from '@/lib/api/client'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { resolveSurface } from '@/lib/surface'
 import { useUrlSearchParam, useUrlSearchString } from '@/lib/url-search'
@@ -17,6 +18,12 @@ import type { ActivityDecision, ActivityEvent, ActivityView } from './types'
 
 type Decision = 'all' | ActivityDecision
 type Since = 'today' | '7d' | '30d' | 'all'
+type WalletKind = 'email' | 'domain' | 'phone' | 'ssn' | 'cc'
+type WalletDetail = {
+  item: {
+    id: string
+  }
+}
 
 const DECISION_VALUES: Decision[] = ['all', 'granted', 'sealed', 'denied']
 const SINCE_VALUES: Since[] = ['today', '7d', '30d', 'all']
@@ -25,6 +32,8 @@ const QUERY_KEY = 'activity' as const
 
 export function ActivityPage() {
   const { t, locale } = useI18n()
+  const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const surface = resolveSurface()
   const formatter = useMemo(
     () => new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }),
@@ -58,6 +67,25 @@ export function ActivityPage() {
       )
     },
     refetchInterval: 5_000,
+  })
+  const addToWallet = useMutation({
+    mutationFn: (item: ActivityEvent) => {
+      if (!item.value || !isWalletKind(item.kind)) {
+        throw new Error('activity value cannot be added to wallet')
+      }
+      return apiPost<WalletDetail>('/wallet', {
+        kind: item.kind,
+        value: item.value,
+      })
+    },
+    onSuccess: (detail) => {
+      void queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      void queryClient.invalidateQueries({ queryKey: ['connect'] })
+      void navigate({
+        to: '/wallet',
+        search: { focus: detail.item.id },
+      })
+    },
   })
 
   const decisionOptions = DECISION_VALUES.map((value) => ({
@@ -126,10 +154,27 @@ export function ActivityPage() {
               key={item.id}
               item={item}
               relative={(seconds) => relativePast(formatter, seconds)}
+              pending={addToWallet.isPending && addToWallet.variables?.id === item.id}
+              onAdd={() => addToWallet.mutate(item)}
             />
           ))
         )}
       </div>
+      {addToWallet.error && (
+        <ErrorTile
+          message={t('activity.error.addFailed')}
+          action={
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              onClick={() => addToWallet.reset()}
+            >
+              {t('activity.tryAgain')}
+            </Button>
+          }
+        />
+      )}
     </section>
   )
 }
@@ -137,47 +182,55 @@ export function ActivityPage() {
 function ActivityRow({
   item,
   relative,
+  pending,
+  onAdd,
 }: {
   item: ActivityEvent
   relative: (secondsAgo: number) => string
+  pending: boolean
+  onAdd: () => void
 }) {
   const { t } = useI18n()
   const ago = relative(Math.max(0, Math.floor(Date.now() / 1000) - item.ts))
   const decision = t(activityDecisionLabelKey(item.decision))
+  const canAdd = Boolean(item.value && isWalletKind(item.kind))
 
   return (
     <article className="dam-activity__row">
       <div className="dam-activity__lead">
         <span className="dam-activity__time">{ago}</span>
-        <span className="dam-activity__kind">[{item.kind}]</span>
-        <span className="dam-activity__value">{decision}</span>
+        <span className="dam-activity__value">
+          {item.value ?? t('activity.valueUnavailable')}
+        </span>
       </div>
-      <span className="dam-activity__actor">
-        {t('activity.from')} <b>{item.actor}</b>
-      </span>
+      <div className="dam-activity__facts" aria-label={t('activity.factsAria')}>
+        <ActivityFact label={t('activity.outcome')} value={decision} />
+        <ActivityFact label={t('activity.type')} value={item.kind} />
+        <ActivityFact label={t('activity.profile')} value={item.profile} />
+      </div>
       <div className="dam-activity__actions">
-        <Button
-          variant="primary"
-          size="sm"
-          bracketed
-          type="button"
-          disabled
-          title={t('activity.actionParked')}
-        >
-          {t('activity.add')}
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          bracketed
-          type="button"
-          disabled
-          title={t('activity.actionParked')}
-        >
-          {t('activity.allowOnce')}
-        </Button>
+        {canAdd && (
+          <Button
+            variant="primary"
+            size="sm"
+            bracketed
+            type="button"
+            disabled={pending}
+            onClick={onAdd}
+          >
+            {t('activity.add')}
+          </Button>
+        )}
       </div>
     </article>
+  )
+}
+
+function ActivityFact({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="dam-activity__fact">
+      [{label}: <b>{value}</b>]
+    </span>
   )
 }
 
@@ -228,6 +281,16 @@ function activityDecisionLabelKey(value: ActivityDecision): MessageKey {
   if (value === 'granted') return 'activity.decision.granted'
   if (value === 'sealed') return 'activity.decision.sealed'
   return 'activity.decision.denied'
+}
+
+function isWalletKind(value: string): value is WalletKind {
+  return (
+    value === 'email' ||
+    value === 'domain' ||
+    value === 'phone' ||
+    value === 'ssn' ||
+    value === 'cc'
+  )
 }
 
 function sinceLabelKey(value: Since): MessageKey {

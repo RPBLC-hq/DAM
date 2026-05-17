@@ -86,6 +86,8 @@ pub async fn diagnostics(
             proxy_url: None,
             state_dir: None,
             config_path: state.config_path.clone(),
+            network_mode: dam_net::CaptureMode::ExplicitProxy,
+            trust_mode: dam_trust::TrustMode::Disabled,
         },
         &setup_options(&state),
     )

@@ -10,7 +10,7 @@ Consent records do not store raw sensitive values. Matching uses:
 kind + value_fingerprint + scope
 ```
 
-`global` is the default scope and applies everywhere. Proxy callers may also pass route scopes such as `target:chatgpt-codex`; scoped grants apply only when the caller includes the matching route scope. Global grants are always considered alongside route scopes so older grants and explicit "all profiles" grants keep working.
+`global` is the default scope and applies everywhere. Proxy callers may also pass route scopes such as `target:<traffic-route>`; scoped grants apply only when the caller includes the matching route scope. Global grants are always considered alongside route scopes so older grants and explicit "all profiles" grants keep working.
 
 When a consent is granted from the vault UI or MCP server, the caller provides the stable vault key, for example:
 

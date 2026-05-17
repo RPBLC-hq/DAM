@@ -288,11 +288,14 @@ export type MessageKey =
   | 'walletDetail.reference'
   | 'walletDetail.allowHeading'
   | 'walletDetail.allowAllProfiles'
-  | 'walletDetail.allowSelectedProfiles'
   | 'walletDetail.allowProfilesLoading'
   | 'walletDetail.allowProfilesUnavailable'
   | 'walletDetail.allowNoProfiles'
   | 'walletDetail.profileDisabled'
+  | 'walletDetail.profileDropdown'
+  | 'walletDetail.profileDropdownEmpty'
+  | 'walletDetail.profileDropdownOne'
+  | 'walletDetail.profileDropdownMany'
   | 'walletDetail.remove'
   | 'walletDetail.removeConfirm'
   | 'walletDetail.removeCancel'
@@ -308,11 +311,14 @@ export type MessageKey =
   | 'activity.empty'
   | 'activity.tryAgain'
   | 'activity.loadingReason'
-  | 'activity.from'
   | 'activity.add'
-  | 'activity.allowOnce'
-  | 'activity.actionParked'
+  | 'activity.factsAria'
+  | 'activity.outcome'
+  | 'activity.type'
+  | 'activity.profile'
+  | 'activity.valueUnavailable'
   | 'activity.error.unknown'
+  | 'activity.error.addFailed'
   | 'activity.searchAria'
   | 'activity.searchPlaceholder'
   | 'activity.decisionAria'
@@ -660,11 +666,14 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'walletDetail.reference': 'reference',
     'walletDetail.allowHeading': 'allow',
     'walletDetail.allowAllProfiles': 'allow all profiles',
-    'walletDetail.allowSelectedProfiles': 'allow selected profiles',
     'walletDetail.allowProfilesLoading': 'loading profiles',
     'walletDetail.allowProfilesUnavailable': 'profiles unavailable',
-    'walletDetail.allowNoProfiles': 'all configured profiles already allowed',
+    'walletDetail.allowNoProfiles': 'no configured profiles',
     'walletDetail.profileDisabled': 'currently off',
+    'walletDetail.profileDropdown': 'profiles',
+    'walletDetail.profileDropdownEmpty': 'choose profiles',
+    'walletDetail.profileDropdownOne': '1 profile',
+    'walletDetail.profileDropdownMany': 'profiles',
     'walletDetail.remove': 'remove from wallet',
     'walletDetail.removeConfirm':
       'Remove this value from your wallet? Active access for it will stop first.',
@@ -681,19 +690,22 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'activity.aria': 'wallet activity',
     'activity.heading': 'Activity',
     'activity.hint':
-      'Values DAM has seen in recent traffic that aren’t in your wallet yet. Add a value to manage it like the rest, or allow it once for the actor that asked.',
+      'Values DAM has seen in recent traffic. Add a value to manage it from Wallet.',
     'activity.empty': 'nothing happening yet',
     'activity.tryAgain': 'try again',
     'activity.loadingReason': 'reading activity',
-    'activity.from': 'from',
     'activity.add': 'add to wallet',
-    'activity.allowOnce': 'allow once',
-    'activity.actionParked':
-      'this action ships when the DAM scanner can stream values to the surface.',
+    'activity.factsAria': 'activity facts',
+    'activity.outcome': 'outcome',
+    'activity.type': 'type',
+    'activity.profile': 'profile',
+    'activity.valueUnavailable': 'value not stored',
     'activity.error.unknown':
       'we couldn’t read activity right now. Try again.',
+    'activity.error.addFailed':
+      'we couldn’t add that value to your wallet. Try again.',
     'activity.searchAria': 'filter activity',
-    'activity.searchPlaceholder': 'actor, kind, value…',
+    'activity.searchPlaceholder': 'profile, type, value…',
     'activity.decisionAria': 'decision',
     'activity.sinceAria': 'time range',
     'activity.decision.all': 'all',
@@ -1041,11 +1053,14 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'walletDetail.reference': 'référence',
     'walletDetail.allowHeading': 'autoriser',
     'walletDetail.allowAllProfiles': 'autoriser tous les profils',
-    'walletDetail.allowSelectedProfiles': 'autoriser les profils choisis',
     'walletDetail.allowProfilesLoading': 'chargement des profils',
     'walletDetail.allowProfilesUnavailable': 'profils indisponibles',
-    'walletDetail.allowNoProfiles': 'tous les profils configurés sont déjà autorisés',
+    'walletDetail.allowNoProfiles': 'aucun profil configuré',
     'walletDetail.profileDisabled': 'désactivé',
+    'walletDetail.profileDropdown': 'profils',
+    'walletDetail.profileDropdownEmpty': 'choisir des profils',
+    'walletDetail.profileDropdownOne': '1 profil',
+    'walletDetail.profileDropdownMany': 'profils',
     'walletDetail.remove': 'retirer du portefeuille',
     'walletDetail.removeConfirm':
       'Retirer cette valeur du portefeuille ? Les accès actifs seront arrêtés avant.',
@@ -1064,19 +1079,22 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'activity.aria': 'activité du portefeuille',
     'activity.heading': 'Activité',
     'activity.hint':
-      'Valeurs que DAM a vues passer récemment et qui ne sont pas dans votre portefeuille. Ajoutez-les pour les gérer comme les autres, ou autorisez-les une fois pour l’acteur qui a demandé.',
+      'Valeurs que DAM a vues passer récemment. Ajoutez une valeur pour la gérer dans le portefeuille.',
     'activity.empty': 'rien à signaler',
     'activity.tryAgain': 'réessayer',
     'activity.loadingReason': 'lecture de l’activité',
-    'activity.from': 'de la part de',
     'activity.add': 'ajouter',
-    'activity.allowOnce': 'autoriser une fois',
-    'activity.actionParked':
-      'cette action sera disponible quand le scanneur DAM diffusera ses valeurs.',
+    'activity.factsAria': 'faits de l’activité',
+    'activity.outcome': 'résultat',
+    'activity.type': 'type',
+    'activity.profile': 'profil',
+    'activity.valueUnavailable': 'valeur non stockée',
     'activity.error.unknown':
       'lecture de l’activité impossible pour l’instant. Réessayez.',
+    'activity.error.addFailed':
+      'ajout au portefeuille impossible. Réessayez.',
     'activity.searchAria': 'filtrer l’activité',
-    'activity.searchPlaceholder': 'acteur, type, valeur…',
+    'activity.searchPlaceholder': 'profil, type, valeur…',
     'activity.decisionAria': 'décision',
     'activity.sinceAria': 'plage de temps',
     'activity.decision.all': 'tout',

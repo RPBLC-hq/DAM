@@ -742,10 +742,88 @@ body {
   text-transform: uppercase;
 }
 
-.dam-wallet__allow-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+.dam-wallet__profile-menu {
+  position: relative;
+  max-width: 22rem;
+}
+
+.dam-wallet__profile-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: var(--space-3);
+  min-height: 2.5rem;
+  padding: 0 var(--space-3);
+  border: var(--border-1) solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.dam-wallet__profile-trigger::-webkit-details-marker {
+  display: none;
+}
+
+.dam-wallet__profile-trigger::after {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-right: var(--border-1) solid var(--accent);
+  border-bottom: var(--border-1) solid var(--accent);
+  content: "";
+  transform: rotate(45deg);
+}
+
+.dam-wallet__profile-menu[open] .dam-wallet__profile-trigger::after {
+  transform: rotate(225deg);
+}
+
+.dam-wallet__profile-trigger b {
+  color: var(--bright);
+  font-weight: var(--fw-semibold);
+}
+
+.dam-wallet__profile-panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: var(--border-1) solid var(--line);
+  background: var(--surface);
+}
+
+.dam-wallet__profile-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2rem;
+  padding: var(--space-2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dam-wallet__profile-option:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.dam-wallet__profile-option input {
+  accent-color: var(--accent);
+}
+
+.dam-wallet__profile-option em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 10px;
 }
 
 .dam-wallet__allow-status {
@@ -855,15 +933,6 @@ body {
   white-space: nowrap;
 }
 
-.dam-activity__kind {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--accent);
-  white-space: nowrap;
-}
-
 .dam-activity__value {
   font-family: var(--font-mono);
   font-size: 14px;
@@ -876,14 +945,20 @@ body {
   white-space: nowrap;
 }
 
-.dam-activity__actor {
+.dam-activity__facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dam-activity__fact {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--muted);
-  letter-spacing: 0.04em;
 }
 
-.dam-activity__actor b {
+.dam-activity__fact b {
   color: var(--bright);
   font-weight: var(--fw-semibold);
 }

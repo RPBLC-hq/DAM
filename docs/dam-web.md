@@ -35,13 +35,13 @@ Connect action wiring is intentionally narrow in this slice: browser-hosted `con
 - `proxy_forward.request_protection` → `granted`, `sealed`, or `denied` from the protection counts in the log message
 - `proxy_failure.provider_down` → `denied`
 
-When a proxy protection event does not carry an actor itself, `dam-web` derives the actor from another log row with the same operation id, such as `route_decision target=...` or `provider_forward_start provider=...`.
+When a proxy protection event does not carry profile context itself, `dam-web` derives the traffic target from another log row with the same operation id, such as `route_decision target=...` or `provider_forward_start provider=...`, then resolves that target through the integration profile catalog. Target and provider ids are transport details and should not be shown as the user-facing profile label when a configured profile owns that route.
 
-The Activity page polls this endpoint and uses catalog-driven English/French labels. The `[add]` and `[allow once]` row actions remain disabled until their wallet/consent semantics are implemented.
+The Activity page polls this endpoint and uses catalog-driven English/French labels. Rows show the detected value when DAM has a vault reference for the operation, plus bracket facts for outcome, type, and profile. `[add to wallet]` posts the detected value to Wallet, clears Wallet filters, scrolls to the returned row, and opens its detail. The Activity allow-once action is parked and is not rendered in this slice.
 
 ## Wallet
 
-`GET /api/v1/wallet?q=&state=&sort=&dir=` reads `dam-vault`, joins consent state from `dam-consent`, and returns protected, allowed, revoked, and expired value rows. The React Wallet surface owns stored-value management: users can add a value directly to the vault, filter to allowed values, inspect the sharing roster, allow a value for all profiles or selected integration profiles, revoke access for one recorded party, protect from everyone, or remove the value from the wallet. Profile-level allows expand to target-scoped consent grants derived from the selected profile's traffic apps. Removing a value revokes active grants for that vault key before deleting the vault row.
+`GET /api/v1/wallet?q=&state=&sort=&dir=` reads `dam-vault`, joins consent state from `dam-consent`, and returns protected, allowed, revoked, and expired value rows. The React Wallet surface owns stored-value management: users can add a value directly to the vault, filter to allowed values, inspect the sharing roster, allow a value for all profiles or selected integration profiles, revoke access for one recorded party, protect from everyone, or remove the value from the wallet. Profile choices are populated from the Settings profile list, not hardcoded into the component. The multi-select dropdown applies each selection change immediately. Profile-level allows expand to target-scoped consent grants derived from the selected profile's traffic apps. Removing a value revokes active grants for that vault key before deleting the vault row.
 
 `POST /api/v1/wallet` adds a stored value with `{ kind, value }`. After a successful add, the React Wallet clears any active search/state filter, scrolls the returned row near the top of the view, opens its detail after the scroll starts, and runs a second reveal pass after the inline detail expands so the panel stays visible. The Wallet search/filter header is sticky so long wallet lists stay controllable while scrolling. `POST /api/v1/wallet/:key/allow` accepts a legacy global `{ party }`, an explicit all-profile `{ party, scope: "global" }`, or a profile-level `{ party, profile_id }`. `POST /api/v1/wallet/:key/remove` removes that vault value. Mutating wallet routes notify the Wallet and Connect event topics so the list and Connect counts refresh.
 
@@ -64,7 +64,7 @@ curl -sS -X POST http://127.0.0.1:2896/api/v1/requests/trigger \
   -H 'Content-Type: application/json' \
   -H 'Origin: http://127.0.0.1:2896' \
   -d '{
-    "actor": "anthropic",
+    "actor": "sample-profile",
     "value_label": "mobile phone",
     "value_preview": "+1 415 555 0142",
     "purpose": "send the verification code from your bank to confirm the wire",
