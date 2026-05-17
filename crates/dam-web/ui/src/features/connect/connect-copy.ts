@@ -30,27 +30,6 @@ const detailStepLabelKeys: Record<string, MessageKey> = {
   'ne_enable:rolled_back': 'connect.step.ne_rolled_back',
 }
 
-const stepActionKeys: Record<string, MessageKey> = {
-  launch_at_login: 'connect.action.launch_at_login',
-  ne_install: 'connect.action.ne_install',
-  ne_config: 'connect.action.ne_config',
-  ne_enable: 'connect.action.ne_enable',
-  ne_start: 'connect.action.ne_start',
-  linux_capture: 'connect.action.platform_capture',
-  windows_capture: 'connect.action.platform_capture',
-  ne_reboot: 'connect.action.ne_reboot',
-  ca_install: 'connect.action.ca_install',
-  system_proxy: 'connect.action.system_proxy',
-  apply_profiles: 'connect.action.apply_profiles',
-  daemon_start: 'connect.action.daemon_start',
-}
-
-const detailStepActionKeys: Record<string, MessageKey> = {
-  'ne_install:waiting_for_approval': 'connect.action.ne_approval',
-  'ne_config:rolled_back': 'connect.action.ne_rolled_back',
-  'ne_enable:rolled_back': 'connect.action.ne_rolled_back',
-}
-
 const stepHintKeys: Record<string, MessageKey> = {
   launch_at_login: 'connect.hint.launch_at_login',
   ne_install: 'connect.hint.ne_install',
@@ -94,14 +73,6 @@ export function stepLabelKey(step: SetupStep): MessageKey {
   const detailKey = detailStepKey(step)
   if (detailKey && detailStepLabelKeys[detailKey]) return detailStepLabelKeys[detailKey]
   return stepLabelKeys[step.id] ?? 'connect.step.unknown'
-}
-
-export function stepActionKey(step?: SetupStep | string): MessageKey {
-  if (!step) return 'connect.action.unknown'
-  if (typeof step === 'string') return stepActionKeys[step] ?? 'connect.action.unknown'
-  const detailKey = detailStepKey(step)
-  if (detailKey && detailStepActionKeys[detailKey]) return detailStepActionKeys[detailKey]
-  return stepActionKeys[step.id] ?? 'connect.action.unknown'
 }
 
 export function stepHintKey(step: SetupStep): MessageKey | undefined {

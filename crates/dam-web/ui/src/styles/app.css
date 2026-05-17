@@ -835,20 +835,10 @@ body {
   padding: var(--space-6) 0 var(--space-4);
 }
 
-.dam-connect__intro .dam-connect__mark {
-  /* Push the mark below the lede + fine print, not flush with them. */
+.dam-connect__connect-button {
+  /* Push the action below the lede + fine print, not flush with them. */
   margin-top: var(--space-3);
-}
-
-.dam-connect__mark {
-  /* Bumped from 26px so the mark reads as the page's destination,
-     not as another block of inline text. */
-  font-size: 32px;
-}
-
-.dam-connect__mark .rpblc-connect-mark[aria-disabled='true'] {
-  opacity: 0.5;
-  cursor: not-allowed;
+  min-width: 13em;
 }
 
 .dam-connect__lede,

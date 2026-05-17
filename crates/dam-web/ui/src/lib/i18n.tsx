@@ -93,17 +93,14 @@ export type MessageKey =
   | 'connect.loading'
   | 'connect.loadingReason'
   | 'connect.checkAgain'
+  | 'connect.connectDam'
   | 'connect.connectAria'
-  | 'connect.connectCaption'
   | 'connect.disconnectedLede'
   | 'connect.disconnectedFine'
   | 'connect.protectedStatus'
   | 'connect.pausedStatus'
   | 'connect.degradedStatus'
   | 'connect.setupStatus'
-  | 'connect.pauseProtection'
-  | 'connect.resumeProtection'
-  | 'connect.recoveryAction'
   | 'connect.nothingAsking'
   | 'connect.protectedFor'
   | 'connect.systemMode'
@@ -158,21 +155,7 @@ export type MessageKey =
   | 'connect.hint.apply_profiles'
   | 'connect.hint.daemon_start'
   | 'connect.hintAriaLabel'
-  | 'connect.action.launch_at_login'
   | 'connect.action.launch_at_login_skip'
-  | 'connect.action.ne_install'
-  | 'connect.action.ne_approval'
-  | 'connect.action.ne_config'
-  | 'connect.action.ne_enable'
-  | 'connect.action.ne_rolled_back'
-  | 'connect.action.ne_start'
-  | 'connect.action.platform_capture'
-  | 'connect.action.ne_reboot'
-  | 'connect.action.ca_install'
-  | 'connect.action.system_proxy'
-  | 'connect.action.apply_profiles'
-  | 'connect.action.daemon_start'
-  | 'connect.action.unknown'
   | 'connect.error.load'
   | 'connect.error.not_implemented'
   | 'connect.error.ne_pending_user_approval'
@@ -423,8 +406,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.loading': 'Checking protection state.',
     'connect.loadingReason': 'Checking protection state',
     'connect.checkAgain': 'Check again',
-    'connect.connectAria': 'Connect DAM',
-    'connect.connectCaption': 'click to connect',
+    'connect.connectDam': 'Connect : DAM',
+    'connect.connectAria': 'Connect : DAM',
     'connect.disconnectedLede':
       'Reclaim control of what your apps know about you.',
     'connect.disconnectedFine':
@@ -433,9 +416,6 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.pausedStatus': 'Protection is paused. Local clients can keep their endpoint.',
     'connect.degradedStatus': 'Protection needs attention. DAM is still here.',
     'connect.setupStatus': 'Finish local setup before DAM can protect this device.',
-    'connect.pauseProtection': 'Pause protection',
-    'connect.resumeProtection': 'Resume protection',
-    'connect.recoveryAction': 'Try the recovery action',
     'connect.nothingAsking': 'no new requests',
     'connect.protectedFor': 'Protected for',
     'connect.systemMode': 'system proxy · local CA',
@@ -504,21 +484,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.hint.daemon_start':
       'Starts the DAM background process that mediates traffic. Runs locally; nothing leaves your device unless you allow it.',
     'connect.hintAriaLabel': 'more info',
-    'connect.action.launch_at_login': 'Add DAM to Open at Login',
     'connect.action.launch_at_login_skip': 'Skip',
-    'connect.action.ne_install': 'Install network extension',
-    'connect.action.ne_approval': 'Open approval settings',
-    'connect.action.ne_config': 'Add network configuration',
-    'connect.action.ne_enable': 'Enable network extension',
-    'connect.action.ne_rolled_back': 'Retry network protection',
-    'connect.action.ne_start': 'Enable protection layer',
-    'connect.action.platform_capture': 'Use explicit proxy mode',
-    'connect.action.ne_reboot': 'Restart macOS',
-    'connect.action.ca_install': 'Trust local CA',
-    'connect.action.system_proxy': 'Install system proxy',
-    'connect.action.apply_profiles': 'Write profile files',
-    'connect.action.daemon_start': 'Start DAM',
-    'connect.action.unknown': 'Continue setup',
     'connect.error.load': 'DAM could not read the connection state.',
     'connect.error.not_implemented': 'This connect action is not wired in this build yet.',
     'connect.error.ne_pending_user_approval':
@@ -802,8 +768,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.loading': 'Vérification de l’état de protection.',
     'connect.loadingReason': 'Vérification de l’état de protection',
     'connect.checkAgain': 'Revérifier',
-    'connect.connectAria': 'Connecter DAM',
-    'connect.connectCaption': 'cliquez pour connecter',
+    'connect.connectDam': 'Connect : DAM',
+    'connect.connectAria': 'Connect : DAM',
     'connect.disconnectedLede':
       'Reprenez le contrôle de ce que vos apps savent de vous.',
     'connect.disconnectedFine':
@@ -812,9 +778,6 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.pausedStatus': 'La protection est en pause. Les clients locaux gardent leur point d’accès.',
     'connect.degradedStatus': 'La protection demande une attention. DAM reste présent.',
     'connect.setupStatus': 'Terminez la configuration locale avant que DAM protège cet appareil.',
-    'connect.pauseProtection': 'Mettre la protection en pause',
-    'connect.resumeProtection': 'Reprendre la protection',
-    'connect.recoveryAction': 'Tenter la correction',
     'connect.nothingAsking': 'aucune nouvelle demande',
     'connect.protectedFor': 'Protégé depuis',
     'connect.systemMode': 'proxy système · AC locale',
@@ -883,21 +846,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.hint.daemon_start':
       'Démarre le processus DAM en arrière-plan qui encadre le trafic. Tout local ; rien ne quitte votre appareil sans votre accord.',
     'connect.hintAriaLabel': 'plus d’info',
-    'connect.action.launch_at_login': 'Ajouter DAM à l’ouverture',
     'connect.action.launch_at_login_skip': 'Ignorer',
-    'connect.action.ne_install': 'Installer l’extension réseau',
-    'connect.action.ne_approval': 'Ouvrir les réglages',
-    'connect.action.ne_config': 'Ajouter la configuration réseau',
-    'connect.action.ne_enable': 'Activer l’extension réseau',
-    'connect.action.ne_rolled_back': 'Réessayer la protection réseau',
-    'connect.action.ne_start': 'Activer la couche de protection',
-    'connect.action.platform_capture': 'Utiliser le proxy explicite',
-    'connect.action.ne_reboot': 'Redémarrer macOS',
-    'connect.action.ca_install': 'Faire confiance à l’AC locale',
-    'connect.action.system_proxy': 'Installer le proxy système',
-    'connect.action.apply_profiles': 'Écrire les profils',
-    'connect.action.daemon_start': 'Démarrer DAM',
-    'connect.action.unknown': 'Continuer la configuration',
     'connect.error.load': 'DAM n’a pas pu lire l’état de connexion.',
     'connect.error.not_implemented': 'Cette action de connexion n’est pas encore câblée dans cette version.',
     'connect.error.ne_pending_user_approval':
