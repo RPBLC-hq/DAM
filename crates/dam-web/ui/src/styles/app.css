@@ -239,7 +239,7 @@ body {
      ceiling, the .dam-connect element spans the full window and the
      inner 28rem column reads as a tiny island in empty space. The
      ceiling matches the other web surfaces' framing pattern (insights
-     880px, allowed/health 720px, system 880px); 36rem is the right
+     880px, health 720px, system 880px); 36rem is the right
      ceiling here because the connect body is short, focused, and
      centered text — wider than the 28rem inner column for breathing
      room around the narrative, narrower than the data-dense surfaces
@@ -561,6 +561,39 @@ body {
   min-width: 0;
 }
 
+.dam-wallet__add {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.8fr) minmax(12rem, 1.2fr) auto;
+  align-items: end;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: var(--border-1) solid var(--line);
+  background: var(--panel);
+}
+
+.dam-wallet__add-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dam-wallet__add-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--alarm);
+  font-size: 12px;
+}
+
+@media (max-width: 620px) {
+  .dam-wallet__add {
+    grid-template-columns: 1fr;
+  }
+
+  .dam-wallet__add-actions {
+    justify-content: flex-end;
+  }
+}
+
 .dam-wallet__list {
   display: flex;
   flex-direction: column;
@@ -668,6 +701,33 @@ body {
   border-top: 0;
   padding: var(--space-4);
   background: var(--panel);
+}
+
+.dam-wallet__remove {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.dam-wallet__remove-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: var(--border-1) solid var(--line);
+}
+
+.dam-wallet__remove-confirm p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.dam-wallet__remove-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }
 
 /* ── Recently Scanned ──────────────────────────────────────────── */
@@ -1336,54 +1396,6 @@ body {
   font-family: var(--font-sans);
   font-size: 13px;
   color: var(--text);
-}
-
-/* ── Allowed ──────────────────────────────────────────────────── */
-
-.dam-allowed {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-  max-width: 720px;
-  margin: 0 auto;
-  padding: var(--space-6) var(--space-5);
-}
-
-.dam-allowed__head {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.dam-allowed__heading {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: 14px;
-  font-weight: var(--fw-bold);
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--bright);
-}
-
-.dam-allowed__rows {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.dam-allowed__rows--archive {
-  margin-top: var(--space-3);
-  opacity: 0.7;
-}
-
-.dam-allowed__archive {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  margin-top: var(--space-4);
 }
 
 /* ── Health ───────────────────────────────────────────────────── */

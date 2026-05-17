@@ -13,6 +13,7 @@
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -197,7 +198,13 @@ fn active_grants_count(store: Option<&dam_consent::ConsentStore>) -> u64 {
             entries
                 .into_iter()
                 .filter(|entry| entry.is_active_at(now))
-                .count() as u64
+                .map(|entry| {
+                    entry.vault_key.unwrap_or_else(|| {
+                        format!("{}:{}", entry.kind.tag(), entry.value_fingerprint)
+                    })
+                })
+                .collect::<HashSet<_>>()
+                .len() as u64
         })
         .unwrap_or_default()
 }

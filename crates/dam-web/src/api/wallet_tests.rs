@@ -1,8 +1,166 @@
 use super::*;
+use axum::extract::{Path, State};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 #[test]
 fn kind_from_key_extracts_prefix() {
     assert_eq!(kind_from_key("email:abc123"), "email");
     assert_eq!(kind_from_key("phone:xyz"), "phone");
     assert_eq!(kind_from_key("nokey"), "nokey");
+}
+
+#[test]
+fn wallet_item_marks_active_grants_as_allowed() {
+    let now = 1_000;
+    let key = "email:1111111111111111111111";
+    let item = wallet_item_from_entry(
+        dam_vault::VaultEntry {
+            key: key.to_string(),
+            value: "ada@example.test".to_string(),
+            created_at: now - 100,
+            updated_at: now - 50,
+        },
+        &[dam_consent::ConsentEntry {
+            id: "grant_1".to_string(),
+            kind: dam_core::SensitiveType::Email,
+            value_fingerprint: "fingerprint".to_string(),
+            vault_key: Some(key.to_string()),
+            scope: "global".to_string(),
+            created_at: now - 20,
+            expires_at: now + 60,
+            revoked_at: None,
+            created_by: "Claude Code".to_string(),
+            reason: None,
+        }],
+        now,
+    );
+
+    assert_eq!(item.state, ItemState::Allowed);
+    assert_eq!(item.shared_with[0].name, "Claude Code");
+}
+
+#[test]
+fn wallet_state_filter_returns_only_allowed_values() {
+    let now = 1_000;
+    let allowed_key = "email:1111111111111111111111";
+    let protected_key = "phone:2222222222222222222222";
+    let query = ListQuery {
+        q: None,
+        state: Some("allowed".to_string()),
+        sort: None,
+        dir: None,
+    };
+    let items = wallet_items_from_entries(
+        vec![
+            dam_vault::VaultEntry {
+                key: allowed_key.to_string(),
+                value: "ada@example.test".to_string(),
+                created_at: now,
+                updated_at: now,
+            },
+            dam_vault::VaultEntry {
+                key: protected_key.to_string(),
+                value: "+14155550142".to_string(),
+                created_at: now,
+                updated_at: now,
+            },
+        ],
+        &[dam_consent::ConsentEntry {
+            id: "grant_1".to_string(),
+            kind: dam_core::SensitiveType::Email,
+            value_fingerprint: "fingerprint".to_string(),
+            vault_key: Some(allowed_key.to_string()),
+            scope: "global".to_string(),
+            created_at: now,
+            expires_at: now + 60,
+            revoked_at: None,
+            created_by: "Claude Code".to_string(),
+            reason: None,
+        }],
+        &query,
+        now,
+    );
+
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].id, allowed_key);
+}
+
+#[tokio::test]
+async fn add_wallet_value_writes_to_vault_and_returns_detail() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let state = test_state(vault.clone(), None);
+
+    let response = add(
+        State(state),
+        Json(AddWalletRequest {
+            kind: "email".to_string(),
+            value: "ada@example.test".to_string(),
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.data.item.kind, "email");
+    assert_eq!(response.data.item.value, "ada@example.test");
+    assert_eq!(
+        vault.get(&response.data.item.id).unwrap().as_deref(),
+        Some("ada@example.test")
+    );
+}
+
+#[tokio::test]
+async fn remove_wallet_value_deletes_vault_row_and_revokes_access() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let consent_store = Arc::new(dam_consent::ConsentStore::open_in_memory().unwrap());
+    let reference = vault
+        .write(&VaultRecord {
+            reference: Reference::generate(dam_core::SensitiveType::Email),
+            kind: dam_core::SensitiveType::Email,
+            value: "ada@example.test".to_string(),
+        })
+        .unwrap();
+    let key = reference.key();
+    consent_store
+        .grant_for_reference(
+            &key,
+            vault.as_ref(),
+            60,
+            "Claude Code",
+            Some("test grant".to_string()),
+        )
+        .unwrap();
+    let state = test_state(vault.clone(), Some(consent_store.clone()));
+
+    let response = remove(State(state), Path(key.clone())).await.unwrap();
+
+    assert_eq!(response.data.id, key);
+    assert!(vault.get(&key).unwrap().is_none());
+    assert!(
+        consent_store
+            .list()
+            .unwrap()
+            .into_iter()
+            .all(|entry| entry.revoked_at.is_some())
+    );
+}
+
+fn test_state(
+    vault: Arc<dam_vault::Vault>,
+    consent_store: Option<Arc<dam_consent::ConsentStore>>,
+) -> crate::AppState {
+    crate::AppState {
+        surface: crate::Surface::Web,
+        tray_post_token: None,
+        vault,
+        consent_store,
+        logs: Arc::new(dam_log::LogStore::open_in_memory().unwrap()),
+        config: Arc::new(dam_config::DamConfig::default()),
+        config_path: None,
+        db_path: Arc::new(PathBuf::from("vault.db")),
+        log_path: Arc::new(PathBuf::from("log.db")),
+        client: reqwest::Client::new(),
+        requests: Arc::new(crate::request_store::RequestStore::default()),
+        events: Arc::new(crate::events_bus::EventBus::new()),
+    }
 }

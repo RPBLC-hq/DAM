@@ -259,6 +259,50 @@ impl ConsentStore {
         Ok(changed > 0)
     }
 
+    pub fn revoke_for_vault_key(&self, vault_key: &str) -> ConsentResult<u64> {
+        self.revoke_for_vault_key_where(vault_key, None)
+    }
+
+    pub fn revoke_for_vault_key_and_created_by(
+        &self,
+        vault_key: &str,
+        created_by: &str,
+    ) -> ConsentResult<u64> {
+        self.revoke_for_vault_key_where(vault_key, Some(created_by))
+    }
+
+    fn revoke_for_vault_key_where(
+        &self,
+        vault_key: &str,
+        created_by: Option<&str>,
+    ) -> ConsentResult<u64> {
+        let now = now_unix_secs()?;
+        let conn = self.conn.lock().expect("consent sqlite mutex poisoned");
+        let changed = if let Some(created_by) = created_by {
+            conn.execute(
+                "
+                UPDATE consents
+                SET revoked_at = ?1
+                WHERE vault_key = ?2
+                  AND created_by = ?3
+                  AND revoked_at IS NULL
+                ",
+                params![now, vault_key, created_by],
+            )?
+        } else {
+            conn.execute(
+                "
+                UPDATE consents
+                SET revoked_at = ?1
+                WHERE vault_key = ?2
+                  AND revoked_at IS NULL
+                ",
+                params![now, vault_key],
+            )?
+        };
+        Ok(changed as u64)
+    }
+
     pub fn list(&self) -> ConsentResult<Vec<ConsentEntry>> {
         let conn = self.conn.lock().expect("consent sqlite mutex poisoned");
         let mut stmt = conn.prepare(

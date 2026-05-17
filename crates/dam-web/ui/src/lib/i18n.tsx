@@ -10,23 +10,11 @@ export type MessageKey =
   | 'nav.pendingRequests'
   | 'nav.insights'
   | 'nav.wallet'
-  | 'nav.allowed'
   | 'nav.activity'
   | 'nav.more'
   | 'nav.settings'
   | 'nav.system'
   | 'nav.health'
-  | 'allowed.aria'
-  | 'allowed.heading'
-  | 'allowed.empty'
-  | 'allowed.searchAria'
-  | 'allowed.searchPlaceholder'
-  | 'allowed.tryAgain'
-  | 'allowed.loadingReason'
-  | 'allowed.expiredDisclosure'
-  | 'allowed.stopAllowing'
-  | 'allowed.until'
-  | 'allowed.error.unknown'
   | 'insights.aria'
   | 'insights.heading'
   | 'insights.range.today'
@@ -261,6 +249,21 @@ export type MessageKey =
   | 'wallet.heading'
   | 'wallet.searchAria'
   | 'wallet.searchPlaceholder'
+  | 'wallet.filterAria'
+  | 'wallet.filter.all'
+  | 'wallet.filter.protected'
+  | 'wallet.filter.allowed'
+  | 'wallet.addValue'
+  | 'wallet.addKind'
+  | 'wallet.addValueLabel'
+  | 'wallet.addValuePlaceholder'
+  | 'wallet.addCancel'
+  | 'wallet.addSubmit'
+  | 'wallet.kind.email'
+  | 'wallet.kind.domain'
+  | 'wallet.kind.phone'
+  | 'wallet.kind.ssn'
+  | 'wallet.kind.cc'
   | 'wallet.empty.first'
   | 'wallet.empty.searchPrefix'
   | 'wallet.clearSearch'
@@ -270,6 +273,7 @@ export type MessageKey =
   | 'wallet.meta.revokedFrom'
   | 'wallet.meta.notShared'
   | 'wallet.meta.lastSeen'
+  | 'wallet.error.invalidRequest'
   | 'wallet.error.unreachable'
   | 'wallet.error.daemon'
   | 'wallet.error.unknown'
@@ -282,6 +286,10 @@ export type MessageKey =
   | 'walletDetail.lastSeen'
   | 'walletDetail.firstSeen'
   | 'walletDetail.reference'
+  | 'walletDetail.remove'
+  | 'walletDetail.removeConfirm'
+  | 'walletDetail.removeCancel'
+  | 'walletDetail.confirmRemove'
   | 'walletDetail.error.missing'
   | 'walletDetail.error.grantFailed'
   | 'walletDetail.error.revokeFailed'
@@ -322,23 +330,11 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'nav.pendingRequests': 'pending requests',
     'nav.insights': 'Insights',
     'nav.wallet': 'Wallet',
-    'nav.allowed': 'Allowed',
     'nav.activity': 'Activity',
     'nav.more': 'more',
     'nav.settings': 'Settings',
     'nav.system': 'System log',
     'nav.health': 'Health',
-    'allowed.aria': 'allowed data',
-    'allowed.heading': 'Allowed Data',
-    'allowed.empty': 'nothing allowed through',
-    'allowed.searchAria': 'filter allowed values',
-    'allowed.searchPlaceholder': 'actor, kind, value…',
-    'allowed.tryAgain': 'try again',
-    'allowed.loadingReason': 'reading allowed grants',
-    'allowed.expiredDisclosure': 'show expired',
-    'allowed.stopAllowing': 'stop allowing',
-    'allowed.until': 'until',
-    'allowed.error.unknown': 'we couldn’t read allowed grants. Try again.',
     'insights.aria': 'DAM insights',
     'insights.heading': 'Insights',
     'insights.range.today': 'today',
@@ -428,8 +424,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'request.allowOnce': 'allow once',
     'request.allowAlways': 'allow + remember',
     'request.deny': 'deny',
-    'connect.grants': 'grants',
-    'connect.grantsAria': 'open active grants',
+    'connect.grants': 'allowed',
+    'connect.grantsAria': 'open allowed wallet values',
     'connect.redactedToday': 'redacted today',
     'connect.redactedTodayAria': 'open redacted activity',
     'connect.appsMediated': 'apps mediated',
@@ -618,6 +614,21 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'wallet.heading': 'Wallet',
     'wallet.searchAria': 'filter wallet values',
     'wallet.searchPlaceholder': 'email, phone, token…',
+    'wallet.filterAria': 'filter wallet state',
+    'wallet.filter.all': 'all',
+    'wallet.filter.protected': 'protected',
+    'wallet.filter.allowed': 'allowed',
+    'wallet.addValue': 'add value',
+    'wallet.addKind': 'kind',
+    'wallet.addValueLabel': 'value',
+    'wallet.addValuePlaceholder': 'value to protect',
+    'wallet.addCancel': 'cancel',
+    'wallet.addSubmit': 'add',
+    'wallet.kind.email': 'email',
+    'wallet.kind.domain': 'domain',
+    'wallet.kind.phone': 'phone',
+    'wallet.kind.ssn': 'SSN',
+    'wallet.kind.cc': 'credit card',
     'wallet.empty.first': 'nothing in your wallet yet',
     'wallet.empty.searchPrefix': 'no value matches',
     'wallet.clearSearch': 'clear',
@@ -627,6 +638,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'wallet.meta.revokedFrom': 'revoked from',
     'wallet.meta.notShared': 'not shared with anyone',
     'wallet.meta.lastSeen': 'last seen',
+    'wallet.error.invalidRequest': 'choose a kind and enter a value.',
     'wallet.error.unreachable': 'we couldn’t load your wallet.',
     'wallet.error.daemon': 'we can’t reach DAM right now.',
     'wallet.error.unknown': 'something didn’t work loading your wallet.',
@@ -639,6 +651,11 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'walletDetail.lastSeen': 'last seen',
     'walletDetail.firstSeen': 'first seen',
     'walletDetail.reference': 'reference',
+    'walletDetail.remove': 'remove from wallet',
+    'walletDetail.removeConfirm':
+      'Remove this value from your wallet? Active access for it will stop first.',
+    'walletDetail.removeCancel': 'cancel',
+    'walletDetail.confirmRemove': 'remove',
     'walletDetail.error.missing': 'this value isn’t in your wallet anymore.',
     'walletDetail.error.grantFailed':
       'we couldn’t allow that — try once more.',
@@ -684,23 +701,11 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'nav.pendingRequests': 'demandes en attente',
     'nav.insights': 'Aperçu',
     'nav.wallet': 'Portefeuille',
-    'nav.allowed': 'Autorisés',
     'nav.activity': 'Activité',
     'nav.more': 'plus',
     'nav.settings': 'Réglages',
     'nav.system': 'Journal système',
     'nav.health': 'Santé',
-    'allowed.aria': 'données autorisées',
-    'allowed.heading': 'Données autorisées',
-    'allowed.empty': 'rien n’est autorisé',
-    'allowed.searchAria': 'filtrer les valeurs autorisées',
-    'allowed.searchPlaceholder': 'acteur, type, valeur…',
-    'allowed.tryAgain': 'réessayer',
-    'allowed.loadingReason': 'lecture des autorisations',
-    'allowed.expiredDisclosure': 'afficher les expirées',
-    'allowed.stopAllowing': 'cesser d’autoriser',
-    'allowed.until': 'jusqu’au',
-    'allowed.error.unknown': 'lecture impossible pour l’instant. Réessayez.',
     'insights.aria': 'Aperçu DAM',
     'insights.heading': 'Aperçu',
     'insights.range.today': 'aujourd’hui',
@@ -790,8 +795,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'request.allowOnce': 'autoriser une fois',
     'request.allowAlways': 'autoriser et mémoriser',
     'request.deny': 'refuser',
-    'connect.grants': 'autorisations',
-    'connect.grantsAria': 'voir les autorisations actives',
+    'connect.grants': 'autorisés',
+    'connect.grantsAria': 'voir les valeurs autorisées du portefeuille',
     'connect.redactedToday': 'masqués aujourd’hui',
     'connect.redactedTodayAria': 'voir l’activité masquée',
     'connect.appsMediated': 'apps encadrées',
@@ -981,6 +986,21 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'wallet.heading': 'Portefeuille',
     'wallet.searchAria': 'filtrer les valeurs du portefeuille',
     'wallet.searchPlaceholder': 'email, téléphone, jeton…',
+    'wallet.filterAria': 'filtrer l’état du portefeuille',
+    'wallet.filter.all': 'tout',
+    'wallet.filter.protected': 'protégés',
+    'wallet.filter.allowed': 'autorisés',
+    'wallet.addValue': 'ajouter une valeur',
+    'wallet.addKind': 'type',
+    'wallet.addValueLabel': 'valeur',
+    'wallet.addValuePlaceholder': 'valeur à protéger',
+    'wallet.addCancel': 'annuler',
+    'wallet.addSubmit': 'ajouter',
+    'wallet.kind.email': 'email',
+    'wallet.kind.domain': 'domaine',
+    'wallet.kind.phone': 'téléphone',
+    'wallet.kind.ssn': 'NAS',
+    'wallet.kind.cc': 'carte',
     'wallet.empty.first': 'rien dans votre portefeuille pour l’instant',
     'wallet.empty.searchPrefix': 'aucune valeur ne correspond à',
     'wallet.clearSearch': 'effacer',
@@ -990,6 +1010,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'wallet.meta.revokedFrom': 'révoqué pour',
     'wallet.meta.notShared': 'pas partagé',
     'wallet.meta.lastSeen': 'vu pour la dernière fois',
+    'wallet.error.invalidRequest':
+      'choisissez un type et entrez une valeur.',
     'wallet.error.unreachable': 'le portefeuille n’a pas pu être chargé.',
     'wallet.error.daemon': 'DAM est injoignable pour l’instant.',
     'wallet.error.unknown':
@@ -1003,6 +1025,11 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'walletDetail.lastSeen': 'vu pour la dernière fois',
     'walletDetail.firstSeen': 'vu pour la première fois',
     'walletDetail.reference': 'référence',
+    'walletDetail.remove': 'retirer du portefeuille',
+    'walletDetail.removeConfirm':
+      'Retirer cette valeur du portefeuille ? Les accès actifs seront arrêtés avant.',
+    'walletDetail.removeCancel': 'annuler',
+    'walletDetail.confirmRemove': 'retirer',
     'walletDetail.error.missing':
       'cette valeur n’est plus dans le portefeuille.',
     'walletDetail.error.grantFailed':

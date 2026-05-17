@@ -2,7 +2,7 @@
 
 `dam-web` is the local web UI.
 
-It is being rebuilt from the architecture specs and `RPBLC.Design`. The current React slice includes the shared web/tray app frame, the pinned brand/navigation bar, Connect, Wallet, Allowed, Activity, Insights, System, Health, and Settings.
+It is being rebuilt from the architecture specs and `RPBLC.Design`. The current React slice includes the shared web/tray app frame, the pinned brand/navigation bar, Connect, Wallet, Activity, Insights, System, Health, and Settings.
 
 The app frame is a React shell served from embedded `/assets/bundle.js`, `/assets/bundle.css`, and `/assets/index.html` build output.
 
@@ -11,13 +11,13 @@ The app frame is a React shell served from embedded `/assets/bundle.js`, `/asset
 ```text
 /                 Connect surface
 /connect          Connect surface
-/allowed          active, expired, and revoked consent grants
+/allowed          compatibility redirect to /wallet?state=allowed
 /activity         dam-log derived activity feed
 /settings         local preferences, integrations, and daemon controls
 /*                frame fallback
 ```
 
-The backend `/api/v1/*` routes remain available for upcoming page slices. Connect fetches `/api/v1/connect`, posts setup/action requests to `/api/v1/connect/action`, reads `/api/v1/requests/pending` while protected, and can use the local QA-only `/api/v1/requests/trigger` endpoint to simulate an inbound consent request. Agent callers can fetch `/api/v1/setup/plan` for the full setup checklist, `/api/v1/setup/next-action` for the next idempotent setup action, post `/api/v1/setup/rescue` for local setup rescue, post `/api/v1/setup/repair` for rescue plus a fresh setup plan, or fetch `/api/v1/setup/diagnostics` for an offline doctor/setup/rescue-preview bundle without depending on Connect page copy. Rescue and repair preview by default; mutating calls require `{"apply": true, "confirm": "remove_dam_network_setup"}` and leave local CA trust and vault data intact. The protected-state view reads `protected_since_unix` from `/api/v1/connect` and renders a live elapsed timer from that backend timestamp rather than keeping a client-side checkpoint. The Connect counts row is backed by live local stores: active consent grants from `dam-consent`, redaction rows for the current UTC day from `dam-log`, and enabled integration profiles from `dam-integrations`. The Connect page re-fetches `/api/v1/connect` on a short interval while mounted because proxy-written `dam-log` rows are outside `dam-web`'s in-process event bus; SSE still invalidates in-process connect state changes immediately. The tiles link to `/allowed`, `/activity?decision=sealed&since=today`, and `/settings#apps`.
+The backend `/api/v1/*` routes remain available for upcoming page slices. Connect fetches `/api/v1/connect`, posts setup/action requests to `/api/v1/connect/action`, reads `/api/v1/requests/pending` while protected, and can use the local QA-only `/api/v1/requests/trigger` endpoint to simulate an inbound consent request. Agent callers can fetch `/api/v1/setup/plan` for the full setup checklist, `/api/v1/setup/next-action` for the next idempotent setup action, post `/api/v1/setup/rescue` for local setup rescue, post `/api/v1/setup/repair` for rescue plus a fresh setup plan, or fetch `/api/v1/setup/diagnostics` for an offline doctor/setup/rescue-preview bundle without depending on Connect page copy. Rescue and repair preview by default; mutating calls require `{"apply": true, "confirm": "remove_dam_network_setup"}` and leave local CA trust and vault data intact. The protected-state view reads `protected_since_unix` from `/api/v1/connect` and renders a live elapsed timer from that backend timestamp rather than keeping a client-side checkpoint. The Connect counts row is backed by live local stores: distinct active wallet values allowed by `dam-consent`, redaction rows for the current UTC day from `dam-log`, and enabled integration profiles from `dam-integrations`. The Connect page re-fetches `/api/v1/connect` on a short interval while mounted because proxy-written `dam-log` rows are outside `dam-web`'s in-process event bus; SSE still invalidates in-process connect state changes immediately. The tiles link to `/wallet?state=allowed`, `/activity?decision=sealed&since=today`, and `/settings#apps`.
 
 When `DAM_WEB_SHELL=tray`, `dam-web` renders the tray brand bar and the same Connect page inside the hosted WebView. Browser mode renders the same app navbar. Both surfaces show `[R:] DAM`, the divider line, and the connection status mark.
 
@@ -39,11 +39,13 @@ When a proxy protection event does not carry an actor itself, `dam-web` derives 
 
 The Activity page polls this endpoint and uses catalog-driven English/French labels. The `[add]` and `[allow once]` row actions remain disabled until their wallet/consent semantics are implemented.
 
-## Allowed
+## Wallet
 
-`GET /api/v1/allowed?q=&sort=&dir=` reads `dam-consent`, groups grants into active, expired, and revoked buckets, and joins each grant to `dam-vault` when the grant has a vault key. Grants without a resolvable vault value render a safe bracketed grant label instead of exposing the stored fingerprint.
+`GET /api/v1/wallet?q=&state=&sort=&dir=` reads `dam-vault`, joins consent state from `dam-consent`, and returns protected, allowed, revoked, and expired value rows. The React Wallet surface owns stored-value management: users can add a value directly to the vault, filter to allowed values, inspect the sharing roster, revoke access for one recorded party, protect from everyone, or remove the value from the wallet. Removing a value revokes active grants for that vault key before deleting the vault row.
 
-The Allowed page uses the same English/French catalog as the rest of the React slice and is the destination for the Connect row's active-grants tile.
+`POST /api/v1/wallet` adds a stored value with `{ kind, value }`. `POST /api/v1/wallet/:key/remove` removes that vault value. Mutating wallet routes notify the Wallet and Connect event topics so the list and Connect counts refresh.
+
+`GET /api/v1/allowed?q=&sort=&dir=` remains as a compatibility/headless API that reads `dam-consent`, groups grants into active, expired, and revoked buckets, and joins each grant to `dam-vault` when the grant has a vault key. The old Allowed React page has been removed; `/allowed` redirects to `/wallet?state=allowed`.
 
 ## Settings
 
@@ -114,7 +116,7 @@ The full Lingui catalog flow in the architecture is not wired yet. The current U
 
 ## Security Posture
 
-This UI displays vault values in clear text and can allow/protect canonical values. Treat it as a local development/admin tool, not a public-facing service.
+This UI displays vault values in clear text and can add, remove, allow, and protect canonical values. Treat it as a local development/admin tool, not a public-facing service.
 
 Connect/settings mutation routes are POST-only and use the same local Host and Origin/Referer guardrails as consent mutation routes.
 

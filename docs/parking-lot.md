@@ -69,6 +69,16 @@ Parked work:
 - Keep OpenAI, Anthropic, Codex, and arbitrary websites as bundled or user-created profiles that consume generic adapters, not as a reason to add provider crates.
 - Add profile-builder validation so unsupported payloads, unsafe upstreams, secrets, and body-signature requirements are surfaced before a user enables a custom config.
 
+## Provider-Scoped Consent UI
+
+Current state: Wallet can add/remove stored values and revoke/protect existing consent records. `dam-consent` enforcement is still canonical-value scoped; `created_by` is audit/UI metadata and not an isolation boundary for one provider/profile.
+
+Parked work:
+
+- Add an enforceable profile/target dimension to consent matching before exposing "allow this value for provider X" or "allow this value for all providers" in Wallet.
+- Update the Wallet allow chooser only after the backend can enforce the selected scope.
+- Add tests proving a provider-scoped grant cannot be reused by another configured profile.
+
 ## Security And Privacy Design Work
 
 ### Full-Device Routing And TLS Trust

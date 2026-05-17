@@ -36,6 +36,25 @@ fn active_grants_count_uses_current_unrevoked_consents() {
 }
 
 #[test]
+fn active_grants_count_collapses_multiple_parties_for_same_wallet_value() {
+    let store = dam_consent::ConsentStore::open_in_memory().unwrap();
+    for actor in ["Claude Code", "Codex"] {
+        store
+            .grant(&dam_consent::GrantConsent {
+                kind: dam_core::SensitiveType::Email,
+                value: "ada@example.test".to_string(),
+                vault_key: Some("email:1111111111111111111111".to_string()),
+                ttl_seconds: 60,
+                created_by: actor.to_string(),
+                reason: None,
+            })
+            .unwrap();
+    }
+
+    assert_eq!(active_grants_count(Some(&store)), 1);
+}
+
+#[test]
 fn redacted_today_count_uses_current_utc_day_redaction_rows() {
     let today = 2 * 86_400 + 60;
     let yesterday = today - 86_400;

@@ -27,8 +27,8 @@ export type ValueDetailProps = {
   meta?: ValueDetailMetaItem[]
   /** Parties currently allowed. Renders the sharing roster. */
   sharedWith?: ValueDetailParty[]
-  /** Default candidate party for the "allow" action when state is
-   *  protected/revoked and no party is explicit. */
+  /** Candidate party for the "allow" action. Omit on generic wallet browsing;
+   *  live request surfaces pass the requesting app/provider explicitly. */
   candidateParty?: string
   /** Called when the user confirms allowing a party. */
   onAllow?: (party: string) => void
@@ -63,7 +63,7 @@ export function ValueDetail({
   state,
   meta,
   sharedWith = [],
-  candidateParty = 'anthropic',
+  candidateParty,
   onAllow,
   onRevoke,
   onProtectAll,
@@ -145,12 +145,13 @@ function ActionRegion({
   onChoose,
 }: {
   state: ProtectionState
-  candidateParty: string
+  candidateParty?: string
   firstSharedParty?: string
   onChoose: (p: Pending) => void
 }) {
   if (state === 'allowed') {
     const party = firstSharedParty ?? candidateParty
+    if (!party) return null
     return (
       <div className="rpblc-value-detail__actions">
         <p className="rpblc-value-detail__hint">
@@ -184,15 +185,17 @@ function ActionRegion({
           ? 'This value is protected. Nothing outside your local vault can read it.'
           : 'This value is protected again. Past sharing is logged in the audit trail.'}
       </p>
-      <div className="rpblc-value-detail__actions-row">
-        <Button
-          variant="primary"
-          bracketed
-          onClick={() => onChoose({ kind: 'allow', party: candidateParty })}
-        >
-          allow {candidateParty} to read this
-        </Button>
-      </div>
+      {candidateParty ? (
+        <div className="rpblc-value-detail__actions-row">
+          <Button
+            variant="primary"
+            bracketed
+            onClick={() => onChoose({ kind: 'allow', party: candidateParty })}
+          >
+            allow {candidateParty} to read this
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }

@@ -46,6 +46,7 @@ DAM_CONSENT_MCP_WRITE_ENABLED
 - Active consent applies to previously tokenized outbound DAM references when the configured vault can read the stored value and the stored value still has active consent.
 - Expired or revoked consent does not affect policy.
 - Revoking a consent id revokes all unrevoked grants for the same `kind + value_fingerprint + scope`, so duplicate vault rows for the same canonical value cannot keep passthrough alive.
+- Wallet mutations may revoke by stable `vault_key`, either for every recorded party on that value or for one `created_by` audit label. Current enforcement is still canonical-value scoped: `created_by` is audit/UI metadata, not a provider isolation boundary.
 - Consent emits a non-sensitive `consent` log event when it allows a value.
 - The SQLite store keeps `id`, `kind`, `value_fingerprint`, optional `vault_key`, TTL timestamps, source, and optional reason.
 

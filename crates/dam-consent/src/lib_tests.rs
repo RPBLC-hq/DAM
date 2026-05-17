@@ -136,6 +136,57 @@ fn expired_consent_does_not_match() {
 }
 
 #[test]
+fn revoke_for_vault_key_can_target_one_party_or_everyone() {
+    let store = ConsentStore::open_in_memory().unwrap();
+    let vault_key = "email:1111111111111111111111";
+
+    store
+        .grant(&GrantConsent {
+            kind: SensitiveType::Email,
+            value: "alex@example.com".into(),
+            vault_key: Some(vault_key.into()),
+            ttl_seconds: 60,
+            created_by: "Claude Code".into(),
+            reason: None,
+        })
+        .unwrap();
+    store
+        .grant(&GrantConsent {
+            kind: SensitiveType::Email,
+            value: "alex@example.com".into(),
+            vault_key: Some(vault_key.into()),
+            ttl_seconds: 60,
+            created_by: "Codex".into(),
+            reason: None,
+        })
+        .unwrap();
+
+    assert_eq!(
+        store
+            .revoke_for_vault_key_and_created_by(vault_key, "Claude Code")
+            .unwrap(),
+        1
+    );
+    let active = store
+        .list()
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.revoked_at.is_none())
+        .map(|entry| entry.created_by)
+        .collect::<Vec<_>>();
+    assert_eq!(active, vec!["Codex"]);
+
+    assert_eq!(store.revoke_for_vault_key(vault_key).unwrap(), 1);
+    assert!(
+        store
+            .list()
+            .unwrap()
+            .into_iter()
+            .all(|entry| entry.revoked_at.is_some())
+    );
+}
+
+#[test]
 fn grants_from_vault_reference_without_storing_raw_value() {
     let vault = dam_vault::Vault::open_in_memory().unwrap();
     let store = ConsentStore::open_in_memory().unwrap();

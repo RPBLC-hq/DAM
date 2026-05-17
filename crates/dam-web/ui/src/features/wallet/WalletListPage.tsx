@@ -6,22 +6,25 @@ import {
   useRef,
   useState,
 } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Button,
+  Dropdown,
   EmptyTile,
   ErrorTile,
+  Input,
   RedactionLoader,
   SearchBar,
+  SegmentedControl,
   WalletCard,
   type WalletCardState,
 } from '@rpblc/design'
 
-import { ApiError, api } from '@/lib/api/client'
+import { ApiError, api, apiPost } from '@/lib/api/client'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { resolveSurface } from '@/lib/surface'
-import { useUrlSearchString } from '@/lib/url-search'
-import type { WalletItem, WalletList } from './types'
+import { useUrlSearchParam, useUrlSearchString } from '@/lib/url-search'
+import type { WalletDetail, WalletItem, WalletList } from './types'
 import { WalletInlineDetail } from './WalletInlineDetail'
 
 // Animation duration for the inline-detail expand/collapse. Must be
@@ -30,16 +33,25 @@ import { WalletInlineDetail } from './WalletInlineDetail'
 // close transition. The 40ms buffer absorbs any frame jitter and
 // prevents the content from unmounting just before the visual end.
 const INLINE_DETAIL_ANIM_MS = 460
+type WalletKind = 'email' | 'domain' | 'phone' | 'ssn' | 'cc'
+type WalletFilter = 'all' | 'protected' | 'allowed'
 
 export function WalletListPage() {
   const { t, locale } = useI18n()
+  const queryClient = useQueryClient()
   const surface = resolveSurface()
   // The wallet's `?q=` search param is URL-stable so refresh, share,
   // and the Insights kind-leaderboard's deep link all preserve filter
   // state. Tray uses a memory router; the helper degrades to a noop on
   // memory history because there is no real URL to update.
   const [query, setQuery] = useUrlSearchString('q')
+  const [stateFilter, setStateFilter] = useUrlSearchParam(
+    'state',
+    'all',
+    isWalletFilter,
+  )
   const [activeId, setActiveId] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
   // The CSS class `--active` is gated behind a paint frame after
   // `activeId` flips. Without that gate, React commits the new content
   // and the `--active` class in a single paint, the browser starts at
@@ -68,9 +80,21 @@ export function WalletListPage() {
   }, [surface])
 
   const wallet = useQuery({
-    queryKey: ['wallet', { q: query }],
+    queryKey: ['wallet', { q: query, state: stateFilter }],
     queryFn: ({ signal }) =>
-      api<WalletList>(walletPath(query), { signal }),
+      api<WalletList>(walletPath(query, stateFilter), { signal }),
+  })
+
+  const addValue = useMutation({
+    mutationFn: (body: { kind: WalletKind; value: string }) =>
+      apiPost<WalletDetail>('/wallet', body),
+    onSuccess: (detail) => {
+      setAdding(false)
+      setStateFilter('all')
+      setActiveId(detail.item.id)
+      void queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      void queryClient.invalidateQueries({ queryKey: ['connect'] })
+    },
   })
 
   const items = wallet.data?.items ?? []
@@ -186,8 +210,35 @@ export function WalletListPage() {
                 : undefined
             }
           />
+          <Button
+            variant={adding ? 'ghost' : 'secondary'}
+            size="sm"
+            bracketed
+            type="button"
+            onClick={() => setAdding((open) => !open)}
+          >
+            {t('wallet.addValue')}
+          </Button>
         </div>
+        <SegmentedControl
+          value={stateFilter}
+          onValueChange={setStateFilter}
+          options={walletFilterOptions(t)}
+          aria-label={t('wallet.filterAria')}
+        />
       </header>
+
+      {adding && (
+        <AddValueForm
+          pending={addValue.isPending}
+          errorCode={addValue.error instanceof ApiError ? addValue.error.message : undefined}
+          onCancel={() => {
+            addValue.reset()
+            setAdding(false)
+          }}
+          onSubmit={(kind, value) => addValue.mutate({ kind, value })}
+        />
+      )}
 
       <div className="dam-wallet__list" ref={listRef}>
         {wallet.isPending ? (
@@ -222,7 +273,19 @@ export function WalletListPage() {
               }
             />
           ) : (
-            <EmptyTile message={t('wallet.empty.first')} />
+            <EmptyTile
+              message={t('wallet.empty.first')}
+              action={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  onClick={() => setAdding(true)}
+                >
+                  {t('wallet.addValue')}
+                </Button>
+              }
+            />
           )
         ) : (
           items.map((item) => {
@@ -254,6 +317,57 @@ export function WalletListPage() {
         )}
       </div>
     </section>
+  )
+}
+
+function AddValueForm({
+  pending,
+  errorCode,
+  onCancel,
+  onSubmit,
+}: {
+  pending: boolean
+  errorCode?: string
+  onCancel: () => void
+  onSubmit: (kind: WalletKind, value: string) => void
+}) {
+  const { t } = useI18n()
+  const [kind, setKind] = useState<WalletKind>('email')
+  const [value, setValue] = useState('')
+  return (
+    <form
+      className="dam-wallet__add"
+      onSubmit={(event) => {
+        event.preventDefault()
+        const trimmed = value.trim()
+        if (!trimmed || pending) return
+        onSubmit(kind, trimmed)
+      }}
+    >
+      <Dropdown
+        size="sm"
+        label={t('wallet.addKind')}
+        value={kind}
+        onValueChange={(next) => setKind(next as WalletKind)}
+        items={walletKindOptions(t)}
+      />
+      <Input
+        label={t('wallet.addValueLabel')}
+        value={value}
+        onChange={(event) => setValue(event.currentTarget.value)}
+        placeholder={t('wallet.addValuePlaceholder')}
+        disabled={pending}
+      />
+      <div className="dam-wallet__add-actions">
+        <Button variant="ghost" size="sm" type="button" disabled={pending} onClick={onCancel}>
+          {t('wallet.addCancel')}
+        </Button>
+        <Button variant="primary" size="sm" bracketed type="submit" disabled={pending || !value.trim()}>
+          {t('wallet.addSubmit')}
+        </Button>
+      </div>
+      {errorCode && <p className="dam-wallet__add-error">{t(walletMutationErrorKey(errorCode))}</p>}
+    </form>
   )
 }
 
@@ -327,15 +441,47 @@ function renderMeta(item: WalletItem, t: (key: MessageKey) => string) {
   return null
 }
 
-function walletPath(query: string): string {
+function walletPath(query: string, state: WalletFilter): string {
+  const params = new URLSearchParams()
   const trimmed = query.trim()
-  return trimmed ? `/wallet?q=${encodeURIComponent(trimmed)}` : '/wallet'
+  if (trimmed) params.set('q', trimmed)
+  if (state !== 'all') params.set('state', state)
+  const search = params.toString()
+  return search ? `/wallet?${search}` : '/wallet'
 }
 
 function errorMessageKey(code: string | undefined): MessageKey {
   if (code === 'wallet_unreachable') return 'wallet.error.unreachable'
   if (code === 'daemon_unreachable') return 'wallet.error.daemon'
   return 'wallet.error.unknown'
+}
+
+function walletMutationErrorKey(code: string | undefined): MessageKey {
+  if (code === 'invalid_request') return 'wallet.error.invalidRequest'
+  if (code === 'wallet_unreachable') return 'wallet.error.unreachable'
+  return 'wallet.error.unknown'
+}
+
+function walletKindOptions(t: (key: MessageKey) => string) {
+  return [
+    { value: 'email', label: t('wallet.kind.email') },
+    { value: 'domain', label: t('wallet.kind.domain') },
+    { value: 'phone', label: t('wallet.kind.phone') },
+    { value: 'ssn', label: t('wallet.kind.ssn') },
+    { value: 'cc', label: t('wallet.kind.cc') },
+  ] satisfies Array<{ value: WalletKind; label: string }>
+}
+
+function walletFilterOptions(t: (key: MessageKey) => string) {
+  return [
+    { value: 'all', label: t('wallet.filter.all') },
+    { value: 'protected', label: t('wallet.filter.protected') },
+    { value: 'allowed', label: t('wallet.filter.allowed') },
+  ] satisfies Array<{ value: WalletFilter; label: string }>
+}
+
+function isWalletFilter(value: string): value is WalletFilter {
+  return value === 'all' || value === 'protected' || value === 'allowed'
 }
 
 function cssEscape(value: string): string {

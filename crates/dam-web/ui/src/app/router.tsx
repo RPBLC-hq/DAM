@@ -10,7 +10,6 @@ import {
 
 import { AppShell } from '@/layouts/AppShell'
 import { ActivityPage } from '@/features/activity/ActivityPage'
-import { AllowedPage } from '@/features/allowed/AllowedPage'
 import { ConnectPage } from '@/features/connect/ConnectPage'
 import { HealthPage } from '@/features/health/HealthPage'
 import { InsightsPage } from '@/features/insights/InsightsPage'
@@ -87,7 +86,9 @@ const walletRoute = new Route({
 const allowedRoute = new Route({
   getParentRoute: () => shellRoute,
   path: '/allowed',
-  component: AllowedPage,
+  beforeLoad: () => {
+    throw redirect({ to: '/wallet', search: { state: 'allowed' } })
+  },
 })
 
 const settingsRoute = new Route({

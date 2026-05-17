@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Button,
@@ -48,23 +48,44 @@ export function WalletInlineDetail({ id, seed }: { id: string; seed: WalletItem 
       apiPost<WalletDetail>(`/wallet/${encodeURIComponent(id)}/allow`, {
         party,
       }),
-    onSuccess: (next) => queryClient.setQueryData(queryKey, next),
+    onSuccess: (next) => {
+      queryClient.setQueryData(queryKey, next)
+      void queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      void queryClient.invalidateQueries({ queryKey: ['connect'] })
+    },
   })
   const revoke = useMutation({
     mutationFn: (party: string) =>
       apiPost<WalletDetail>(`/wallet/${encodeURIComponent(id)}/revoke`, {
         party,
       }),
-    onSuccess: (next) => queryClient.setQueryData(queryKey, next),
+    onSuccess: (next) => {
+      queryClient.setQueryData(queryKey, next)
+      void queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      void queryClient.invalidateQueries({ queryKey: ['connect'] })
+    },
   })
   const protectAll = useMutation({
     mutationFn: () =>
       apiPost<WalletDetail>(`/wallet/${encodeURIComponent(id)}/protect`, {}),
-    onSuccess: (next) => queryClient.setQueryData(queryKey, next),
+    onSuccess: (next) => {
+      queryClient.setQueryData(queryKey, next)
+      void queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      void queryClient.invalidateQueries({ queryKey: ['connect'] })
+    },
+  })
+  const removeValue = useMutation({
+    mutationFn: () =>
+      apiPost<{ id: string }>(`/wallet/${encodeURIComponent(id)}/remove`, {}),
+    onSuccess: () => {
+      queryClient.removeQueries({ queryKey })
+      void queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      void queryClient.invalidateQueries({ queryKey: ['connect'] })
+    },
   })
 
   const mutationError =
-    allow.error ?? revoke.error ?? protectAll.error ?? null
+    allow.error ?? revoke.error ?? protectAll.error ?? removeValue.error ?? null
   const mutationCode =
     mutationError instanceof ApiError ? mutationError.message : undefined
 
@@ -120,6 +141,11 @@ export function WalletInlineDetail({ id, seed }: { id: string; seed: WalletItem 
         onProtectAll={() => protectAll.mutate()}
       />
 
+      <RemoveValueAction
+        pending={removeValue.isPending}
+        onRemove={() => removeValue.mutate()}
+      />
+
       {mutationError && (
         <ErrorTile
           message={t(mutationErrorKey(mutationCode))}
@@ -132,6 +158,7 @@ export function WalletInlineDetail({ id, seed }: { id: string; seed: WalletItem 
                 allow.reset()
                 revoke.reset()
                 protectAll.reset()
+                removeValue.reset()
               }}
             >
               {t('walletDetail.dismiss')}
@@ -139,6 +166,57 @@ export function WalletInlineDetail({ id, seed }: { id: string; seed: WalletItem 
           }
         />
       )}
+    </div>
+  )
+}
+
+function RemoveValueAction({
+  pending,
+  onRemove,
+}: {
+  pending: boolean
+  onRemove: () => void
+}) {
+  const { t } = useI18n()
+  const [confirming, setConfirming] = useState(false)
+  if (confirming) {
+    return (
+      <div className="dam-wallet__remove-confirm">
+        <p>{t('walletDetail.removeConfirm')}</p>
+        <div className="dam-wallet__remove-actions">
+          <Button
+            variant="ghost"
+            size="sm"
+            type="button"
+            disabled={pending}
+            onClick={() => setConfirming(false)}
+          >
+            {t('walletDetail.removeCancel')}
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            bracketed
+            type="button"
+            disabled={pending}
+            onClick={onRemove}
+          >
+            {t('walletDetail.confirmRemove')}
+          </Button>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="dam-wallet__remove">
+      <Button
+        variant="danger"
+        size="sm"
+        type="button"
+        onClick={() => setConfirming(true)}
+      >
+        {t('walletDetail.remove')}
+      </Button>
     </div>
   )
 }
@@ -181,6 +259,8 @@ function detailErrorKey(code: string | undefined): MessageKey {
 function mutationErrorKey(code: string | undefined): MessageKey {
   if (code === 'consent_grant_failed') return 'walletDetail.error.grantFailed'
   if (code === 'consent_revoke_failed') return 'walletDetail.error.revokeFailed'
+  if (code === 'wallet_value_missing') return 'walletDetail.error.missing'
+  if (code === 'wallet_unreachable') return 'wallet.error.unreachable'
   if (code === 'not_implemented') return 'walletDetail.error.notImplemented'
   return 'walletDetail.error.unknown'
 }

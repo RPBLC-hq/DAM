@@ -580,7 +580,8 @@ function CountsRow({
     <ul className="dam-connect__counts" aria-label={t('connect.countsLabel')}>
       <li className="dam-connect__counts-cell--link">
         <Link
-          to="/allowed"
+          to="/wallet"
+          search={{ state: 'allowed' }}
           className="dam-connect__counts-link"
           aria-label={t('connect.grantsAria')}
         >

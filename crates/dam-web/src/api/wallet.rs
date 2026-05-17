@@ -6,10 +6,16 @@
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
+use dam_core::{Reference, SensitiveType, VaultRecord, VaultWriter};
 use serde::{Deserialize, Serialize};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::AppState;
+use crate::activity_map::day_label;
 use crate::error::{Ok, WebError, WebErrorCode, WebResult};
+use crate::events_bus::EventTopic;
+
+const DEFAULT_WALLET_GRANT_TTL_SECONDS: u64 = 365 * 24 * 60 * 60;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WalletItem {
@@ -29,7 +35,7 @@ pub struct SharedWith {
     pub since: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[allow(dead_code)]
 pub enum ItemState {
@@ -48,6 +54,7 @@ pub struct WalletList {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ListQuery {
     pub q: Option<String>,
+    pub state: Option<String>,
     pub sort: Option<String>,
     pub dir: Option<String>,
 }
@@ -60,24 +67,46 @@ pub async fn list(
         .vault
         .list()
         .map_err(|_| WebError::new(WebErrorCode::WalletUnreachable))?;
+    let consents = consent_entries(&state)?;
 
-    let q = query.q.as_deref().unwrap_or("").to_lowercase();
-    let mut items: Vec<WalletItem> = entries
-        .into_iter()
-        .map(map_entry)
-        .filter(|item| {
-            q.is_empty()
-                || item.kind.to_lowercase().contains(&q)
-                || item.value.to_lowercase().contains(&q)
-        })
-        .collect();
+    let mut items = wallet_items_from_entries(entries, &consents, &query, now_unix_secs()?);
+    let total = items.len() as u64;
 
     sort_items(&mut items, query.sort.as_deref(), query.dir.as_deref());
 
-    Ok(Ok::new(WalletList {
-        total: items.len() as u64,
-        items,
-    }))
+    Ok(Ok::new(WalletList { total, items }))
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AddWalletRequest {
+    pub kind: String,
+    pub value: String,
+}
+
+pub async fn add(
+    State(state): State<AppState>,
+    Json(body): Json<AddWalletRequest>,
+) -> WebResult<WalletDetail> {
+    let kind = parse_kind(&body.kind)?;
+    let value = body.value.trim();
+    if value.is_empty() {
+        return Err(WebError::new(WebErrorCode::InvalidRequest));
+    }
+
+    let record = VaultRecord {
+        reference: Reference::generate(kind),
+        kind,
+        value: value.to_string(),
+    };
+    let reference = state
+        .vault
+        .write(&record)
+        .map_err(|_| WebError::new(WebErrorCode::WalletUnreachable))?;
+    state.events.notify(EventTopic::WalletInvalidate);
+    state.events.notify(EventTopic::ConnectUpdate);
+
+    let detail = wallet_detail_for_key(&state, &reference.key())?;
+    Ok(Ok::new(detail))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,31 +130,7 @@ pub async fn detail(
     State(state): State<AppState>,
     Path(key): Path<String>,
 ) -> WebResult<WalletDetail> {
-    let value = state
-        .vault
-        .get(&key)
-        .map_err(|_| WebError::new(WebErrorCode::WalletUnreachable))?
-        .ok_or_else(|| WebError::new(WebErrorCode::WalletValueMissing))?;
-
-    let item = WalletItem {
-        id: key.clone(),
-        kind: kind_from_key(&key).to_string(),
-        value,
-        state: ItemState::Protected,
-        shared_with: Vec::new(),
-        last_seen: None,
-    };
-
-    Ok(Ok::new(WalletDetail {
-        meta: vec![MetaEntry {
-            key: "stored in".into(),
-            value: "local vault".into(),
-            emphasis: Some(true),
-        }],
-        first_seen: None,
-        reference: format!("[{}]", key),
-        item,
-    }))
+    Ok(Ok::new(wallet_detail_for_key(&state, &key)?))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -136,12 +141,27 @@ pub struct AllowRequest {
 }
 
 pub async fn allow(
-    State(_state): State<AppState>,
-    Path(_key): Path<String>,
+    State(state): State<AppState>,
+    Path(key): Path<String>,
     Json(body): Json<AllowRequest>,
 ) -> WebResult<WalletDetail> {
-    let _ = (body.party, body.ttl_seconds, body.reason);
-    Err(WebError::new(WebErrorCode::NotImplemented))
+    let party = body.party.trim();
+    if party.is_empty() {
+        return Err(WebError::new(WebErrorCode::InvalidRequest));
+    }
+    let store = state
+        .consent_store
+        .as_deref()
+        .ok_or_else(|| WebError::new(WebErrorCode::ConsentGrantFailed))?;
+    let ttl_seconds = body.ttl_seconds.unwrap_or(DEFAULT_WALLET_GRANT_TTL_SECONDS);
+
+    store
+        .grant_for_reference(&key, state.vault.as_ref(), ttl_seconds, party, body.reason)
+        .map_err(|_| WebError::new(WebErrorCode::ConsentGrantFailed))?;
+    state.events.notify(EventTopic::WalletInvalidate);
+    state.events.notify(EventTopic::ConnectUpdate);
+
+    Ok(Ok::new(wallet_detail_for_key(&state, &key)?))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -150,31 +170,221 @@ pub struct RevokeRequest {
 }
 
 pub async fn revoke(
-    State(_state): State<AppState>,
-    Path(_key): Path<String>,
+    State(state): State<AppState>,
+    Path(key): Path<String>,
     Json(body): Json<RevokeRequest>,
 ) -> WebResult<WalletDetail> {
-    let _ = body.party;
-    Err(WebError::new(WebErrorCode::NotImplemented))
+    let party = body.party.trim();
+    if party.is_empty() {
+        return Err(WebError::new(WebErrorCode::InvalidRequest));
+    }
+    let store = state
+        .consent_store
+        .as_deref()
+        .ok_or_else(|| WebError::new(WebErrorCode::ConsentRevokeFailed))?;
+    store
+        .revoke_for_vault_key_and_created_by(&key, party)
+        .map_err(|_| WebError::new(WebErrorCode::ConsentRevokeFailed))?;
+    state.events.notify(EventTopic::WalletInvalidate);
+    state.events.notify(EventTopic::ConnectUpdate);
+
+    Ok(Ok::new(wallet_detail_for_key(&state, &key)?))
 }
 
 pub async fn protect(
-    State(_state): State<AppState>,
-    Path(_key): Path<String>,
+    State(state): State<AppState>,
+    Path(key): Path<String>,
 ) -> WebResult<WalletDetail> {
-    Err(WebError::new(WebErrorCode::NotImplemented))
+    let store = state
+        .consent_store
+        .as_deref()
+        .ok_or_else(|| WebError::new(WebErrorCode::ConsentRevokeFailed))?;
+    store
+        .revoke_for_vault_key(&key)
+        .map_err(|_| WebError::new(WebErrorCode::ConsentRevokeFailed))?;
+    state.events.notify(EventTopic::WalletInvalidate);
+    state.events.notify(EventTopic::ConnectUpdate);
+
+    Ok(Ok::new(wallet_detail_for_key(&state, &key)?))
 }
 
-fn map_entry(entry: dam_vault::VaultEntry) -> WalletItem {
+#[derive(Debug, Clone, Serialize)]
+pub struct RemovedWalletValue {
+    pub id: String,
+}
+
+pub async fn remove(
+    State(state): State<AppState>,
+    Path(key): Path<String>,
+) -> WebResult<RemovedWalletValue> {
+    if let Some(store) = state.consent_store.as_deref() {
+        store
+            .revoke_for_vault_key(&key)
+            .map_err(|_| WebError::new(WebErrorCode::ConsentRevokeFailed))?;
+    }
+    let deleted = state
+        .vault
+        .delete(&key)
+        .map_err(|_| WebError::new(WebErrorCode::WalletUnreachable))?;
+    if !deleted {
+        return Err(WebError::new(WebErrorCode::WalletValueMissing));
+    }
+    state.events.notify(EventTopic::WalletInvalidate);
+    state.events.notify(EventTopic::ConnectUpdate);
+
+    Ok(Ok::new(RemovedWalletValue { id: key }))
+}
+
+fn wallet_detail_for_key(state: &AppState, key: &str) -> Result<WalletDetail, WebError> {
+    let entry = state
+        .vault
+        .list()
+        .map_err(|_| WebError::new(WebErrorCode::WalletUnreachable))?
+        .into_iter()
+        .find(|entry| entry.key == key)
+        .ok_or_else(|| WebError::new(WebErrorCode::WalletValueMissing))?;
+    let consents = consent_entries(state)?;
+    Ok(wallet_detail_from_entry(entry, &consents, now_unix_secs()?))
+}
+
+fn consent_entries(state: &AppState) -> Result<Vec<dam_consent::ConsentEntry>, WebError> {
+    match state.consent_store.as_deref() {
+        Some(store) => store
+            .list()
+            .map_err(|_| WebError::new(WebErrorCode::ConsentGrantFailed)),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn wallet_items_from_entries(
+    entries: Vec<dam_vault::VaultEntry>,
+    consents: &[dam_consent::ConsentEntry],
+    query: &ListQuery,
+    now: i64,
+) -> Vec<WalletItem> {
+    let q = query.q.as_deref().unwrap_or("").to_lowercase();
+    let state_filter = query.state.as_deref().and_then(parse_state_filter);
+    entries
+        .into_iter()
+        .map(|entry| wallet_item_from_entry(entry, consents, now))
+        .filter(|item| {
+            state_filter.is_none_or(|state| item.state == state)
+                && (q.is_empty()
+                    || item.kind.to_lowercase().contains(&q)
+                    || item.value.to_lowercase().contains(&q)
+                    || item
+                        .shared_with
+                        .iter()
+                        .any(|party| party.name.to_lowercase().contains(&q)))
+        })
+        .collect()
+}
+
+fn wallet_detail_from_entry(
+    entry: dam_vault::VaultEntry,
+    consents: &[dam_consent::ConsentEntry],
+    now: i64,
+) -> WalletDetail {
+    let reference = format!("[{}]", entry.key);
+    let first_seen = Some(day_label(entry.created_at));
+    WalletDetail {
+        item: wallet_item_from_entry(entry, consents, now),
+        meta: vec![MetaEntry {
+            key: "stored in".into(),
+            value: "local vault".into(),
+            emphasis: Some(true),
+        }],
+        first_seen,
+        reference,
+    }
+}
+
+fn wallet_item_from_entry(
+    entry: dam_vault::VaultEntry,
+    consents: &[dam_consent::ConsentEntry],
+    now: i64,
+) -> WalletItem {
     let id = entry.key.clone();
     let kind = kind_from_key(&entry.key).to_string();
+    let related = related_consents(&entry.key, consents);
+    let active = related
+        .iter()
+        .copied()
+        .filter(|entry| entry.is_active_at(now))
+        .collect::<Vec<_>>();
+    let shared_with = if active.is_empty() {
+        latest_related_party(&related)
+            .into_iter()
+            .map(shared_with_from_consent)
+            .collect()
+    } else {
+        active.into_iter().map(shared_with_from_consent).collect()
+    };
+    let state = wallet_item_state(&related, now);
     WalletItem {
         id,
         kind,
         value: entry.value,
-        state: ItemState::Protected,
-        shared_with: Vec::new(),
+        state,
+        shared_with,
         last_seen: None,
+    }
+}
+
+fn related_consents<'a>(
+    vault_key: &str,
+    consents: &'a [dam_consent::ConsentEntry],
+) -> Vec<&'a dam_consent::ConsentEntry> {
+    let mut related = consents
+        .iter()
+        .filter(|entry| entry.vault_key.as_deref() == Some(vault_key))
+        .collect::<Vec<_>>();
+    related.sort_by(|a, b| {
+        b.created_at
+            .cmp(&a.created_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    related
+}
+
+fn wallet_item_state(consents: &[&dam_consent::ConsentEntry], now: i64) -> ItemState {
+    if consents.iter().any(|entry| entry.is_active_at(now)) {
+        return ItemState::Allowed;
+    }
+    if let Some(latest) = consents.first() {
+        return match latest.status_at(now) {
+            "revoked" => ItemState::Revoked,
+            "expired" => ItemState::Expired,
+            _ => ItemState::Protected,
+        };
+    }
+    ItemState::Protected
+}
+
+fn latest_related_party<'a>(
+    related: &[&'a dam_consent::ConsentEntry],
+) -> Option<&'a dam_consent::ConsentEntry> {
+    related.first().copied()
+}
+
+fn shared_with_from_consent(entry: &dam_consent::ConsentEntry) -> SharedWith {
+    SharedWith {
+        name: entry.created_by.clone(),
+        since: Some(day_label(entry.created_at)),
+    }
+}
+
+fn parse_kind(value: &str) -> Result<SensitiveType, WebError> {
+    SensitiveType::from_tag(value.trim()).ok_or_else(|| WebError::new(WebErrorCode::InvalidRequest))
+}
+
+fn parse_state_filter(value: &str) -> Option<ItemState> {
+    match value {
+        "protected" => Some(ItemState::Protected),
+        "allowed" => Some(ItemState::Allowed),
+        "revoked" => Some(ItemState::Revoked),
+        "expired" => Some(ItemState::Expired),
+        _ => None,
     }
 }
 
@@ -192,6 +402,13 @@ fn sort_items(items: &mut [WalletItem], sort: Option<&str>, dir: Option<&str>) {
     if descending {
         items.reverse();
     }
+}
+
+fn now_unix_secs() -> Result<i64, WebError> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| WebError::new(WebErrorCode::Unknown))?;
+    Ok(duration.as_secs() as i64)
 }
 
 #[cfg(test)]
