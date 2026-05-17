@@ -715,6 +715,46 @@ body {
   background: var(--panel);
 }
 
+.dam-wallet__allow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: var(--border-1) solid var(--line);
+}
+
+.dam-wallet__allow-head,
+.dam-wallet__allow-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.dam-wallet__allow-head h2 {
+  margin: 0;
+  color: var(--bright);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.dam-wallet__allow-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--space-3);
+}
+
+.dam-wallet__allow-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .dam-wallet__remove {
   display: flex;
   justify-content: flex-start;

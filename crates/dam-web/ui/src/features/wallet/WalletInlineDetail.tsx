@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Button,
   ErrorTile,
   RedactionLoader,
+  Toggle,
   ValueDetail,
   type ProtectionState,
   type ValueDetailMetaItem,
@@ -12,6 +13,24 @@ import {
 import { ApiError, api, apiPost } from '@/lib/api/client'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import type { WalletDetail, WalletItem } from './types'
+
+type AllowGrant = {
+  party: string
+  scope?: 'global'
+  profile_id?: string
+}
+
+type SettingsView = {
+  apps: AppSetting[]
+}
+
+type AppSetting = {
+  id: string
+  name: string
+  enabled: boolean
+}
+
+const ALL_PROFILES_PARTY = 'All profiles'
 
 /**
  * WalletInlineDetail — the detail surface that expands under an active
@@ -44,10 +63,18 @@ export function WalletInlineDetail({ id, seed }: { id: string; seed: WalletItem 
   })
 
   const allow = useMutation({
-    mutationFn: (party: string) =>
-      apiPost<WalletDetail>(`/wallet/${encodeURIComponent(id)}/allow`, {
-        party,
-      }),
+    mutationFn: async (grantOrGrants: AllowGrant | AllowGrant[]) => {
+      const grants = Array.isArray(grantOrGrants) ? grantOrGrants : [grantOrGrants]
+      let latest: WalletDetail | undefined
+      for (const grant of grants) {
+        latest = await apiPost<WalletDetail>(
+          `/wallet/${encodeURIComponent(id)}/allow`,
+          grant,
+        )
+      }
+      if (!latest) throw new Error('no grants selected')
+      return latest
+    },
     onSuccess: (next) => {
       queryClient.setQueryData(queryKey, next)
       void queryClient.invalidateQueries({ queryKey: ['wallet'] })
@@ -136,9 +163,15 @@ export function WalletInlineDetail({ id, seed }: { id: string; seed: WalletItem 
           name: s.name,
           since: s.since,
         }))}
-        onAllow={(party) => allow.mutate(party)}
+        onAllow={(party) => allow.mutate({ party })}
         onRevoke={(party) => revoke.mutate(party)}
         onProtectAll={() => protectAll.mutate()}
+      />
+
+      <AllowProfilesAction
+        detail={detail.data}
+        pending={allow.isPending}
+        onAllow={(grants) => allow.mutate(grants)}
       />
 
       <RemoveValueAction
@@ -165,6 +198,138 @@ export function WalletInlineDetail({ id, seed }: { id: string; seed: WalletItem 
             </Button>
           }
         />
+      )}
+    </div>
+  )
+}
+
+function AllowProfilesAction({
+  detail,
+  pending,
+  onAllow,
+}: {
+  detail: WalletDetail
+  pending: boolean
+  onAllow: (grants: AllowGrant | AllowGrant[]) => void
+}) {
+  const { t } = useI18n()
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
+  const settings = useQuery({
+    queryKey: ['settings'],
+    queryFn: ({ signal }) => api<SettingsView>('/settings', { signal }),
+  })
+  const allProfilesParty = ALL_PROFILES_PARTY
+  const allowedNames = useMemo(
+    () => new Set(detail.item.shared_with.map((party) => party.name)),
+    [detail.item.shared_with],
+  )
+  const availableProfiles = useMemo(
+    () =>
+      (settings.data?.apps ?? []).filter(
+        (app) => !allowedNames.has(app.name),
+      ),
+    [allowedNames, settings.data?.apps],
+  )
+
+  useEffect(() => {
+    setSelected((current) => {
+      const availableIds = new Set(availableProfiles.map((app) => app.id))
+      const next = new Set(
+        [...current].filter((id) => availableIds.has(id)),
+      )
+      return next.size === current.size ? current : next
+    })
+  }, [availableProfiles])
+
+  if (allowedNames.has(allProfilesParty)) {
+    return null
+  }
+
+  const selectedProfiles = availableProfiles.filter((app) => selected.has(app.id))
+  const toggleProfile = (id: string, checked: boolean) => {
+    setSelected((current) => {
+      const next = new Set(current)
+      if (checked) {
+        next.add(id)
+      } else {
+        next.delete(id)
+      }
+      return next
+    })
+  }
+
+  return (
+    <div className="dam-wallet__allow">
+      <div className="dam-wallet__allow-head">
+        <h2>{t('walletDetail.allowHeading')}</h2>
+        <Button
+          variant="secondary"
+          size="sm"
+          bracketed
+          type="button"
+          disabled={pending}
+          onClick={() =>
+            onAllow({
+              party: allProfilesParty,
+              scope: 'global',
+            })
+          }
+        >
+          {t('walletDetail.allowAllProfiles')}
+        </Button>
+      </div>
+
+      {settings.isPending ? (
+        <p className="dam-wallet__allow-status">
+          {t('walletDetail.allowProfilesLoading')}
+        </p>
+      ) : settings.isError ? (
+        <p className="dam-wallet__allow-status">
+          {t('walletDetail.allowProfilesUnavailable')}
+        </p>
+      ) : availableProfiles.length === 0 ? (
+        <p className="dam-wallet__allow-status">
+          {t('walletDetail.allowNoProfiles')}
+        </p>
+      ) : (
+        <>
+          <div className="dam-wallet__allow-grid">
+            {availableProfiles.map((app) => (
+              <Toggle
+                key={app.id}
+                size="sm"
+                checked={selected.has(app.id)}
+                disabled={pending}
+                label={app.name}
+                helper={
+                  app.enabled
+                    ? undefined
+                    : t('walletDetail.profileDisabled')
+                }
+                onCheckedChange={(checked) => toggleProfile(app.id, checked)}
+              />
+            ))}
+          </div>
+          <div className="dam-wallet__allow-actions">
+            <Button
+              variant="primary"
+              size="sm"
+              bracketed
+              type="button"
+              disabled={pending || selectedProfiles.length === 0}
+              onClick={() =>
+                onAllow(
+                  selectedProfiles.map((profile) => ({
+                    party: profile.name,
+                    profile_id: profile.id,
+                  })),
+                )
+              }
+            >
+              {t('walletDetail.allowSelectedProfiles')}
+            </Button>
+          </div>
+        </>
       )}
     </div>
   )

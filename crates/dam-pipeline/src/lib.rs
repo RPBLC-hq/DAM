@@ -42,6 +42,7 @@ pub struct ResolveTextResult {
 pub struct ProtectTextContext<'a> {
     pub reference_vault: Option<&'a dyn VaultReader>,
     pub consent_store: Option<&'a dam_consent::ConsentStore>,
+    pub consent_scopes: &'a [String],
     pub event_sink: Option<&'a dyn EventSink>,
     pub related_domains: &'a [String],
 }
@@ -54,14 +55,21 @@ pub fn protect_text(
     context: ProtectTextContext<'_>,
     options: ReplacementPlanOptions,
 ) -> Result<ProtectTextResult, PipelineError> {
-    let protected_input =
-        expand_allowed_references(input, context.consent_store, context.reference_vault)?
-            .unwrap_or_else(|| input.to_string());
+    let protected_input = expand_allowed_references(
+        input,
+        context.consent_store,
+        context.reference_vault,
+        context.consent_scopes,
+    )?
+    .unwrap_or_else(|| input.to_string());
     let input = protected_input.as_str();
     let detections = dam_detect::detect_with_related_domains(input, context.related_domains);
     let base_decisions = policy.decide_all(&detections);
-    let (decisions, consent_matches) =
-        dam_consent::apply_consents_to_decisions(&base_decisions, context.consent_store)?;
+    let (decisions, consent_matches) = dam_consent::apply_consents_to_decisions_in_scopes(
+        &base_decisions,
+        context.consent_store,
+        context.consent_scopes,
+    )?;
 
     if decisions
         .iter()
@@ -110,6 +118,7 @@ fn expand_allowed_references(
     input: &str,
     consent_store: Option<&dam_consent::ConsentStore>,
     vault: Option<&dyn VaultReader>,
+    consent_scopes: &[String],
 ) -> Result<Option<String>, PipelineError> {
     let (Some(consent_store), Some(vault)) = (consent_store, vault) else {
         return Ok(None);
@@ -126,7 +135,7 @@ fn expand_allowed_references(
             continue;
         };
         if consent_store
-            .active_for_value(reference_match.reference.kind, &value)?
+            .active_for_value_in_scopes(reference_match.reference.kind, &value, consent_scopes)?
             .is_some()
         {
             replacements.push(dam_core::ResolveReplacement {

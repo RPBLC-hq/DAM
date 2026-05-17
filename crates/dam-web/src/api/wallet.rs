@@ -8,6 +8,8 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use dam_core::{Reference, SensitiveType, VaultRecord, VaultWriter};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::AppState;
@@ -16,7 +18,7 @@ use crate::error::{Ok, WebError, WebErrorCode, WebResult};
 use crate::events_bus::EventTopic;
 
 const DEFAULT_WALLET_GRANT_TTL_SECONDS: u64 = 365 * 24 * 60 * 60;
-
+const GLOBAL_ALLOW_PARTY: &str = "All profiles";
 #[derive(Debug, Clone, Serialize)]
 pub struct WalletItem {
     pub id: String,
@@ -138,6 +140,8 @@ pub struct AllowRequest {
     pub party: String,
     pub ttl_seconds: Option<u64>,
     pub reason: Option<String>,
+    pub scope: Option<String>,
+    pub profile_id: Option<String>,
 }
 
 pub async fn allow(
@@ -154,10 +158,25 @@ pub async fn allow(
         .as_deref()
         .ok_or_else(|| WebError::new(WebErrorCode::ConsentGrantFailed))?;
     let ttl_seconds = body.ttl_seconds.unwrap_or(DEFAULT_WALLET_GRANT_TTL_SECONDS);
+    let scopes = allow_scopes(&state, &body)?;
+    let created_by = if explicit_global_scope(&body) {
+        GLOBAL_ALLOW_PARTY
+    } else {
+        party
+    };
 
-    store
-        .grant_for_reference(&key, state.vault.as_ref(), ttl_seconds, party, body.reason)
-        .map_err(|_| WebError::new(WebErrorCode::ConsentGrantFailed))?;
+    for scope in scopes {
+        store
+            .grant_for_reference_scoped(
+                &key,
+                state.vault.as_ref(),
+                ttl_seconds,
+                created_by.to_string(),
+                body.reason.clone(),
+                scope,
+            )
+            .map_err(|_| WebError::new(WebErrorCode::ConsentGrantFailed))?;
+    }
     state.events.notify(EventTopic::WalletInvalidate);
     state.events.notify(EventTopic::ConnectUpdate);
 
@@ -318,7 +337,7 @@ fn wallet_item_from_entry(
             .map(shared_with_from_consent)
             .collect()
     } else {
-        active.into_iter().map(shared_with_from_consent).collect()
+        dedupe_shared_with(active.into_iter().map(shared_with_from_consent).collect())
     };
     let state = wallet_item_state(&related, now);
     WalletItem {
@@ -372,6 +391,87 @@ fn shared_with_from_consent(entry: &dam_consent::ConsentEntry) -> SharedWith {
         name: entry.created_by.clone(),
         since: Some(day_label(entry.created_at)),
     }
+}
+
+fn dedupe_shared_with(shared_with: Vec<SharedWith>) -> Vec<SharedWith> {
+    let mut seen = BTreeSet::new();
+    shared_with
+        .into_iter()
+        .filter(|party| seen.insert(party.name.clone()))
+        .collect()
+}
+
+fn allow_scopes(state: &AppState, body: &AllowRequest) -> Result<Vec<String>, WebError> {
+    let scope = body
+        .scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let profile_id = body
+        .profile_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    match (scope, profile_id) {
+        (None, None) => Ok(vec![dam_consent::DEFAULT_SCOPE.to_string()]),
+        (Some(scope), None) if scope == dam_consent::DEFAULT_SCOPE => {
+            Ok(vec![dam_consent::DEFAULT_SCOPE.to_string()])
+        }
+        (None, Some(profile_id)) => target_scopes_for_integration_profile(state, profile_id),
+        _ => Err(WebError::new(WebErrorCode::InvalidRequest)),
+    }
+}
+
+fn explicit_global_scope(body: &AllowRequest) -> bool {
+    body.scope
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|scope| scope == dam_consent::DEFAULT_SCOPE)
+}
+
+fn target_scopes_for_integration_profile(
+    state: &AppState,
+    profile_id: &str,
+) -> Result<Vec<String>, WebError> {
+    let integration_state_dir = integration_state_dir()?;
+    dam_integrations::ensure_bundled_profile_files(&integration_state_dir)
+        .map_err(|_| WebError::new(WebErrorCode::ConsentGrantFailed))?;
+    let profile = dam_integrations::profiles_from_state(
+        &format!("http://{}", state.config.proxy.listen),
+        &integration_state_dir,
+    )
+    .map_err(|_| WebError::new(WebErrorCode::ConsentGrantFailed))?
+    .into_iter()
+    .find(|profile| profile.id == profile_id)
+    .ok_or_else(|| WebError::new(WebErrorCode::InvalidRequest))?;
+
+    let scopes =
+        target_scopes_for_traffic_app_ids(&state.config.traffic.profile, &profile.traffic_app_ids);
+    if scopes.is_empty() {
+        Err(WebError::new(WebErrorCode::InvalidRequest))
+    } else {
+        Ok(scopes)
+    }
+}
+
+fn target_scopes_for_traffic_app_ids(
+    traffic_profile: &dam_net::TrafficProfile,
+    app_ids: &[String],
+) -> Vec<String> {
+    let profile = traffic_profile.with_runtime_enabled_apps(app_ids);
+    let mut seen = BTreeSet::new();
+    dam_net::traffic_routes_from_profile(&profile)
+        .into_iter()
+        .map(|route| dam_consent::target_scope(&route.target_name))
+        .filter(|scope| seen.insert(scope.clone()))
+        .collect()
+}
+
+fn integration_state_dir() -> Result<PathBuf, WebError> {
+    dam_daemon::state_paths()
+        .map(|paths| paths.state_dir.join("integrations"))
+        .map_err(|_| WebError::new(WebErrorCode::DaemonUnreachable))
 }
 
 fn parse_kind(value: &str) -> Result<SensitiveType, WebError> {

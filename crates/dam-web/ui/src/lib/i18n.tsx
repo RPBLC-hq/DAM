@@ -286,6 +286,13 @@ export type MessageKey =
   | 'walletDetail.lastSeen'
   | 'walletDetail.firstSeen'
   | 'walletDetail.reference'
+  | 'walletDetail.allowHeading'
+  | 'walletDetail.allowAllProfiles'
+  | 'walletDetail.allowSelectedProfiles'
+  | 'walletDetail.allowProfilesLoading'
+  | 'walletDetail.allowProfilesUnavailable'
+  | 'walletDetail.allowNoProfiles'
+  | 'walletDetail.profileDisabled'
   | 'walletDetail.remove'
   | 'walletDetail.removeConfirm'
   | 'walletDetail.removeCancel'
@@ -651,6 +658,13 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'walletDetail.lastSeen': 'last seen',
     'walletDetail.firstSeen': 'first seen',
     'walletDetail.reference': 'reference',
+    'walletDetail.allowHeading': 'allow',
+    'walletDetail.allowAllProfiles': 'allow all profiles',
+    'walletDetail.allowSelectedProfiles': 'allow selected profiles',
+    'walletDetail.allowProfilesLoading': 'loading profiles',
+    'walletDetail.allowProfilesUnavailable': 'profiles unavailable',
+    'walletDetail.allowNoProfiles': 'all configured profiles already allowed',
+    'walletDetail.profileDisabled': 'currently off',
     'walletDetail.remove': 'remove from wallet',
     'walletDetail.removeConfirm':
       'Remove this value from your wallet? Active access for it will stop first.',
@@ -1025,6 +1039,13 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'walletDetail.lastSeen': 'vu pour la dernière fois',
     'walletDetail.firstSeen': 'vu pour la première fois',
     'walletDetail.reference': 'référence',
+    'walletDetail.allowHeading': 'autoriser',
+    'walletDetail.allowAllProfiles': 'autoriser tous les profils',
+    'walletDetail.allowSelectedProfiles': 'autoriser les profils choisis',
+    'walletDetail.allowProfilesLoading': 'chargement des profils',
+    'walletDetail.allowProfilesUnavailable': 'profils indisponibles',
+    'walletDetail.allowNoProfiles': 'tous les profils configurés sont déjà autorisés',
+    'walletDetail.profileDisabled': 'désactivé',
     'walletDetail.remove': 'retirer du portefeuille',
     'walletDetail.removeConfirm':
       'Retirer cette valeur du portefeuille ? Les accès actifs seront arrêtés avant.',

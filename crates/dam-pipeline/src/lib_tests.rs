@@ -164,6 +164,58 @@ fn protect_text_applies_active_consent() {
 }
 
 #[test]
+fn protect_text_applies_scoped_consent_only_for_matching_scope() {
+    let vault = RecordingVault::default();
+    let consent_store = dam_consent::ConsentStore::open_in_memory().unwrap();
+    consent_store
+        .grant_scoped(
+            &dam_consent::GrantConsent {
+                kind: SensitiveType::Email,
+                value: "alice@example.com".to_string(),
+                vault_key: None,
+                ttl_seconds: 60,
+                created_by: "Codex".to_string(),
+                reason: None,
+            },
+            dam_consent::target_scope("chatgpt-codex"),
+        )
+        .unwrap();
+    let policy = dam_policy::StaticPolicy::new(PolicyAction::Tokenize);
+    let matching_scopes = vec![dam_consent::target_scope("chatgpt-codex")];
+    let non_matching_scopes = vec![dam_consent::target_scope("anthropic")];
+
+    let matching = protect_text(
+        "email alice@example.com",
+        "op-test",
+        &policy,
+        &vault,
+        ProtectTextContext {
+            consent_store: Some(&consent_store),
+            consent_scopes: &matching_scopes,
+            ..ProtectTextContext::default()
+        },
+        ReplacementPlanOptions::default(),
+    )
+    .unwrap();
+    let non_matching = protect_text(
+        "email alice@example.com",
+        "op-test",
+        &policy,
+        &vault,
+        ProtectTextContext {
+            consent_store: Some(&consent_store),
+            consent_scopes: &non_matching_scopes,
+            ..ProtectTextContext::default()
+        },
+        ReplacementPlanOptions::default(),
+    )
+    .unwrap();
+
+    assert_eq!(matching.output.unwrap(), "email alice@example.com");
+    assert_ne!(non_matching.output.unwrap(), "email alice@example.com");
+}
+
+#[test]
 fn protect_text_applies_active_consent_to_allowed_reference_history() {
     let vault = RecordingVault::default();
     let sink = RecordingSink::default();
@@ -214,6 +266,53 @@ fn protect_text_applies_active_consent_to_allowed_reference_history() {
                 .as_deref()
                 .is_some_and(|action| action.starts_with("allow:"))
     }));
+}
+
+#[test]
+fn protect_text_expands_allowed_references_for_matching_scope() {
+    let vault = RecordingVault::default();
+    let reference = Reference::generate(SensitiveType::Email);
+    vault
+        .write(&VaultRecord {
+            reference: reference.clone(),
+            kind: SensitiveType::Email,
+            value: "alice@example.com".to_string(),
+        })
+        .unwrap();
+    let consent_store = dam_consent::ConsentStore::open_in_memory().unwrap();
+    consent_store
+        .grant_scoped(
+            &dam_consent::GrantConsent {
+                kind: SensitiveType::Email,
+                value: "alice@example.com".to_string(),
+                vault_key: Some(reference.key()),
+                ttl_seconds: 60,
+                created_by: "Claude Code".to_string(),
+                reason: None,
+            },
+            dam_consent::target_scope("anthropic"),
+        )
+        .unwrap();
+    let policy = dam_policy::StaticPolicy::new(PolicyAction::Tokenize);
+    let scopes = vec![dam_consent::target_scope("anthropic")];
+    let input = format!("email {}", reference.display());
+
+    let result = protect_text(
+        &input,
+        "op-test",
+        &policy,
+        &vault,
+        ProtectTextContext {
+            reference_vault: Some(&vault),
+            consent_store: Some(&consent_store),
+            consent_scopes: &scopes,
+            ..ProtectTextContext::default()
+        },
+        ReplacementPlanOptions::default(),
+    )
+    .unwrap();
+
+    assert_eq!(result.output.unwrap(), "email alice@example.com");
 }
 
 #[test]

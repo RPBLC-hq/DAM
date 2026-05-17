@@ -895,6 +895,7 @@ async fn proxy_http_request(
         resolve_references: protection_enabled && state.resolve_inbound_for_route(route),
         protect_sensitive_data: protection_enabled && state.protect_inbound_for_route(route),
     };
+    let consent_scopes = Arc::new(consent_scopes_for_target(route.target()));
     record_proxy_event(
         &state,
         &operation_id,
@@ -944,6 +945,7 @@ async fn proxy_http_request(
                 operation_id,
                 action: "bypassing",
                 related_domains: Arc::new(Vec::new()),
+                consent_scopes,
                 inbound_plan,
             },
         )
@@ -988,6 +990,7 @@ async fn proxy_http_request(
         dam_pipeline::ProtectTextContext {
             reference_vault: Some(state.vault.as_ref()),
             consent_store: state.consent_store.as_deref(),
+            consent_scopes: consent_scopes.as_slice(),
             event_sink: state.log_sink.as_deref(),
             ..dam_pipeline::ProtectTextContext::default()
         },
@@ -1071,6 +1074,7 @@ async fn proxy_http_request(
             operation_id,
             action: "protected",
             related_domains,
+            consent_scopes,
             inbound_plan,
         },
     )
@@ -1315,6 +1319,7 @@ where
 {
     let route = route_for_request(&state, &request.headers, &request.uri);
     let protection_enabled = state.protection_enabled();
+    let consent_scopes = Arc::new(consent_scopes_for_target(route.target()));
     if route.config_required() {
         record_proxy_event(
             &state,
@@ -1395,6 +1400,7 @@ where
         client_tls,
         upstream_tls,
         protection_enabled,
+        consent_scopes,
     )
     .await
 }
@@ -1405,6 +1411,7 @@ async fn proxy_websocket_frames<C, U>(
     client_tls: C,
     upstream_tls: U,
     protection_enabled: bool,
+    consent_scopes: Arc<Vec<String>>,
 ) -> Result<(), String>
 where
     C: AsyncRead + AsyncWrite + Unpin,
@@ -1421,6 +1428,7 @@ where
             &mut upstream_writer,
             related_domains.clone(),
             protection_enabled,
+            Arc::clone(&consent_scopes),
         );
         let upstream_to_client = proxy_websocket_upstream_frames(
             state.clone(),
@@ -1429,6 +1437,7 @@ where
             &mut client_writer,
             related_domains,
             protection_enabled,
+            Arc::clone(&consent_scopes),
         );
 
         tokio::select! {
@@ -1457,6 +1466,7 @@ async fn proxy_websocket_client_frames<R, W>(
     writer: &mut W,
     related_domains: Arc<RwLock<Vec<String>>>,
     protection_enabled: bool,
+    consent_scopes: Arc<Vec<String>>,
 ) -> Result<WebSocketClientFrameOutcome, String>
 where
     R: AsyncRead + Unpin,
@@ -1491,6 +1501,7 @@ where
                 dam_pipeline::ProtectTextContext {
                     reference_vault: Some(state.vault.as_ref()),
                     consent_store: state.consent_store.as_deref(),
+                    consent_scopes: consent_scopes.as_slice(),
                     event_sink: state.log_sink.as_deref(),
                     ..dam_pipeline::ProtectTextContext::default()
                 },
@@ -1547,6 +1558,7 @@ async fn proxy_websocket_upstream_frames<R, W>(
     writer: &mut W,
     related_domains: Arc<RwLock<Vec<String>>>,
     protection_enabled: bool,
+    consent_scopes: Arc<Vec<String>>,
 ) -> Result<WebSocketClientFrameOutcome, String>
 where
     R: AsyncRead + Unpin,
@@ -1584,6 +1596,7 @@ where
                 dam_pipeline::ProtectTextContext {
                     reference_vault: Some(state.vault.as_ref()),
                     consent_store: state.consent_store.as_deref(),
+                    consent_scopes: consent_scopes.as_slice(),
                     event_sink: state.log_sink.as_deref(),
                     related_domains: domains.as_slice(),
                 },
@@ -1965,6 +1978,10 @@ fn route_matches_traffic_target(
     target.provider == traffic_route.provider
         && (target.name == traffic_route.target_name
             || normalize_host(&target.upstream) == normalize_host(&traffic_route.upstream))
+}
+
+fn consent_scopes_for_target(target: &dam_config::ProxyTargetConfig) -> Vec<String> {
+    vec![dam_consent::target_scope(&target.name)]
 }
 
 impl ProxyState {
@@ -2461,6 +2478,7 @@ struct ForwardAttempt {
     operation_id: String,
     action: &'static str,
     related_domains: Arc<Vec<String>>,
+    consent_scopes: Arc<Vec<String>>,
     inbound_plan: InboundTransformPlan,
 }
 
@@ -2477,6 +2495,7 @@ struct ForwardRequestInput<'a> {
     body: Bytes,
     operation_id: &'a str,
     related_domains: Arc<Vec<String>>,
+    consent_scopes: Arc<Vec<String>>,
     inbound_plan: InboundTransformPlan,
 }
 
@@ -2493,6 +2512,7 @@ async fn forward_or_provider_down(
         operation_id,
         action,
         related_domains,
+        consent_scopes,
         inbound_plan,
     } = attempt;
     match forward_request(
@@ -2505,6 +2525,7 @@ async fn forward_or_provider_down(
             body,
             operation_id: &operation_id,
             related_domains: Arc::clone(&related_domains),
+            consent_scopes: Arc::clone(&consent_scopes),
             inbound_plan,
         },
     )
@@ -2558,6 +2579,7 @@ async fn forward_request(
         body,
         operation_id,
         related_domains,
+        consent_scopes,
         inbound_plan,
     } = input;
     let target_api_key = route.target_api_key();
@@ -2575,6 +2597,7 @@ async fn forward_request(
     let response_state = Arc::clone(state);
     let response_operation_id = operation_id.to_owned();
     let response_related_domains = Arc::clone(&related_domains);
+    let response_consent_scopes = Arc::clone(&consent_scopes);
     let request = dam_http_adapter::ForwardRequest {
         upstream: &target.upstream,
         method,
@@ -2606,6 +2629,7 @@ async fn forward_request(
                 response_body,
                 inbound_plan,
                 response_related_domains.as_slice(),
+                response_consent_scopes.as_slice(),
             )
         })
         .await
@@ -2620,6 +2644,7 @@ fn resolve_response_body(
     body: Bytes,
     inbound_plan: InboundTransformPlan,
     related_domains: &[String],
+    consent_scopes: &[String],
 ) -> Bytes {
     if !inbound_plan.resolve_references {
         record_proxy_event(
@@ -2637,9 +2662,15 @@ fn resolve_response_body(
             Ok(text) => text,
             Err(_) => return body,
         };
-        return protect_inbound_response_body(state, operation_id, body_text, related_domains)
-            .map(Bytes::from)
-            .unwrap_or(body);
+        return protect_inbound_response_body(
+            state,
+            operation_id,
+            body_text,
+            related_domains,
+            consent_scopes,
+        )
+        .map(Bytes::from)
+        .unwrap_or(body);
     }
 
     let body_text = match std::str::from_utf8(body.as_ref()) {
@@ -2685,9 +2716,15 @@ fn resolve_response_body(
     }
 
     if inbound_plan.protect_sensitive_data {
-        protect_inbound_response_body(state, operation_id, body_text, related_domains)
-            .map(Bytes::from)
-            .unwrap_or(body)
+        protect_inbound_response_body(
+            state,
+            operation_id,
+            body_text,
+            related_domains,
+            consent_scopes,
+        )
+        .map(Bytes::from)
+        .unwrap_or(body)
     } else {
         body
     }
@@ -2698,6 +2735,7 @@ fn protect_inbound_response_body(
     operation_id: &str,
     body_text: &str,
     related_domains: &[String],
+    consent_scopes: &[String],
 ) -> Option<String> {
     if !state.protection_enabled() {
         return None;
@@ -2711,6 +2749,7 @@ fn protect_inbound_response_body(
         dam_pipeline::ProtectTextContext {
             reference_vault: Some(state.vault.as_ref()),
             consent_store: state.consent_store.as_deref(),
+            consent_scopes,
             event_sink: state.log_sink.as_deref(),
             related_domains,
         },

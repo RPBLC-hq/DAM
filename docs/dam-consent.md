@@ -7,8 +7,10 @@ A consent lets a detected value pass through unredacted until its TTL expires or
 Consent records do not store raw sensitive values. Matching uses:
 
 ```text
-kind + value_fingerprint
+kind + value_fingerprint + scope
 ```
+
+`global` is the default scope and applies everywhere. Proxy callers may also pass route scopes such as `target:chatgpt-codex`; scoped grants apply only when the caller includes the matching route scope. Global grants are always considered alongside route scopes so older grants and explicit "all profiles" grants keep working.
 
 When a consent is granted from the vault UI or MCP server, the caller provides the stable vault key, for example:
 
@@ -42,11 +44,11 @@ DAM_CONSENT_MCP_WRITE_ENABLED
 
 ## Behavior
 
-- Active consent changes matching canonical detections to `allow`.
-- Active consent applies to previously tokenized outbound DAM references when the configured vault can read the stored value and the stored value still has active consent.
+- Active consent changes matching canonical detections to `allow` when the grant is global or matches the caller's route scopes.
+- Active consent applies to previously tokenized outbound DAM references when the configured vault can read the stored value and the stored value still has active consent for the caller's route scopes.
 - Expired or revoked consent does not affect policy.
 - Revoking a consent id revokes all unrevoked grants for the same `kind + value_fingerprint + scope`, so duplicate vault rows for the same canonical value cannot keep passthrough alive.
-- Wallet mutations may revoke by stable `vault_key`, either for every recorded party on that value or for one `created_by` audit label. Current enforcement is still canonical-value scoped: `created_by` is audit/UI metadata, not a provider isolation boundary.
+- Wallet mutations may revoke by stable `vault_key`, either for every recorded party on that value or for one `created_by` audit label. Profile-level Wallet allows are stored as one or more target-scoped grants derived from the selected integration profile's traffic apps; `created_by` remains the UI/audit label, while `scope` is the enforcement boundary.
 - Consent emits a non-sensitive `consent` log event when it allows a value.
 - The SQLite store keeps `id`, `kind`, `value_fingerprint`, optional `vault_key`, TTL timestamps, source, and optional reason.
 

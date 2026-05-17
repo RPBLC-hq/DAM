@@ -1213,7 +1213,7 @@ fn helper_path() -> Option<PathBuf> {
 
     #[cfg(test)]
     {
-        return None;
+        None
     }
 
     #[cfg(not(test))]

@@ -11,6 +11,8 @@ use futures_util::stream;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 
+type CapturedHeaders = Arc<Mutex<Vec<(String, String)>>>;
+
 async fn spawn_app(app: Router) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -35,11 +37,8 @@ async fn spawn_capture_echo_upstream(seen_body: Arc<Mutex<Option<String>>>) -> S
     .await
 }
 
-async fn spawn_capture_headers_upstream(seen_headers: Arc<Mutex<Vec<(String, String)>>>) -> String {
-    async fn echo(
-        State(seen_headers): State<Arc<Mutex<Vec<(String, String)>>>>,
-        headers: HeaderMap,
-    ) -> Response {
+async fn spawn_capture_headers_upstream(seen_headers: CapturedHeaders) -> String {
+    async fn echo(State(seen_headers): State<CapturedHeaders>, headers: HeaderMap) -> Response {
         *seen_headers.lock().unwrap() = headers
             .iter()
             .filter_map(|(name, value)| {

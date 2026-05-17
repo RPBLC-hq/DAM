@@ -47,6 +47,78 @@ fn grant_matches_canonical_email_variants() {
 }
 
 #[test]
+fn scoped_grant_matches_only_when_scope_is_requested() {
+    let store = ConsentStore::open_in_memory().unwrap();
+    let entry = store
+        .grant_scoped(
+            &GrantConsent {
+                kind: SensitiveType::Email,
+                value: "alice@example.test".to_string(),
+                vault_key: None,
+                ttl_seconds: 60,
+                created_by: "Codex".to_string(),
+                reason: None,
+            },
+            target_scope("chatgpt-codex"),
+        )
+        .unwrap();
+
+    assert_eq!(entry.scope, "target:chatgpt-codex");
+    assert!(
+        store
+            .active_for_value(SensitiveType::Email, "alice@example.test")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .active_for_value_in_scopes(
+                SensitiveType::Email,
+                "alice@example.test",
+                &["target:chatgpt-codex".to_string()],
+            )
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        store
+            .active_for_value_in_scopes(
+                SensitiveType::Email,
+                "alice@example.test",
+                &["target:anthropic".to_string()],
+            )
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn global_grant_matches_scoped_lookup() {
+    let store = ConsentStore::open_in_memory().unwrap();
+    store
+        .grant(&GrantConsent {
+            kind: SensitiveType::Email,
+            value: "alice@example.test".to_string(),
+            vault_key: None,
+            ttl_seconds: 60,
+            created_by: "All profiles".to_string(),
+            reason: None,
+        })
+        .unwrap();
+
+    assert!(
+        store
+            .active_for_value_in_scopes(
+                SensitiveType::Email,
+                "alice@example.test",
+                &["target:chatgpt-codex".to_string()],
+            )
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
 fn revoked_consent_does_not_match() {
     let store = ConsentStore::open_in_memory().unwrap();
     let entry = store

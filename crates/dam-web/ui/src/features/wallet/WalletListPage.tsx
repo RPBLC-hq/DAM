@@ -33,6 +33,8 @@ import { WalletInlineDetail } from './WalletInlineDetail'
 // close transition. The 40ms buffer absorbs any frame jitter and
 // prevents the content from unmounting just before the visual end.
 const INLINE_DETAIL_ANIM_MS = 460
+const ADDED_ROW_OPEN_DELAY_MS = 260
+const ADDED_ROW_REVEAL_DELAY_MS = INLINE_DETAIL_ANIM_MS + 40
 type WalletKind = 'email' | 'domain' | 'phone' | 'ssn' | 'cc'
 type WalletFilter = 'all' | 'protected' | 'allowed'
 
@@ -74,7 +76,10 @@ export function WalletListPage() {
     preY: number
   } | null>(null)
   const closeTimerRef = useRef<number | null>(null)
-  const pendingAddedScrollId = useRef<string | null>(null)
+  const pendingAddedOpenId = useRef<string | null>(null)
+  const pendingAddedRevealId = useRef<string | null>(null)
+  const pendingAddedOpenTimerRef = useRef<number | null>(null)
+  const pendingAddedRevealTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (surface === 'web') inputRef.current?.focus()
@@ -90,11 +95,20 @@ export function WalletListPage() {
     mutationFn: (body: { kind: WalletKind; value: string }) =>
       apiPost<WalletDetail>('/wallet', body),
     onSuccess: (detail) => {
-      pendingAddedScrollId.current = detail.item.id
+      pendingAddedOpenId.current = detail.item.id
+      pendingAddedRevealId.current = detail.item.id
       setAdding(false)
       setQuery('')
       setStateFilter('all')
-      setActiveId(detail.item.id)
+      if (activeId) {
+        setClosingId(activeId)
+        if (closeTimerRef.current != null)
+          window.clearTimeout(closeTimerRef.current)
+        closeTimerRef.current = window.setTimeout(() => {
+          setClosingId((prev) => (prev === activeId ? null : prev))
+        }, INLINE_DETAIL_ANIM_MS)
+      }
+      setActiveId(null)
       void queryClient.invalidateQueries({ queryKey: ['wallet'] })
       void queryClient.invalidateQueries({ queryKey: ['connect'] })
     },
@@ -120,6 +134,12 @@ export function WalletListPage() {
       if (closeTimerRef.current != null) {
         window.clearTimeout(closeTimerRef.current)
       }
+      if (pendingAddedOpenTimerRef.current != null) {
+        window.clearTimeout(pendingAddedOpenTimerRef.current)
+      }
+      if (pendingAddedRevealTimerRef.current != null) {
+        window.clearTimeout(pendingAddedRevealTimerRef.current)
+      }
     }
   }, [])
 
@@ -137,6 +157,16 @@ export function WalletListPage() {
 
   const onToggle = useCallback(
     (id: string) => {
+      pendingAddedOpenId.current = null
+      pendingAddedRevealId.current = null
+      if (pendingAddedOpenTimerRef.current != null) {
+        window.clearTimeout(pendingAddedOpenTimerRef.current)
+        pendingAddedOpenTimerRef.current = null
+      }
+      if (pendingAddedRevealTimerRef.current != null) {
+        window.clearTimeout(pendingAddedRevealTimerRef.current)
+        pendingAddedRevealTimerRef.current = null
+      }
       if (id === activeId) {
         // Same row clicked: close it. The detail content stays mounted
         // briefly so the close animation plays.
@@ -197,7 +227,7 @@ export function WalletListPage() {
   }, [activeId])
 
   useLayoutEffect(() => {
-    const id = pendingAddedScrollId.current
+    const id = pendingAddedOpenId.current
     if (!id) return
     const list = listRef.current
     if (!list) return
@@ -205,15 +235,53 @@ export function WalletListPage() {
       `[data-row-id="${cssEscape(id)}"]`,
     )
     if (!target) return
-    pendingAddedScrollId.current = null
+    pendingAddedOpenId.current = null
     const handle = window.requestAnimationFrame(() => {
-      target.scrollIntoView({
-        block: 'center',
-        behavior: prefersReducedMotion() ? 'auto' : 'smooth',
-      })
+      const reducedMotion = prefersReducedMotion()
+      scrollRowNearTop(target, reducedMotion ? 'auto' : 'smooth')
+      const open = () => {
+        pendingAddedOpenTimerRef.current = null
+        setActiveId(id)
+      }
+      if (reducedMotion) {
+        open()
+      } else {
+        pendingAddedOpenTimerRef.current = window.setTimeout(
+          open,
+          ADDED_ROW_OPEN_DELAY_MS,
+        )
+      }
     })
     return () => window.cancelAnimationFrame(handle)
-  }, [items, openId])
+  }, [items])
+
+  useLayoutEffect(() => {
+    const id = pendingAddedRevealId.current
+    if (!id || openId !== id) return
+    const list = listRef.current
+    if (!list) return
+    const target = list.querySelector<HTMLElement>(
+      `[data-row-id="${cssEscape(id)}"]`,
+    )
+    if (!target) return
+    if (pendingAddedRevealTimerRef.current != null) {
+      window.clearTimeout(pendingAddedRevealTimerRef.current)
+    }
+    pendingAddedRevealTimerRef.current = window.setTimeout(
+      () => {
+        pendingAddedRevealTimerRef.current = null
+        pendingAddedRevealId.current = null
+        ensureRowFullyVisible(target, prefersReducedMotion() ? 'auto' : 'smooth')
+      },
+      prefersReducedMotion() ? 0 : ADDED_ROW_REVEAL_DELAY_MS,
+    )
+    return () => {
+      if (pendingAddedRevealTimerRef.current != null) {
+        window.clearTimeout(pendingAddedRevealTimerRef.current)
+        pendingAddedRevealTimerRef.current = null
+      }
+    }
+  }, [openId])
 
   return (
     <section className="dam-wallet" aria-label={t('wallet.aria')}>
@@ -528,6 +596,61 @@ function scrollableAncestor(el: HTMLElement): HTMLElement | null {
   }
   // Fall back to documentElement so we still adjust on web.
   return document.scrollingElement as HTMLElement | null
+}
+
+function scrollRowNearTop(row: HTMLElement, behavior: ScrollBehavior) {
+  const scroller = scrollableAncestor(row)
+  if (!scroller) return
+  const targetTop = viewportTop(scroller) + stickyHeaderOffset(row) + 12
+  const delta = row.getBoundingClientRect().top - targetTop
+  if (Math.abs(delta) < 1) return
+  scrollByDelta(scroller, delta, behavior)
+}
+
+function ensureRowFullyVisible(row: HTMLElement, behavior: ScrollBehavior) {
+  const scroller = scrollableAncestor(row)
+  if (!scroller) return
+  const rect = row.getBoundingClientRect()
+  const topLimit = viewportTop(scroller) + stickyHeaderOffset(row) + 12
+  const bottomLimit = viewportBottom(scroller) - 16
+  let delta = 0
+  if (rect.top < topLimit) {
+    delta = rect.top - topLimit
+  } else if (rect.bottom > bottomLimit) {
+    delta = rect.bottom - bottomLimit
+  }
+  if (Math.abs(delta) < 1) return
+  scrollByDelta(scroller, delta, behavior)
+}
+
+function stickyHeaderOffset(row: HTMLElement): number {
+  const wallet = row.closest<HTMLElement>('.dam-wallet')
+  const header = wallet?.querySelector<HTMLElement>('.dam-wallet__header')
+  return header?.getBoundingClientRect().height ?? 0
+}
+
+function viewportTop(scroller: HTMLElement): number {
+  return scroller === document.scrollingElement
+    ? 0
+    : scroller.getBoundingClientRect().top
+}
+
+function viewportBottom(scroller: HTMLElement): number {
+  return scroller === document.scrollingElement
+    ? window.innerHeight
+    : scroller.getBoundingClientRect().bottom
+}
+
+function scrollByDelta(
+  scroller: HTMLElement,
+  delta: number,
+  behavior: ScrollBehavior,
+) {
+  if (scroller === document.scrollingElement) {
+    window.scrollBy({ top: delta, behavior })
+  } else {
+    scroller.scrollBy({ top: delta, behavior })
+  }
 }
 
 function prefersReducedMotion(): boolean {

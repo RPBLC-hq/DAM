@@ -1,7 +1,11 @@
 use super::*;
 use axum::routing::post;
 use futures_util::stream;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+
+type CapturedHeaders = Arc<Mutex<Vec<(String, String)>>>;
+type CapturedBody = Arc<Mutex<Option<String>>>;
+type CapturedHeadersAndBody = (CapturedHeaders, CapturedBody);
 
 fn proxy_config(upstream: String) -> dam_config::DamConfig {
     proxy_config_with_provider(upstream, "openai-compatible")
@@ -127,6 +131,7 @@ async fn websocket_response_text_frames_are_tokenized_before_client() {
         &mut client,
         Arc::new(RwLock::new(Vec::new())),
         true,
+        Arc::new(Vec::new()),
     )
     .await
     .unwrap();
@@ -173,6 +178,7 @@ async fn websocket_response_uses_related_domains_from_request_context() {
         &mut client,
         Arc::new(RwLock::new(vec!["wolol3o22.com".to_string()])),
         true,
+        Arc::new(Vec::new()),
     )
     .await
     .unwrap();
@@ -212,6 +218,7 @@ async fn websocket_response_respects_connection_protection_snapshot() {
         &mut client,
         Arc::new(RwLock::new(Vec::new())),
         false,
+        Arc::new(Vec::new()),
     )
     .await
     .unwrap();
@@ -248,6 +255,7 @@ async fn websocket_response_fragmented_text_fails_closed_when_protected() {
         &mut client,
         Arc::new(RwLock::new(Vec::new())),
         true,
+        Arc::new(Vec::new()),
     )
     .await
     .unwrap();
@@ -270,6 +278,7 @@ async fn websocket_response_compressed_frame_fails_closed_when_protected() {
         &mut client,
         Arc::new(RwLock::new(Vec::new())),
         true,
+        Arc::new(Vec::new()),
     )
     .await
     .unwrap();
@@ -303,6 +312,7 @@ async fn websocket_response_policy_block_fails_closed() {
         &mut client,
         Arc::new(RwLock::new(Vec::new())),
         true,
+        Arc::new(Vec::new()),
     )
     .await
     .unwrap();
@@ -499,11 +509,8 @@ async fn spawn_ndjson_escaped_reference_upstream(seen_body: Arc<Mutex<Option<Str
     .await
 }
 
-async fn spawn_capture_headers_upstream(seen_headers: Arc<Mutex<Vec<(String, String)>>>) -> String {
-    async fn echo(
-        State(seen_headers): State<Arc<Mutex<Vec<(String, String)>>>>,
-        headers: HeaderMap,
-    ) -> Response {
+async fn spawn_capture_headers_upstream(seen_headers: CapturedHeaders) -> String {
+    async fn echo(State(seen_headers): State<CapturedHeaders>, headers: HeaderMap) -> Response {
         *seen_headers.lock().unwrap() = headers
             .iter()
             .filter_map(|(name, value)| {
@@ -525,14 +532,11 @@ async fn spawn_capture_headers_upstream(seen_headers: Arc<Mutex<Vec<(String, Str
 }
 
 async fn spawn_capture_headers_and_body_upstream(
-    seen_headers: Arc<Mutex<Vec<(String, String)>>>,
-    seen_body: Arc<Mutex<Option<String>>>,
+    seen_headers: CapturedHeaders,
+    seen_body: CapturedBody,
 ) -> String {
     async fn echo(
-        State((seen_headers, seen_body)): State<(
-            Arc<Mutex<Vec<(String, String)>>>,
-            Arc<Mutex<Option<String>>>,
-        )>,
+        State((seen_headers, seen_body)): State<CapturedHeadersAndBody>,
         headers: HeaderMap,
         body: Bytes,
     ) -> Response {
@@ -559,14 +563,11 @@ async fn spawn_capture_headers_and_body_upstream(
 }
 
 async fn spawn_capture_anthropic_headers_upstream(
-    seen_headers: Arc<Mutex<Vec<(String, String)>>>,
-    seen_body: Arc<Mutex<Option<String>>>,
+    seen_headers: CapturedHeaders,
+    seen_body: CapturedBody,
 ) -> String {
     async fn echo(
-        State((seen_headers, seen_body)): State<(
-            Arc<Mutex<Vec<(String, String)>>>,
-            Arc<Mutex<Option<String>>>,
-        )>,
+        State((seen_headers, seen_body)): State<CapturedHeadersAndBody>,
         headers: HeaderMap,
         body: Bytes,
     ) -> Response {

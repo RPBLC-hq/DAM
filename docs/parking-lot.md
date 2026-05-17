@@ -69,15 +69,15 @@ Parked work:
 - Keep OpenAI, Anthropic, Codex, and arbitrary websites as bundled or user-created profiles that consume generic adapters, not as a reason to add provider crates.
 - Add profile-builder validation so unsupported payloads, unsafe upstreams, secrets, and body-signature requirements are surfaced before a user enables a custom config.
 
-## Provider-Scoped Consent UI
+## Consent Scope And Policy Depth
 
-Current state: Wallet can add/remove stored values and revoke/protect existing consent records. `dam-consent` enforcement is still canonical-value scoped; `created_by` is audit/UI metadata and not an isolation boundary for one provider/profile.
+Current state: Wallet can add/remove stored values, allow a value for all profiles, allow it for selected integration profiles, revoke one recorded party, protect every grant for a value, and remove the value. Profile-level allows expand to target-scoped `dam-consent` grants, and the proxy passes the matched target scope into the protection pipeline. `created_by` remains UI/audit metadata; `scope` is the enforcement boundary.
 
 Parked work:
 
-- Add an enforceable profile/target dimension to consent matching before exposing "allow this value for provider X" or "allow this value for all providers" in Wallet.
-- Update the Wallet allow chooser only after the backend can enforce the selected scope.
-- Add tests proving a provider-scoped grant cannot be reused by another configured profile.
+- Add richer organization/user/purpose policy dimensions on top of global and target scopes.
+- Add tests for custom imported profile scopes once user-created traffic profiles are implemented.
+- Decide whether non-proxy MCP/filter consent tools should expose scoped grant creation or stay global-only.
 
 ## Security And Privacy Design Work
 
@@ -92,7 +92,7 @@ Parked work:
 - Replace the current CLI explicit-proxy fallback with process/network-level capture everywhere signed platform capture is available.
 - Install and remove the local DAM CA on Windows/Linux, add CA rotation, and harden interrupted macOS trust mutation recovery.
 - Implement native Linux and Windows onboarding actions behind the current platform-specific setup ids (`linux_capture`, `windows_capture`) instead of reusing macOS Network Extension steps.
-- Extend transparent TLS interception beyond the current HTTP/1.1/WebSocket slice: HTTP/2, fragmented/compressed WebSocket payloads, multiple requests per tunnel, target-specific consent, and stronger platform coverage.
+- Extend transparent TLS interception beyond the current HTTP/1.1/WebSocket slice: HTTP/2, fragmented/compressed WebSocket payloads, multiple requests per tunnel, and stronger platform coverage.
 - Define fail-open, fail-closed, degraded, bypass, and blocked states for transparent protection across system proxy and `tun` modes, including which states are user/admin configurable.
 - Define a future short-lived app wrapper, if needed, that starts or reuses the daemon and routes traffic by proxy/system routing without provider base-url mutation.
 - Add platform tests proving sensitive values do not leave before transparent protection is ready.

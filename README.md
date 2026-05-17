@@ -350,7 +350,7 @@ Recommended order for the next engineering sessions:
 
 1. Smoke test `dam connect`, enabled Claude/Codex profiles, and `dam-tray` against fake or real provider paths, then inspect the vault and log SQLite databases.
 2. Exercise the macOS Network Extension helper end-to-end with unknown-host pass-through, paused protection, Codex API-key mode, Codex ChatGPT-login outbound WebSocket mode, and Claude Code.
-3. Expand transparent TLS beyond the current HTTP/1.1/WebSocket slice: HTTP/2, fragmented/compressed WebSocket payloads, multiple requests per tunnel, target-specific consent, and certificate caching.
+3. Expand transparent TLS beyond the current HTTP/1.1/WebSocket slice: HTTP/2, fragmented/compressed WebSocket payloads, multiple requests per tunnel, and certificate caching.
 4. Expand profile import/export and editor support for JSON profile files.
 5. Add login/startup UX for the daemon after traffic-interception startup is stable.
 6. Package the tray app with signed native binaries and npm/native release assets.
