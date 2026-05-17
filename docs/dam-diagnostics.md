@@ -16,8 +16,10 @@ Status: implemented first extraction.
 - SQLite runtime open checks for local vault, consent, and log stores;
 - router target/provider/auth/failure-mode decisions;
 - proxy runtime `/health` reachability when proxy is enabled;
-- a read-only setup plan summary for the default local proxy/interception path;
+- a read-only setup plan summary for the requested local proxy/interception path;
 - enabled integration profile selection for route scoping.
+
+`dam doctor` accepts the same setup `--network-mode` and `--trust-mode` flags as `dam setup status` so installed-app automation can inspect the intended capture/trust path without getting a false mismatch from the default explicit-proxy setup plan.
 
 `setup_plan` emits a side-effect-free setup checklist for the local "connect" UX. It evaluates:
 

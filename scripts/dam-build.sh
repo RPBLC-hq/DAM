@@ -7,6 +7,11 @@ MACOS_OUT="${DAM_MACOS_OUT:-$OUT_DIR/macos}"
 SIGN_MODE="${DAM_SIGN_MODE:-developer-id}"
 NOTARY_PROFILE="${DAM_NOTARY_PROFILE:-DAM-notary}"
 INSTALL_DIR="${DAM_INSTALL_DIR:-/Applications}"
+SKIP_NOTARIZE="${DAM_SKIP_NOTARIZE:-0}"
+RESTART_AFTER_INSTALL="${DAM_RESTART_AFTER_INSTALL:-1}"
+AGENT_STATUS_STRICT="${DAM_AGENT_STATUS_STRICT:-0}"
+AGENT_NETWORK_MODE="${DAM_AGENT_NETWORK_MODE:-tun}"
+AGENT_TRUST_MODE="${DAM_AGENT_TRUST_MODE:-local_ca}"
 
 usage() {
   cat <<EOF
@@ -20,6 +25,9 @@ Commands:
   notarize      Notarize and staple an existing DAM.app
   release-macos Run checks, build signed DAM.app, notarize, staple, and zip it
   deploy-local  Build signed DAM.app and copy it to /Applications or --install-dir
+  agent-check   Run the standard verification suite plus repo whitespace checks
+  agent-install Build, notarize when enabled, install, verify, restart, and status DAM
+  agent-status  Print installed app, process, package, doctor, and setup status
 
 Options:
   --mode development|developer-id  Signing mode for macOS app packaging
@@ -28,6 +36,13 @@ Options:
   --notary-profile NAME            notarytool keychain profile name
   --install-dir DIR                Destination for deploy-local
   --skip-checks                    Skip check phase in release-macos
+  --skip-notarize                  Skip notarization in agent-install
+  --require-notary                 Fail agent-install unless notarization runs
+  --restart                        Restart daemon/tray after agent-install
+  --no-restart                     Do not restart daemon/tray after agent-install
+  --strict-status                  Make agent-status fail when a status probe fails
+  --network-mode MODE              Setup mode used by agent-status probes
+  --trust-mode MODE                Trust mode used by agent-status probes
   -h, --help                       Show this help
 
 Environment:
@@ -36,6 +51,12 @@ Environment:
   DAM_NOTARY_PROFILE        notarytool keychain profile, currently DAM-notary
   DAM_MACOS_TEAM_ID         Optional Team ID override for macOS packaging
   DAM_MACOS_APP_GROUP_ID    Optional App Group override for macOS packaging
+  DAM_INSTALL_DIR           Local install destination, currently /Applications
+  DAM_SKIP_NOTARIZE         Set to 1 to skip notarization in agent-install
+  DAM_RESTART_AFTER_INSTALL Set to 0 to skip daemon/tray restart in agent-install
+  DAM_AGENT_STATUS_STRICT   Set to 1 to make agent-status fail on probe errors
+  DAM_AGENT_NETWORK_MODE    Setup mode for agent-status, currently tun
+  DAM_AGENT_TRUST_MODE      Trust mode for agent-status, currently local_ca
 EOF
 }
 
@@ -57,11 +78,123 @@ dam_app_path() {
   printf '%s/DAM.app\n' "$MACOS_OUT"
 }
 
+installed_app_path() {
+  printf '%s/DAM.app\n' "$INSTALL_DIR"
+}
+
 zip_path_for_app() {
   local app="$1"
   local base
   base="$(basename "$app" .app)"
   printf '%s/%s-notary.zip\n' "$(dirname "$app")" "$base"
+}
+
+should_notarize() {
+  [[ "$SIGN_MODE" == "developer-id" && "$SKIP_NOTARIZE" != "1" ]]
+}
+
+process_pids_for_path() {
+  local path="$1"
+  pgrep -f "$path" 2>/dev/null || true
+}
+
+stop_processes_for_path() {
+  local label="$1"
+  local path="$2"
+  local pids
+  pids="$(process_pids_for_path "$path")"
+  if [[ -z "$pids" ]]; then
+    return 0
+  fi
+
+  printf 'Stopping %s: %s\n' "$label" "$pids"
+  kill $pids 2>/dev/null || true
+  for _ in {1..20}; do
+    pids="$(process_pids_for_path "$path")"
+    if [[ -z "$pids" ]]; then
+      return 0
+    fi
+    sleep 0.2
+  done
+
+  pids="$(process_pids_for_path "$path")"
+  if [[ -n "$pids" ]]; then
+    printf 'Force stopping %s: %s\n' "$label" "$pids"
+    kill -9 $pids 2>/dev/null || true
+  fi
+}
+
+stop_installed_ui() {
+  local app="$1"
+  stop_processes_for_path "dam-tray" "$app/Contents/MacOS/dam-tray"
+  stop_processes_for_path "dam-web" "$app/Contents/MacOS/dam-web"
+}
+
+verify_installed_app() {
+  require_macos
+  local app="$1"
+  if [[ ! -d "$app" ]]; then
+    echo "missing installed app bundle: $app" >&2
+    exit 1
+  fi
+  local dam_bin="$app/Contents/MacOS/dam"
+  if [[ ! -x "$dam_bin" ]]; then
+    echo "missing installed dam binary: $dam_bin" >&2
+    exit 1
+  fi
+
+  run codesign --verify --deep --strict --verbose=2 "$app"
+  if should_notarize; then
+    run xcrun stapler validate "$app"
+    run spctl -a -vvv -t exec "$app"
+  else
+    printf 'Skipped notarization ticket and Gatekeeper validation for %s mode.\n' "$SIGN_MODE"
+  fi
+}
+
+restart_installed_app() {
+  require_macos
+  local app="$1"
+  local dam_bin="$app/Contents/MacOS/dam"
+  if [[ ! -x "$dam_bin" ]]; then
+    echo "missing installed dam binary: $dam_bin" >&2
+    exit 1
+  fi
+  run "$dam_bin" connect --json
+  run open "$app"
+}
+
+status_try() {
+  local failures_name="$1"
+  shift
+  printf '+'
+  printf ' %q' "$@"
+  printf '\n'
+  if "$@"; then
+    return 0
+  else
+    local status=$?
+    printf 'status probe failed (%s):' "$status"
+    printf ' %q' "$@"
+    printf '\n'
+    printf -v "$failures_name" '%s' "$(( ${!failures_name} + 1 ))"
+  fi
+  return 0
+}
+
+status_observe() {
+  printf '+'
+  printf ' %q' "$@"
+  printf '\n'
+  if "$@"; then
+    return 0
+  else
+    local status=$?
+    printf 'status probe reported non-ready (%s):' "$status"
+    printf ' %q' "$@"
+    printf '\n'
+  fi
+  return 0
 }
 
 cmd_check() {
@@ -76,6 +209,15 @@ cmd_check() {
   run cargo test --workspace
   if [[ -f "$ROOT/native/macos/Package.swift" && "$(uname -s)" == "Darwin" ]]; then
     run swift test --package-path "$ROOT/native/macos"
+  fi
+}
+
+cmd_agent_check() {
+  cmd_check
+  if [[ -d "$ROOT/.git" ]]; then
+    run git -C "$ROOT" diff --check
+  else
+    printf 'Skipped git diff --check because %s is not a git checkout.\n' "$ROOT"
   fi
 }
 
@@ -161,6 +303,80 @@ cmd_deploy_local() {
   printf 'Installed local app: %s\n' "$destination"
 }
 
+cmd_agent_status() {
+  require_macos
+  local app
+  app="$(installed_app_path)"
+  local failures=0
+
+  printf 'DAM agent status\n'
+  printf 'install_dir: %s\n' "$INSTALL_DIR"
+  printf 'app: %s\n' "$app"
+  printf 'setup_probe_network_mode: %s\n' "$AGENT_NETWORK_MODE"
+  printf 'setup_probe_trust_mode: %s\n' "$AGENT_TRUST_MODE"
+  if [[ ! -d "$app" ]]; then
+    echo "installed app not found"
+    exit 1
+  fi
+
+  local dam_bin="$app/Contents/MacOS/dam"
+  if [[ ! -x "$dam_bin" ]]; then
+    echo "installed dam binary not found: $dam_bin" >&2
+    exit 1
+  fi
+
+  printf 'processes:\n'
+  pgrep -fl "$app/Contents/MacOS/dam" || true
+
+  status_try failures codesign --verify --deep --strict --verbose=2 "$app"
+  if should_notarize; then
+    status_try failures xcrun stapler validate "$app"
+    status_try failures spctl -a -vvv -t exec "$app"
+  fi
+  status_observe "$dam_bin" doctor --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
+  status_try failures "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
+  status_try failures "$dam_bin" setup next-action --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
+  status_try failures "$dam_bin" status --json
+
+  printf 'status_probe_failures: %s\n' "$failures"
+  if [[ "$AGENT_STATUS_STRICT" == "1" && "$failures" != "0" ]]; then
+    exit 1
+  fi
+}
+
+cmd_agent_install() {
+  require_macos
+  if [[ "${SKIP_CHECKS:-0}" != "1" ]]; then
+    cmd_agent_check
+  fi
+
+  cmd_macos_app
+  local app
+  app="$(dam_app_path)"
+  if should_notarize; then
+    APP_PATH="$app" cmd_notarize
+  elif [[ "${REQUIRE_NOTARY:-0}" == "1" ]]; then
+    echo "--require-notary requires --mode developer-id without --skip-notarize" >&2
+    exit 2
+  else
+    printf 'Skipped notarization for %s because signing mode is %s or notarization is disabled.\n' "$app" "$SIGN_MODE"
+  fi
+
+  local destination
+  destination="$(installed_app_path)"
+  stop_installed_ui "$destination"
+  APP_PATH="$app" cmd_deploy_local
+  verify_installed_app "$destination"
+
+  if [[ "$RESTART_AFTER_INSTALL" == "1" ]]; then
+    restart_installed_app "$destination"
+  else
+    printf 'Skipped restart after install.\n'
+  fi
+
+  cmd_agent_status
+}
+
 COMMAND="${1:-}"
 if [[ -z "$COMMAND" || "$COMMAND" == "-h" || "$COMMAND" == "--help" ]]; then
   usage
@@ -170,6 +386,7 @@ shift
 
 APP_PATH=""
 SKIP_CHECKS=0
+REQUIRE_NOTARY=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --mode)
@@ -196,6 +413,34 @@ while [[ $# -gt 0 ]]; do
     --skip-checks)
       SKIP_CHECKS=1
       shift
+      ;;
+    --skip-notarize)
+      SKIP_NOTARIZE=1
+      shift
+      ;;
+    --require-notary)
+      REQUIRE_NOTARY=1
+      shift
+      ;;
+    --restart)
+      RESTART_AFTER_INSTALL=1
+      shift
+      ;;
+    --no-restart)
+      RESTART_AFTER_INSTALL=0
+      shift
+      ;;
+    --strict-status)
+      AGENT_STATUS_STRICT=1
+      shift
+      ;;
+    --network-mode)
+      AGENT_NETWORK_MODE="${2:?--network-mode requires a value}"
+      shift 2
+      ;;
+    --trust-mode)
+      AGENT_TRUST_MODE="${2:?--trust-mode requires a value}"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -227,6 +472,9 @@ case "$COMMAND" in
   notarize) cmd_notarize ;;
   release-macos) cmd_release_macos ;;
   deploy-local) cmd_deploy_local ;;
+  agent-check) cmd_agent_check ;;
+  agent-install) cmd_agent_install ;;
+  agent-status) cmd_agent_status ;;
   *)
     echo "unknown command: $COMMAND" >&2
     usage >&2

@@ -74,10 +74,10 @@ Every module change should include relevant tests.
 Before considering work complete, run:
 
 ```bash
-cargo fmt --all --check
-cargo clippy --workspace -- -D warnings
-cargo test --workspace
+scripts/dam-build.sh agent-check
 ```
+
+`agent-check` wraps the standard npm/Rust/Swift verification suite and `git diff --check`. For release-path validation on macOS, use `scripts/dam-build.sh agent-install`; it builds, notarizes when enabled, deploys to the local install directory, verifies the installed app, restarts DAM with persisted config, and prints status. Use the script instead of manually replaying build/notarize/deploy/status commands.
 
 If a command cannot be run, document why in the final response.
 

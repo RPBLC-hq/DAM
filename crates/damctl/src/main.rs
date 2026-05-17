@@ -384,6 +384,7 @@ async fn doctor(args: DoctorArgs) -> CommandOutput {
             proxy_url: args.proxy_url.clone(),
             state_dir: args.state_dir.clone(),
             config_path: args.common.config.config_path.clone(),
+            ..dam_diagnostics::DoctorOptions::default()
         },
     )
     .await;

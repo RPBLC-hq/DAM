@@ -4,11 +4,25 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DoctorOptions {
     pub proxy_url: Option<String>,
     pub state_dir: Option<PathBuf>,
     pub config_path: Option<PathBuf>,
+    pub network_mode: dam_net::CaptureMode,
+    pub trust_mode: dam_trust::TrustMode,
+}
+
+impl Default for DoctorOptions {
+    fn default() -> Self {
+        Self {
+            proxy_url: None,
+            state_dir: None,
+            config_path: None,
+            network_mode: dam_net::CaptureMode::ExplicitProxy,
+            trust_mode: dam_trust::TrustMode::Disabled,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1410,7 +1424,8 @@ fn add_setup_plan_component(
             state_dir: options.state_dir.clone(),
             config_path: options.config_path.clone(),
             proxy_url: options.proxy_url.clone(),
-            ..SetupPlanOptions::default()
+            network_mode: options.network_mode,
+            trust_mode: options.trust_mode,
         },
     ) {
         Ok(plan) => plan,

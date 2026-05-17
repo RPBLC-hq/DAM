@@ -232,10 +232,10 @@ Use [../dam.example.toml](../dam.example.toml) as the local starting point.
 ## Verification
 
 ```bash
-scripts/dam-build.sh check
+scripts/dam-build.sh agent-check
 ```
 
-The build/release entrypoint in [build-release.md](build-release.md) wraps local verification, source builds, signed macOS app packaging, notarization, and local deploy steps so local and CI workflows use the same command surface.
+The build/release entrypoint in [build-release.md](build-release.md) wraps local verification, source builds, signed macOS app packaging, notarization, local deploy, installed-app verification, restart, and status steps so local, CI, and agent workflows use the same command surface.
 
 Run only the E2E suite with:
 

@@ -70,6 +70,10 @@ fn parses_doctor_and_setup_agent_commands() {
         "/tmp/dam-state".to_string(),
         "--proxy-url".to_string(),
         "http://127.0.0.1:7828".to_string(),
+        "--network-mode".to_string(),
+        "tun".to_string(),
+        "--trust-mode".to_string(),
+        "local_ca".to_string(),
         "--json".to_string(),
     ])
     .unwrap();
@@ -80,6 +84,8 @@ fn parses_doctor_and_setup_agent_commands() {
             config_path: Some(PathBuf::from("/tmp/dam.toml")),
             state_dir: Some(PathBuf::from("/tmp/dam-state")),
             proxy_url: Some("http://127.0.0.1:7828".to_string()),
+            network_mode: dam_net::CaptureMode::Tun,
+            trust_mode: dam_trust::TrustMode::LocalCa,
         })
     );
 

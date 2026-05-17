@@ -51,12 +51,27 @@ struct StatusArgs {
     json: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct DoctorArgs {
     json: bool,
     config_path: Option<PathBuf>,
     state_dir: Option<PathBuf>,
     proxy_url: Option<String>,
+    network_mode: dam_net::CaptureMode,
+    trust_mode: dam_trust::TrustMode,
+}
+
+impl Default for DoctorArgs {
+    fn default() -> Self {
+        Self {
+            json: false,
+            config_path: None,
+            state_dir: None,
+            proxy_url: None,
+            network_mode: dam_net::CaptureMode::ExplicitProxy,
+            trust_mode: dam_trust::TrustMode::Disabled,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -918,6 +933,8 @@ async fn doctor(args: DoctorArgs) -> Result<i32, String> {
             proxy_url: args.proxy_url,
             state_dir: args.state_dir,
             config_path: args.config_path,
+            network_mode: args.network_mode,
+            trust_mode: args.trust_mode,
         },
     )
     .await;
@@ -1069,6 +1086,8 @@ async fn setup_export_diagnostics_command(args: SetupPlanArgs) -> Result<i32, St
             proxy_url: args.proxy_url.clone(),
             state_dir: args.state_dir.clone(),
             config_path: args.config_path.clone(),
+            network_mode: args.network_mode,
+            trust_mode: args.trust_mode,
         },
         &dam_diagnostics::SetupPlanOptions {
             state_dir: args.state_dir,
@@ -1931,6 +1950,14 @@ fn parse_doctor_command(args: &[String]) -> Result<Cli, String> {
             "--proxy-url" => {
                 i += 1;
                 parsed.proxy_url = Some(required_value(args, i, "--proxy-url")?.to_string());
+            }
+            "--network-mode" => {
+                i += 1;
+                parsed.network_mode = required_value(args, i, "--network-mode")?.parse()?;
+            }
+            "--trust-mode" => {
+                i += 1;
+                parsed.trust_mode = required_value(args, i, "--trust-mode")?.parse()?;
             }
             "-h" | "--help" => {
                 println!("{}", usage_doctor());
@@ -4147,7 +4174,7 @@ fn usage_status() -> &'static str {
 }
 
 fn usage_doctor() -> &'static str {
-    "Usage: dam doctor [--config PATH] [--state-dir PATH] [--proxy-url URL] [--json]\n\nRuns local readiness diagnostics without calling remote providers. JSON output is stable for agents and installers."
+    "Usage: dam doctor [--config PATH] [--state-dir PATH] [--proxy-url URL] [--network-mode explicit_proxy|system_proxy|tun] [--trust-mode disabled|local_ca] [--json]\n\nRuns local readiness diagnostics without calling remote providers. JSON output is stable for agents and installers."
 }
 
 fn usage_setup() -> &'static str {
