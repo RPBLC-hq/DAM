@@ -186,11 +186,8 @@ pub fn profiles_from_state(
     integration_state_dir: &Path,
 ) -> Result<Vec<IntegrationProfile>, String> {
     let mut profiles = profiles(proxy_url);
-    for integration in read_stored_profile_files(integration_state_dir)? {
-        upsert_profile(
-            &mut profiles,
-            render_profile_templates(integration, proxy_url),
-        );
+    for integration in read_stored_profile_files(integration_state_dir, proxy_url)? {
+        upsert_profile(&mut profiles, integration);
     }
     Ok(profiles)
 }
@@ -266,6 +263,13 @@ pub fn ensure_bundled_profile_files(integration_state_dir: &Path) -> Result<Vec<
         let profile = parse_profile_json(raw, DEFAULT_PROXY_URL)?;
         let path = dir.join(format!("{}.json", profile.id));
         if path.exists() {
+            let desired = profile_file_content(raw);
+            let current = fs::read_to_string(&path)
+                .map_err(|error| format!("failed to read profile {}: {error}", path.display()))?;
+            if current != desired {
+                atomic_write(&path, desired.as_bytes())?;
+                written.push(path);
+            }
             continue;
         }
         atomic_write(&path, format!("{}\n", raw.trim_end()).as_bytes())?;
@@ -276,6 +280,7 @@ pub fn ensure_bundled_profile_files(integration_state_dir: &Path) -> Result<Vec<
 
 fn read_stored_profile_files(
     integration_state_dir: &Path,
+    proxy_url: &str,
 ) -> Result<Vec<IntegrationProfile>, String> {
     let mut files = Vec::new();
     let mut ids = BTreeSet::new();
@@ -304,12 +309,14 @@ fn read_stored_profile_files(
         }
         let raw = fs::read_to_string(&path)
             .map_err(|error| format!("failed to read profile {}: {error}", path.display()))?;
-        let profile = serde_json::from_str::<IntegrationProfile>(&raw)
+        let stored_profile = serde_json::from_str::<IntegrationProfile>(&raw)
             .map_err(|error| format!("failed to parse profile {}: {error}", path.display()))?;
-        validate_integration_profile(&profile)?;
-        if !PROFILE_IDS.contains(&profile.id.as_str()) {
+        validate_integration_profile(&stored_profile)?;
+        if !PROFILE_IDS.contains(&stored_profile.id.as_str()) {
             continue;
         }
+        let profile = bundled_profile(&stored_profile.id, proxy_url)?
+            .unwrap_or_else(|| render_profile_templates(stored_profile, proxy_url));
         if !ids.insert(profile.id.clone()) {
             return Err(format!(
                 "duplicate integration profile id {} in {}",
@@ -400,6 +407,27 @@ fn parse_profile_json(raw: &str, proxy_url: &str) -> Result<IntegrationProfile, 
     let profile = serde_json::from_str::<IntegrationProfile>(raw)
         .map_err(|error| format!("failed to parse integration profile JSON: {error}"))?;
     Ok(render_profile_templates(profile, proxy_url))
+}
+
+fn bundled_profile_raw(profile_id: &str) -> Result<Option<&'static str>, String> {
+    for raw in PROFILE_JSONS {
+        let profile = serde_json::from_str::<IntegrationProfile>(raw).map_err(|error| {
+            format!("failed to parse bundled integration profile JSON: {error}")
+        })?;
+        if profile.id == profile_id {
+            return Ok(Some(raw));
+        }
+    }
+    Ok(None)
+}
+
+fn bundled_profile(
+    profile_id: &str,
+    proxy_url: &str,
+) -> Result<Option<IntegrationProfile>, String> {
+    bundled_profile_raw(profile_id)?
+        .map(|raw| parse_profile_json(raw, proxy_url))
+        .transpose()
 }
 
 fn render_profile_templates(
@@ -709,6 +737,16 @@ fn profile_catalog_apply_content(
     profile_id: &str,
     integration_state_dir: &Path,
 ) -> Result<Option<ProfileCatalogApplyContent>, String> {
+    if let Some(raw) = bundled_profile_raw(profile_id)? {
+        let profile = parse_profile_json(raw, DEFAULT_PROXY_URL)?;
+        return Ok(Some((
+            profile.id,
+            profile.name,
+            profile_file_content(raw),
+            profile.notes,
+        )));
+    }
+
     let path = profile_definition_path(integration_state_dir, profile_id);
     match fs::read_to_string(&path) {
         Ok(raw) => {

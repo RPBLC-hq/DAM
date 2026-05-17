@@ -10,6 +10,7 @@ fn lists_stable_profile_ids() {
 fn claude_code_profile_uses_proxy_env_not_anthropic_base_url() {
     let profile = profile("claude-code", "http://127.0.0.1:7828/").unwrap();
 
+    assert!(!profile.connect_args.contains(&"--anthropic".to_string()));
     assert!(profile.connect_args.contains(&"--network-mode".to_string()));
     assert!(profile.connect_args.contains(&"tun".to_string()));
     assert!(profile.connect_args.contains(&"--trust-mode".to_string()));
@@ -32,6 +33,7 @@ fn codex_profile_merges_api_and_subscription_traffic() {
     let command = &profile.commands[1].command;
 
     assert_eq!(profile.provider, "openai-compatible");
+    assert!(!profile.connect_args.contains(&"--openai".to_string()));
     assert!(profile.connect_args.contains(&"--network-mode".to_string()));
     assert!(profile.connect_args.contains(&"tun".to_string()));
     assert!(profile.connect_args.contains(&"--trust-mode".to_string()));
@@ -95,6 +97,41 @@ fn bundled_profile_files_are_seeded_as_json() {
 }
 
 #[test]
+fn ensure_bundled_profile_files_refreshes_stale_known_profiles() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("integrations");
+    let profiles_dir = profile_definitions_dir(&state_dir);
+    fs::create_dir_all(&profiles_dir).unwrap();
+    let path = profile_definition_path(&state_dir, "claude-code");
+    fs::write(
+        &path,
+        r#"{
+          "id": "claude-code",
+          "name": "Claude Code",
+          "summary": "Stale profile",
+          "provider": "anthropic",
+          "traffic_app_ids": ["anthropic-api"],
+          "connect_args": ["--anthropic", "--network-mode", "tun", "--trust-mode", "local_ca"],
+          "settings": [],
+          "commands": [],
+          "notes": [],
+          "automation": "connect_preset"
+        }"#,
+    )
+    .unwrap();
+
+    let written = ensure_bundled_profile_files(&state_dir).unwrap();
+    let raw = fs::read_to_string(&path).unwrap();
+    let profile: IntegrationProfile = serde_json::from_str(&raw).unwrap();
+
+    assert!(written.contains(&path));
+    assert!(written.contains(&profile_definition_path(&state_dir, "codex")));
+    assert!(!profile.connect_args.contains(&"--anthropic".to_string()));
+    assert!(profile.connect_args.contains(&"--network-mode".to_string()));
+    assert!(!profile.settings.is_empty());
+}
+
+#[test]
 fn profiles_from_state_does_not_seed_profile_files() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("integrations");
@@ -109,6 +146,61 @@ fn profiles_from_state_does_not_seed_profile_files() {
         vec!["claude-code", "codex"]
     );
     assert!(!state_dir.exists());
+}
+
+#[test]
+fn profiles_from_state_uses_current_bundled_profile_for_stale_catalog_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("integrations");
+    let profiles_dir = profile_definitions_dir(&state_dir);
+    fs::create_dir_all(&profiles_dir).unwrap();
+    fs::write(
+        profiles_dir.join("claude-code.json"),
+        r#"{
+          "id": "claude-code",
+          "name": "Claude Code",
+          "summary": "Stale profile",
+          "provider": "anthropic",
+          "traffic_app_ids": ["anthropic-api"],
+          "connect_args": ["--anthropic", "--network-mode", "tun", "--trust-mode", "local_ca"],
+          "settings": [],
+          "commands": [],
+          "notes": [],
+          "automation": "connect_preset"
+        }"#,
+    )
+    .unwrap();
+    fs::write(
+        profiles_dir.join("codex.json"),
+        r#"{
+          "id": "codex",
+          "name": "Codex",
+          "summary": "Stale profile",
+          "provider": "openai-compatible",
+          "traffic_app_ids": ["openai-api"],
+          "connect_args": ["--openai", "--network-mode", "tun", "--trust-mode", "local_ca"],
+          "settings": [],
+          "commands": [],
+          "notes": [],
+          "automation": "connect_preset"
+        }"#,
+    )
+    .unwrap();
+
+    let profiles = profiles_from_state(DEFAULT_PROXY_URL, &state_dir).unwrap();
+    let claude = profiles
+        .iter()
+        .find(|profile| profile.id == "claude-code")
+        .unwrap();
+    let codex = profiles
+        .iter()
+        .find(|profile| profile.id == "codex")
+        .unwrap();
+
+    assert!(!claude.connect_args.contains(&"--anthropic".to_string()));
+    assert_eq!(claude.traffic_app_ids, vec!["anthropic-api"]);
+    assert!(!codex.connect_args.contains(&"--openai".to_string()));
+    assert_eq!(codex.traffic_app_ids, vec!["openai-api", "chatgpt-codex"]);
 }
 
 #[test]
@@ -190,7 +282,7 @@ fn ensure_bundled_profile_files_migrates_legacy_rollback_records() {
 }
 
 #[test]
-fn prepare_apply_in_state_keeps_requested_profile_id_for_catalog_path() {
+fn prepare_apply_in_state_refreshes_known_catalog_profile_content() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("integrations");
     let profiles_dir = profile_definitions_dir(&state_dir);
@@ -217,7 +309,10 @@ fn prepare_apply_in_state_keeps_requested_profile_id_for_catalog_path() {
         prepare_apply_in_state("codex", DEFAULT_PROXY_URL, target_path, &state_dir).unwrap();
 
     assert_eq!(prepared.profile_id, "codex");
-    assert_eq!(prepared.profile_name, "Stale Codex");
+    assert_eq!(prepared.profile_name, "Codex");
+    assert!(prepared.desired_content.contains("\"id\": \"codex\""));
+    assert!(!prepared.desired_content.contains("stale-codex"));
+    assert!(!prepared.desired_content.contains("--openai"));
 }
 
 #[test]

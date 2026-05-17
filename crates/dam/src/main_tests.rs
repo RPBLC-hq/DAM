@@ -312,6 +312,56 @@ fn parses_connect_with_enabled_profile_selecting_targets_only() {
 }
 
 #[test]
+fn connect_with_stale_stored_profile_ignores_legacy_provider_flags() {
+    let dir = tempfile::tempdir().unwrap();
+    let integration_state_dir = dir.path().join("integrations");
+    let profiles_dir = dam_integrations::profile_definitions_dir(&integration_state_dir);
+    std::fs::create_dir_all(&profiles_dir).unwrap();
+    std::fs::write(
+        dam_integrations::profile_definition_path(&integration_state_dir, "claude-code"),
+        r#"{
+          "id": "claude-code",
+          "name": "Claude Code",
+          "summary": "Stale profile",
+          "provider": "anthropic",
+          "traffic_app_ids": ["anthropic-api"],
+          "connect_args": ["--anthropic", "--network-mode", "tun", "--trust-mode", "local_ca"],
+          "settings": [],
+          "commands": [],
+          "notes": [],
+          "automation": "connect_preset"
+        }"#,
+    )
+    .unwrap();
+
+    let cli = parse_cli_with_connect_profiles(
+        [
+            "connect".to_string(),
+            "--listen".to_string(),
+            "127.0.0.1:9000".to_string(),
+        ],
+        ConnectProfileSelection {
+            profile_ids: vec!["claude-code".to_string()],
+            explicit_selection: true,
+            integration_state_dir: Some(integration_state_dir),
+        },
+    )
+    .unwrap();
+
+    let CommandKind::Connect(args) = cli.command else {
+        panic!("expected connect");
+    };
+    let targets = args.proxy.targets.as_ref().unwrap();
+    assert_eq!(targets[0].provider, "anthropic");
+    assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
+    assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
+    assert_eq!(
+        args.proxy.traffic_app_ids,
+        Some(vec!["anthropic-api".to_string()])
+    );
+}
+
+#[test]
 fn parses_connect_with_explicit_empty_enabled_profiles_as_empty_traffic_scope() {
     let cli = parse_cli_with_connect_profiles(
         [
