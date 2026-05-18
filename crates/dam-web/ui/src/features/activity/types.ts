@@ -17,7 +17,7 @@ export type ActivityEvent = {
   profile: string
   kind: string
   value?: string
-  wallet_key?: string
+  wallet_id?: string
   decision: ActivityDecision
   purpose?: string
   audit_id: string

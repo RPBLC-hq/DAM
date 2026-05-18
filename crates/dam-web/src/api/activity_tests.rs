@@ -16,7 +16,6 @@ async fn activity_resolves_profile_label_and_wallet_value_from_catalog() {
             value: "ada@example.test".to_string(),
         })
         .unwrap();
-    let key = reference.key();
     logs.record(
         &LogEvent::new(
             "op-1",
@@ -35,7 +34,7 @@ async fn activity_resolves_profile_label_and_wallet_value_from_catalog() {
             "replacement applied with tokenized reference",
         )
         .with_kind(SensitiveType::Email)
-        .with_reference(reference)
+        .with_reference(reference.clone())
         .with_action("tokenized"),
     )
     .unwrap();
@@ -51,7 +50,7 @@ async fn activity_resolves_profile_label_and_wallet_value_from_catalog() {
     assert_ne!(event.profile, target_label);
     assert_eq!(event.kind, "email");
     assert_eq!(event.value.as_deref(), Some("ada@example.test"));
-    assert_eq!(event.wallet_key.as_deref(), Some(key.as_str()));
+    assert_eq!(event.wallet_id.as_deref(), Some(reference.id.as_str()));
     assert!(matches!(event.decision, Decision::Sealed));
 }
 

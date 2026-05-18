@@ -24,7 +24,7 @@ pub struct ActivityEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub wallet_key: Option<String>,
+    pub wallet_id: Option<String>,
     pub decision: Decision,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purpose: Option<String>,
@@ -114,7 +114,7 @@ pub async fn list(
             profile,
             kind: ev.kind,
             value: activity_value.value,
-            wallet_key: activity_value.wallet_key,
+            wallet_id: activity_value.wallet_id,
             decision: ev.decision,
             purpose: ev.purpose,
             audit_id: ev.audit_id,
@@ -211,7 +211,7 @@ fn operation_actors(entries: &[dam_log::LogEntry]) -> HashMap<String, String> {
 #[derive(Debug, Clone, Default)]
 struct ActivityValue {
     value: Option<String>,
-    wallet_key: Option<String>,
+    wallet_id: Option<String>,
 }
 
 fn activity_value_for_entry(
@@ -222,7 +222,7 @@ fn activity_value_for_entry(
     if let Some(reference) = &entry.reference {
         return ActivityValue {
             value: state.vault.get(reference).ok().flatten(),
-            wallet_key: Some(reference.clone()),
+            wallet_id: Some(wallet_id_from_key(reference)),
         };
     }
     let Some(kind) = &entry.kind else {
@@ -246,10 +246,16 @@ fn operation_values(
         let key = (entry.operation_id.clone(), kind.clone());
         values.entry(key).or_insert_with(|| ActivityValue {
             value: state.vault.get(reference).ok().flatten(),
-            wallet_key: Some(reference.clone()),
+            wallet_id: Some(wallet_id_from_key(reference)),
         });
     }
     values
+}
+
+fn wallet_id_from_key(key: &str) -> String {
+    dam_core::Reference::parse_key(key)
+        .map(|reference| reference.id)
+        .unwrap_or_else(|| key.to_string())
 }
 
 fn profile_labels_by_target(state: &AppState) -> HashMap<String, String> {

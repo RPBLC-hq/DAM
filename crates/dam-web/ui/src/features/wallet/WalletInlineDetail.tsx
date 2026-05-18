@@ -50,7 +50,7 @@ export function WalletInlineDetail({ id, seed }: { id: string; seed: WalletItem 
       item: seed,
       meta: [],
       first_seen: undefined,
-      reference: `[${seed.id}]`,
+      reference: `[${seed.kind}:${seed.id}]`,
     }),
     [seed],
   )

@@ -130,8 +130,9 @@ pub struct MetaEntry {
 
 pub async fn detail(
     State(state): State<AppState>,
-    Path(key): Path<String>,
+    Path(id): Path<String>,
 ) -> WebResult<WalletDetail> {
+    let key = resolve_wallet_route_key(&state, &id)?;
     Ok(Ok::new(wallet_detail_for_key(&state, &key)?))
 }
 
@@ -146,9 +147,10 @@ pub struct AllowRequest {
 
 pub async fn allow(
     State(state): State<AppState>,
-    Path(key): Path<String>,
+    Path(id): Path<String>,
     Json(body): Json<AllowRequest>,
 ) -> WebResult<WalletDetail> {
+    let key = resolve_wallet_route_key(&state, &id)?;
     let party = body.party.trim();
     if party.is_empty() {
         return Err(WebError::new(WebErrorCode::InvalidRequest));
@@ -190,9 +192,10 @@ pub struct RevokeRequest {
 
 pub async fn revoke(
     State(state): State<AppState>,
-    Path(key): Path<String>,
+    Path(id): Path<String>,
     Json(body): Json<RevokeRequest>,
 ) -> WebResult<WalletDetail> {
+    let key = resolve_wallet_route_key(&state, &id)?;
     let party = body.party.trim();
     if party.is_empty() {
         return Err(WebError::new(WebErrorCode::InvalidRequest));
@@ -212,8 +215,9 @@ pub async fn revoke(
 
 pub async fn protect(
     State(state): State<AppState>,
-    Path(key): Path<String>,
+    Path(id): Path<String>,
 ) -> WebResult<WalletDetail> {
+    let key = resolve_wallet_route_key(&state, &id)?;
     let store = state
         .consent_store
         .as_deref()
@@ -234,8 +238,9 @@ pub struct RemovedWalletValue {
 
 pub async fn remove(
     State(state): State<AppState>,
-    Path(key): Path<String>,
+    Path(id): Path<String>,
 ) -> WebResult<RemovedWalletValue> {
+    let key = resolve_wallet_route_key(&state, &id)?;
     if let Some(store) = state.consent_store.as_deref() {
         store
             .revoke_for_vault_key(&key)
@@ -251,7 +256,32 @@ pub async fn remove(
     state.events.notify(EventTopic::WalletInvalidate);
     state.events.notify(EventTopic::ConnectUpdate);
 
-    Ok(Ok::new(RemovedWalletValue { id: key }))
+    Ok(Ok::new(RemovedWalletValue {
+        id: wallet_id_from_key(&key),
+    }))
+}
+
+fn resolve_wallet_route_key(state: &AppState, route_id: &str) -> Result<String, WebError> {
+    if Reference::parse_key(route_id).is_some() {
+        return Ok(route_id.to_string());
+    }
+
+    let matches = state
+        .vault
+        .list()
+        .map_err(|_| WebError::new(WebErrorCode::WalletUnreachable))?
+        .into_iter()
+        .filter_map(|entry| {
+            let reference = Reference::parse_key(&entry.key)?;
+            (reference.id == route_id).then_some(entry.key)
+        })
+        .collect::<Vec<_>>();
+
+    match matches.as_slice() {
+        [key] => Ok(key.clone()),
+        [] => Err(WebError::new(WebErrorCode::WalletValueMissing)),
+        _ => Err(WebError::new(WebErrorCode::InvalidRequest)),
+    }
 }
 
 fn wallet_detail_for_key(state: &AppState, key: &str) -> Result<WalletDetail, WebError> {
@@ -324,6 +354,7 @@ fn wallet_item_from_entry(
     now: i64,
 ) -> WalletItem {
     let id = entry.key.clone();
+    let id = wallet_id_from_key(&id);
     let kind = kind_from_key(&entry.key).to_string();
     let related = related_consents(&entry.key, consents);
     let active = related
@@ -348,6 +379,12 @@ fn wallet_item_from_entry(
         shared_with,
         last_seen: None,
     }
+}
+
+fn wallet_id_from_key(key: &str) -> String {
+    Reference::parse_key(key)
+        .map(|reference| reference.id)
+        .unwrap_or_else(|| key.to_string())
 }
 
 fn related_consents<'a>(

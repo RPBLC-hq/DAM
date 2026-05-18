@@ -104,8 +104,10 @@ fn traffic_app_profile_scopes_expand_to_all_targets() {
 #[test]
 fn wallet_state_filter_returns_only_allowed_values() {
     let now = 1_000;
-    let allowed_key = "email:1111111111111111111111";
-    let protected_key = "phone:2222222222222222222222";
+    let allowed_reference = Reference::generate(dam_core::SensitiveType::Email);
+    let protected_reference = Reference::generate(dam_core::SensitiveType::Phone);
+    let allowed_key = allowed_reference.key();
+    let protected_key = protected_reference.key();
     let query = ListQuery {
         q: None,
         state: Some("allowed".to_string()),
@@ -144,7 +146,7 @@ fn wallet_state_filter_returns_only_allowed_values() {
     );
 
     assert_eq!(items.len(), 1);
-    assert_eq!(items[0].id, allowed_key);
+    assert_eq!(items[0].id, allowed_reference.id);
 }
 
 #[tokio::test]
@@ -164,10 +166,13 @@ async fn add_wallet_value_writes_to_vault_and_returns_detail() {
 
     assert_eq!(response.data.item.kind, "email");
     assert_eq!(response.data.item.value, "ada@example.test");
-    assert_eq!(
-        vault.get(&response.data.item.id).unwrap().as_deref(),
-        Some("ada@example.test")
-    );
+    assert!(!response.data.item.id.contains(':'));
+    let key = response
+        .data
+        .reference
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    assert_eq!(vault.get(key).unwrap().as_deref(), Some("ada@example.test"));
 }
 
 #[tokio::test]
@@ -181,12 +186,11 @@ async fn allow_wallet_value_with_global_scope_records_stable_party() {
             value: "ada@example.test".to_string(),
         })
         .unwrap();
-    let key = reference.key();
     let state = test_state(vault.clone(), Some(consent_store.clone()));
 
     let response = allow(
         State(state),
-        Path(key),
+        Path(reference.id.clone()),
         Json(AllowRequest {
             party: "Tous les profils".to_string(),
             ttl_seconds: Some(60),
@@ -227,9 +231,11 @@ async fn remove_wallet_value_deletes_vault_row_and_revokes_access() {
         .unwrap();
     let state = test_state(vault.clone(), Some(consent_store.clone()));
 
-    let response = remove(State(state), Path(key.clone())).await.unwrap();
+    let response = remove(State(state), Path(reference.id.clone()))
+        .await
+        .unwrap();
 
-    assert_eq!(response.data.id, key);
+    assert_eq!(response.data.id, reference.id);
     assert!(vault.get(&key).unwrap().is_none());
     assert!(
         consent_store
