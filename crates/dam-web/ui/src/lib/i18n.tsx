@@ -177,6 +177,7 @@ export type MessageKey =
   | 'settings.apps'
   | 'settings.appsHint'
   | 'settings.appsLoading'
+  | 'settings.appsApplying'
   | 'settings.appsEmpty'
   | 'settings.appsToggleOn'
   | 'settings.appsToggleOff'
@@ -540,6 +541,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'settings.appsHint':
       'Toggle the app profiles DAM mediates. Profile files stay under DAM state.',
     'settings.appsLoading': 'reading apps',
+    'settings.appsApplying': 'applying profile',
     'settings.appsEmpty': 'no apps configured yet',
     'settings.appsToggleOn': 'turn off',
     'settings.appsToggleOff': 'turn on',
@@ -925,6 +927,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'settings.appsHint':
       'Activez les apps que DAM encadre. Activer écrit leur profil ; désactiver le retire.',
     'settings.appsLoading': 'lecture des apps',
+    'settings.appsApplying': 'application du profil',
     'settings.appsEmpty': 'aucune app configurée',
     'settings.appsToggleOn': 'désactiver',
     'settings.appsToggleOff': 'activer',

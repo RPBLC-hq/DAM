@@ -197,7 +197,8 @@ function AppRow({ app }: { app: AppSetting }) {
   })
 
   const installLabel = appInstallLabel(app.install_state, t)
-  const status = appStatus(app.install_state, checked)
+  const toggling = enableApp.isPending || disableApp.isPending
+  const status = toggling ? 'pending' : appStatus(app.install_state, checked)
   const blocked = app.install_state === 'modified'
   const error = enableApp.error ?? disableApp.error ?? setProfile.error
   const errorCode = error instanceof ApiError ? error.message : undefined
@@ -210,19 +211,31 @@ function AppRow({ app }: { app: AppSetting }) {
       hideStatusPill
       leading={leadingCode(app.id)}
       action={
-        <Toggle
-          size="sm"
-          checked={checked}
-          disabled={blocked || enableApp.isPending || disableApp.isPending}
-          aria-label={
-            checked ? t('settings.appsToggleOn') : t('settings.appsToggleOff')
-          }
-          onCheckedChange={(next) => {
-            setOptimistic(next)
-            if (next) enableApp.mutate()
-            else disableApp.mutate()
-          }}
-        />
+        <div className="dam-settings__app-action">
+          {toggling && (
+            <RedactionLoader
+              redacted
+              bars={2}
+              width="2.4rem"
+              size="0.45rem"
+              reason={t('settings.appsApplying')}
+              aria-label={t('settings.appsApplying')}
+            />
+          )}
+          <Toggle
+            size="sm"
+            checked={checked}
+            disabled={blocked || toggling}
+            aria-label={
+              checked ? t('settings.appsToggleOn') : t('settings.appsToggleOff')
+            }
+            onCheckedChange={(next) => {
+              setOptimistic(next)
+              if (next) enableApp.mutate()
+              else disableApp.mutate()
+            }}
+          />
+        </div>
       }
       details={
         <div className="dam-settings__app-details">

@@ -443,6 +443,12 @@ body {
   align-self: auto;
 }
 
+.dam-settings__app-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .dam-settings__app-details {
   display: flex;
   flex-direction: column;
@@ -633,6 +639,10 @@ body {
   overflow-anchor: auto;
   scroll-margin-top: 9rem;
 }
+.dam-wallet__row--settled {
+  position: relative;
+  z-index: 2;
+}
 
 /* Wrapper around the inline detail. Its height animates from 0 to the
    detail's natural height using the grid-template-rows trick, so
@@ -656,6 +666,9 @@ body {
 }
 .dam-wallet__row--active .dam-wallet__inline-wrap {
   grid-template-rows: minmax(0, 1fr);
+}
+.dam-wallet__row--settled .dam-wallet__inline-wrap {
+  overflow: visible;
 }
 .dam-wallet__inline-wrap > * {
   /* Anchor the panel's bottom to the wrapper's bottom so as the track
@@ -755,7 +768,7 @@ body {
   min-height: 2.5rem;
   padding: 0 var(--space-3);
   border: var(--border-1) solid var(--line);
-  background: var(--surface);
+  background: var(--panel);
   color: var(--text);
   font-family: var(--font-mono);
   font-size: 12px;
@@ -796,7 +809,7 @@ body {
   gap: var(--space-1);
   padding: var(--space-2);
   border: var(--border-1) solid var(--line);
-  background: var(--surface);
+  background: var(--panel);
 }
 
 .dam-wallet__profile-option {

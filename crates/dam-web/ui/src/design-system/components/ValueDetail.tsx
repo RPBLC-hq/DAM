@@ -99,26 +99,39 @@ export function ValueDetail({
       )}
 
       {sharedWith.length > 0 && (
-        <ul className="rpblc-value-detail__sharing">
-          {sharedWith.map((p) => (
-            <li className="rpblc-value-detail__sharing-row" key={p.name}>
-              <span>
-                <span className="rpblc-value-detail__sharing-who">{p.name}</span>
-                <span className="rpblc-value-detail__sharing-verb">has been reading this</span>
-              </span>
-              {p.since && (
-                <span className="rpblc-value-detail__sharing-since">since {p.since}</span>
-              )}
-            </li>
-          ))}
-        </ul>
+        <section className="rpblc-value-detail__sharing" aria-label="Allowed profiles">
+          <h3 className="rpblc-value-detail__sharing-title">Allowed</h3>
+          <ul className="rpblc-value-detail__sharing-list">
+            {sharedWith.map((p) => (
+              <li className="rpblc-value-detail__sharing-row" key={p.name}>
+                <span className="rpblc-value-detail__sharing-info">
+                  <span className="rpblc-value-detail__sharing-who">{p.name}</span>
+                  {p.since && (
+                    <span className="rpblc-value-detail__sharing-since">
+                      since {p.since}
+                    </span>
+                  )}
+                </span>
+                {onRevoke && (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    type="button"
+                    onClick={() => setPending({ kind: 'revoke', party: p.name })}
+                  >
+                    stop allowing
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {pending === null ? (
         <ActionRegion
           state={state}
           candidateParty={candidateParty}
-          firstSharedParty={sharedWith[0]?.name}
           onChoose={setPending}
         />
       ) : (
@@ -141,41 +154,14 @@ export function ValueDetail({
 function ActionRegion({
   state,
   candidateParty,
-  firstSharedParty,
   onChoose,
 }: {
   state: ProtectionState
   candidateParty?: string
-  firstSharedParty?: string
   onChoose: (p: Pending) => void
 }) {
   if (state === 'allowed') {
-    const party = firstSharedParty ?? candidateParty
-    if (!party) return null
-    return (
-      <div className="rpblc-value-detail__actions">
-        <p className="rpblc-value-detail__hint">
-          <b>{party}</b> can read this. Stop allowing them at any time — the next request
-          from them will be blocked.
-        </p>
-        <div className="rpblc-value-detail__actions-row">
-          <Button
-            variant="danger"
-            bracketed
-            onClick={() => onChoose({ kind: 'revoke', party })}
-          >
-            stop allowing {party}
-          </Button>
-          <Button
-            variant="secondary"
-            bracketed
-            onClick={() => onChoose({ kind: 'protect-all' })}
-          >
-            protect from everyone
-          </Button>
-        </div>
-      </div>
-    )
+    return null
   }
 
   return (

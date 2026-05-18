@@ -55,6 +55,7 @@ export function WalletListPage() {
   )
   const [activeId, setActiveId] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
+  const [pendingFocusId, setPendingFocusId] = useState<string | null>(null)
   // The CSS class `--active` is gated behind a paint frame after
   // `activeId` flips. Without that gate, React commits the new content
   // and the `--active` class in a single paint, the browser starts at
@@ -63,6 +64,7 @@ export function WalletListPage() {
   // first at `0fr`-with-content (no `--active`) gives the CSS transition
   // a real "from" state to interpolate from.
   const [openId, setOpenId] = useState<string | null>(null)
+  const [settledOpenId, setSettledOpenId] = useState<string | null>(null)
   // The previously active row keeps its content mounted while the close
   // transition runs. Cleared after the transition completes.
   const [closingId, setClosingId] = useState<string | null>(null)
@@ -77,6 +79,7 @@ export function WalletListPage() {
     preY: number
   } | null>(null)
   const closeTimerRef = useRef<number | null>(null)
+  const openSettleTimerRef = useRef<number | null>(null)
   const pendingAddedOpenId = useRef<string | null>(null)
   const pendingAddedRevealId = useRef<string | null>(null)
   const pendingAddedOpenTimerRef = useRef<number | null>(null)
@@ -115,7 +118,7 @@ export function WalletListPage() {
     mutationFn: (body: { kind: WalletKind; value: string }) =>
       apiPost<WalletDetail>('/wallet', body),
     onSuccess: (detail) => {
-      queueValueReveal(detail.item.id)
+      setPendingFocusId(detail.item.id)
       setAdding(false)
       setQuery('')
       setStateFilter('all')
@@ -141,11 +144,18 @@ export function WalletListPage() {
 
   useEffect(() => {
     if (!focusId) return
-    queueValueReveal(focusId)
+    setPendingFocusId(focusId)
     setQuery('')
     setStateFilter('all')
     setFocusId('')
-  }, [focusId, queueValueReveal, setFocusId, setQuery, setStateFilter])
+  }, [focusId, setFocusId, setQuery, setStateFilter])
+
+  useEffect(() => {
+    if (!pendingFocusId) return
+    if (!items.some((item) => item.id === pendingFocusId)) return
+    queueValueReveal(pendingFocusId)
+    setPendingFocusId(null)
+  }, [items, pendingFocusId, queueValueReveal])
 
   useEffect(() => {
     return () => {
@@ -157,6 +167,9 @@ export function WalletListPage() {
       }
       if (pendingAddedRevealTimerRef.current != null) {
         window.clearTimeout(pendingAddedRevealTimerRef.current)
+      }
+      if (openSettleTimerRef.current != null) {
+        window.clearTimeout(openSettleTimerRef.current)
       }
     }
   }, [])
@@ -172,6 +185,33 @@ export function WalletListPage() {
     })
     return () => window.cancelAnimationFrame(handle)
   }, [activeId, openId])
+
+  useEffect(() => {
+    if (openSettleTimerRef.current != null) {
+      window.clearTimeout(openSettleTimerRef.current)
+      openSettleTimerRef.current = null
+    }
+    setSettledOpenId(null)
+    if (!openId) return
+    const settle = () => {
+      openSettleTimerRef.current = null
+      setSettledOpenId(openId)
+    }
+    if (prefersReducedMotion()) {
+      settle()
+      return
+    }
+    openSettleTimerRef.current = window.setTimeout(
+      settle,
+      INLINE_DETAIL_ANIM_MS,
+    )
+    return () => {
+      if (openSettleTimerRef.current != null) {
+        window.clearTimeout(openSettleTimerRef.current)
+        openSettleTimerRef.current = null
+      }
+    }
+  }, [openId])
 
   const onToggle = useCallback(
     (id: string) => {
@@ -399,17 +439,25 @@ export function WalletListPage() {
           items.map((item) => {
             const isActive = item.id === activeId
             const isOpen = item.id === openId
+            const isSettled = item.id === settledOpenId
             const isClosing = item.id === closingId
             // Mount content for the active row AND any row that's
             // mid-close (so the close animation can play). Visual
             // `--active` class is driven by `isOpen` (gated by rAF) so
             // the transition has a real "from" frame.
             const showDetail = isActive || isClosing
+            const rowClassName = [
+              'dam-wallet__row',
+              isOpen ? 'dam-wallet__row--active' : '',
+              isSettled ? 'dam-wallet__row--settled' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')
             return (
               <div
                 key={item.id}
                 data-row-id={item.id}
-                className={`dam-wallet__row${isOpen ? ' dam-wallet__row--active' : ''}`}
+                className={rowClassName}
               >
                 <WalletRow
                   item={item}
