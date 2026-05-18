@@ -17,7 +17,7 @@ import { useUrlSearchParam, useUrlSearchString } from '@/lib/url-search'
 import type { ActivityDecision, ActivityEvent, ActivityView } from './types'
 
 type Decision = 'all' | ActivityDecision
-type Since = 'today' | '7d' | '30d' | 'all'
+type Since = '1h' | 'today' | '7d' | '30d' | 'all'
 type WalletKind = 'email' | 'domain' | 'phone' | 'ssn' | 'cc'
 type WalletDetail = {
   item: {
@@ -26,7 +26,7 @@ type WalletDetail = {
 }
 
 const DECISION_VALUES: Decision[] = ['all', 'granted', 'sealed', 'denied']
-const SINCE_VALUES: Since[] = ['today', '7d', '30d', 'all']
+const SINCE_VALUES: Since[] = ['1h', 'today', '7d', '30d', 'all']
 
 const QUERY_KEY = 'activity' as const
 
@@ -50,7 +50,7 @@ export function ActivityPage() {
     'all',
     isDecision,
   )
-  const [since, setSince] = useUrlSearchParam<Since>('since', '7d', isSince)
+  const [since, setSince] = useUrlSearchParam<Since>('since', '1h', isSince)
 
   const activity = useQuery({
     queryKey: [QUERY_KEY, { query, decision, since }] as const,
@@ -294,6 +294,7 @@ function isWalletKind(value: string): value is WalletKind {
 }
 
 function sinceLabelKey(value: Since): MessageKey {
+  if (value === '1h') return 'activity.since.1h'
   if (value === 'today') return 'activity.since.today'
   if (value === '7d') return 'activity.since.7d'
   if (value === '30d') return 'activity.since.30d'
@@ -301,8 +302,9 @@ function sinceLabelKey(value: Since): MessageKey {
 }
 
 function sinceTimestamp(value: Since): number | null {
-  if (value === 'all') return null
+  if (value === 'all') return 0
   const now = Math.floor(Date.now() / 1000)
+  if (value === '1h') return now - 3_600
   if (value === 'today') {
     const start = new Date()
     start.setHours(0, 0, 0, 0)

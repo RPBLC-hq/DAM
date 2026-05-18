@@ -27,7 +27,7 @@ Connect action wiring is intentionally narrow in this slice: browser-hosted `con
 
 ## Activity
 
-`GET /api/v1/activity?since=&decision=&q=` reads `dam-log` and maps person-facing events into the CTZN activity feed. The mapper currently includes:
+`GET /api/v1/activity?since=&decision=&q=` reads `dam-log` and maps person-facing events into the CTZN activity feed. When `since` is omitted, the API defaults to the last hour so the Activity view does not open as a full log dump; use `since=0` for all time. The React Activity filter also defaults to `1h`. The mapper currently includes:
 
 - `policy_decision.allow` → `granted`
 - `policy_decision.tokenize` / `policy_decision.redact` / `redaction.*` → `sealed`

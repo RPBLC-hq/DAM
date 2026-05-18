@@ -3,6 +3,7 @@
 use axum::extract::{Path, Query, State};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::AppState;
 use crate::activity_map::{Decision, actor_from_message, derive_event_with_actor};
@@ -46,6 +47,8 @@ pub struct ActivityQuery {
     pub q: Option<String>,
 }
 
+const DEFAULT_ACTIVITY_WINDOW_SECONDS: i64 = 3_600;
+
 pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ActivityQuery>,
@@ -57,6 +60,7 @@ pub async fn list(
 
     let q = query.q.as_deref().unwrap_or("").to_lowercase();
     let decision_filter = query.decision.as_deref();
+    let since = query.since.unwrap_or_else(default_since_timestamp);
 
     let actors = operation_actors(&entries);
     let profile_labels = profile_labels_by_target(&state);
@@ -69,9 +73,7 @@ pub async fn list(
         else {
             continue;
         };
-        if let Some(since) = query.since
-            && entry.timestamp < since
-        {
+        if entry.timestamp < since {
             continue;
         }
         match ev.decision {
@@ -122,6 +124,17 @@ pub async fn list(
     }
 
     Ok(Ok::new(ActivityFeed { events, summary }))
+}
+
+fn default_since_timestamp() -> i64 {
+    now_unix_secs().saturating_sub(DEFAULT_ACTIVITY_WINDOW_SECONDS)
+}
+
+fn now_unix_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Clone, Serialize)]

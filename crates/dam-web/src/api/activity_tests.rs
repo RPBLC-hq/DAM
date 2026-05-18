@@ -54,6 +54,56 @@ async fn activity_resolves_profile_label_and_wallet_value_from_catalog() {
     assert!(matches!(event.decision, Decision::Sealed));
 }
 
+#[tokio::test]
+async fn activity_defaults_to_last_hour_and_since_zero_shows_all() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    let now = now_unix_secs();
+    let mut recent = LogEvent::new(
+        "op-recent",
+        LogLevel::Info,
+        LogEventType::PolicyDecision,
+        "recent policy",
+    )
+    .with_kind(SensitiveType::Email)
+    .with_action("tokenize");
+    recent.timestamp = now - 60;
+    let mut old = LogEvent::new(
+        "op-old",
+        LogLevel::Info,
+        LogEventType::PolicyDecision,
+        "old policy",
+    )
+    .with_kind(SensitiveType::Email)
+    .with_action("tokenize");
+    old.timestamp = now - 7_200;
+    logs.record(&recent).unwrap();
+    logs.record(&old).unwrap();
+
+    let default_response = list(
+        State(test_state(vault.clone(), logs.clone())),
+        Query(ActivityQuery::default()),
+    )
+    .await
+    .unwrap();
+    let all_response = list(
+        State(test_state(vault, logs)),
+        Query(ActivityQuery {
+            since: Some(0),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(default_response.data.events.len(), 1);
+    assert_eq!(
+        default_response.data.events[0].audit_id,
+        "evt_0000000000000001"
+    );
+    assert_eq!(all_response.data.events.len(), 2);
+}
+
 fn catalog_profile_fixture() -> (String, String) {
     let config = dam_config::DamConfig::default();
     let profiles = dam_integrations::profiles(&format!("http://{}", config.proxy.listen));

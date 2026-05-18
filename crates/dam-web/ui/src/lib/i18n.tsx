@@ -327,6 +327,7 @@ export type MessageKey =
   | 'activity.decision.granted'
   | 'activity.decision.sealed'
   | 'activity.decision.denied'
+  | 'activity.since.1h'
   | 'activity.since.today'
   | 'activity.since.7d'
   | 'activity.since.30d'
@@ -712,6 +713,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'activity.decision.granted': 'granted',
     'activity.decision.sealed': 'sealed',
     'activity.decision.denied': 'denied',
+    'activity.since.1h': '1h',
     'activity.since.today': 'today',
     'activity.since.7d': '7d',
     'activity.since.30d': '30d',
@@ -1101,6 +1103,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'activity.decision.granted': 'autorisés',
     'activity.decision.sealed': 'scellés',
     'activity.decision.denied': 'refusés',
+    'activity.since.1h': '1 h',
     'activity.since.today': 'aujourd’hui',
     'activity.since.7d': '7 j',
     'activity.since.30d': '30 j',
