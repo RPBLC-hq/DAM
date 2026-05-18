@@ -86,6 +86,36 @@ fn wallet_item_dedupes_profile_grants_for_multiple_targets() {
 }
 
 #[test]
+fn wallet_item_does_not_list_revoked_grants_as_shared() {
+    let now = 1_000;
+    let key = "email:1111111111111111111111";
+    let item = wallet_item_from_entry(
+        dam_vault::VaultEntry {
+            key: key.to_string(),
+            value: "ada@example.test".to_string(),
+            created_at: now - 100,
+            updated_at: now - 50,
+        },
+        &[dam_consent::ConsentEntry {
+            id: "grant_1".to_string(),
+            kind: dam_core::SensitiveType::Email,
+            value_fingerprint: "fingerprint".to_string(),
+            vault_key: Some(key.to_string()),
+            scope: dam_consent::DEFAULT_SCOPE.to_string(),
+            created_at: now - 20,
+            expires_at: now + 60,
+            revoked_at: Some(now - 10),
+            created_by: "All profiles".to_string(),
+            reason: None,
+        }],
+        now,
+    );
+
+    assert_eq!(item.state, ItemState::Revoked);
+    assert!(item.shared_with.is_empty());
+}
+
+#[test]
 fn traffic_app_profile_scopes_expand_to_all_targets() {
     let scopes = target_scopes_for_traffic_app_ids(
         &dam_net::llm_mvp_profile(),

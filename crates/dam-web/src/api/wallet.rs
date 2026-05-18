@@ -1,8 +1,8 @@
 //! Wallet list, detail, and consent mutations.
 //!
 //! v1 reads `dam-vault::Vault::list()` and joins simple consent state.
-//! Full at-a-glance metadata, sharing roster timestamps, and per-event
-//! last-seen derivation land progressively.
+//! Full at-a-glance metadata and per-event last-seen derivation land
+//! progressively.
 
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -362,14 +362,8 @@ fn wallet_item_from_entry(
         .copied()
         .filter(|entry| entry.is_active_at(now))
         .collect::<Vec<_>>();
-    let shared_with = if active.is_empty() {
-        latest_related_party(&related)
-            .into_iter()
-            .map(shared_with_from_consent)
-            .collect()
-    } else {
-        dedupe_shared_with(active.into_iter().map(shared_with_from_consent).collect())
-    };
+    let shared_with =
+        dedupe_shared_with(active.into_iter().map(shared_with_from_consent).collect());
     let state = wallet_item_state(&related, now);
     WalletItem {
         id,
@@ -415,12 +409,6 @@ fn wallet_item_state(consents: &[&dam_consent::ConsentEntry], now: i64) -> ItemS
         };
     }
     ItemState::Protected
-}
-
-fn latest_related_party<'a>(
-    related: &[&'a dam_consent::ConsentEntry],
-) -> Option<&'a dam_consent::ConsentEntry> {
-    related.first().copied()
 }
 
 fn shared_with_from_consent(entry: &dam_consent::ConsentEntry) -> SharedWith {

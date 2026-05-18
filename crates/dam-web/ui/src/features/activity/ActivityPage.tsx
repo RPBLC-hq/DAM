@@ -12,7 +12,6 @@ import {
 
 import { ApiError, api, apiPost } from '@/lib/api/client'
 import { useI18n, type MessageKey } from '@/lib/i18n'
-import { resolveSurface } from '@/lib/surface'
 import { useUrlSearchParam, useUrlSearchString } from '@/lib/url-search'
 import type { ActivityDecision, ActivityEvent, ActivityView } from './types'
 
@@ -34,16 +33,14 @@ export function ActivityPage() {
   const { t, locale } = useI18n()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const surface = resolveSurface()
   const formatter = useMemo(
     () => new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }),
     [locale],
   )
 
   // Filters: q + decision + since. URL-stable so refresh and share
-  // preserve state. Tray surface skips the URL plumbing (memory router)
-  // but the same state shape applies — just no surfaced filter UI on
-  // tray, since `recently-scanned` there is a fixed seed.
+  // preserve state. Tray surface uses memory history, but the same filter
+  // state applies so Activity never opens as an unbounded log dump.
   const [query, setQuery] = useUrlSearchString('q')
   const [decision, setDecision] = useUrlSearchParam<Decision>(
     'decision',
@@ -105,28 +102,26 @@ export function ActivityPage() {
       <header className="dam-activity__header">
         <h1 className="dam-activity__heading">{t('activity.heading')}</h1>
         <p className="dam-activity__hint">{t('activity.hint')}</p>
-        {surface === 'web' && (
-          <div className="dam-activity__filters">
-            <SearchBar
-              value={query}
-              onValueChange={setQuery}
-              aria-label={t('activity.searchAria')}
-              placeholder={t('activity.searchPlaceholder')}
-            />
-            <SegmentedControl<Decision>
-              value={decision}
-              onValueChange={setDecision}
-              options={decisionOptions}
-              aria-label={t('activity.decisionAria')}
-            />
-            <SegmentedControl<Since>
-              value={since}
-              onValueChange={setSince}
-              options={sinceOptions}
-              aria-label={t('activity.sinceAria')}
-            />
-          </div>
-        )}
+        <div className="dam-activity__filters">
+          <SearchBar
+            value={query}
+            onValueChange={setQuery}
+            aria-label={t('activity.searchAria')}
+            placeholder={t('activity.searchPlaceholder')}
+          />
+          <SegmentedControl<Decision>
+            value={decision}
+            onValueChange={setDecision}
+            options={decisionOptions}
+            aria-label={t('activity.decisionAria')}
+          />
+          <SegmentedControl<Since>
+            value={since}
+            onValueChange={setSince}
+            options={sinceOptions}
+            aria-label={t('activity.sinceAria')}
+          />
+        </div>
       </header>
 
       <div className="dam-activity__list">
