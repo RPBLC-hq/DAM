@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 60" fill="none" role="img" aria-label="[ RPBLC : DAM ]">
+  <style>
+    text { font-family: 'JetBrains Mono', 'Menlo', 'Monaco', monospace; font-weight: 700; font-size: 52px; }
+    .bracket { fill: #c4bfb6; }
+    .letter  { fill: #0a0a08; }
+    .colon   { fill: #B8965A; }
+  </style>
+  <text x="260" y="48" text-anchor="middle">
+    <tspan class="bracket" dy="-3">[ </tspan><tspan class="letter" dy="3">RPBLC</tspan><tspan class="colon"> : </tspan><tspan class="letter">DAM</tspan><tspan class="bracket" dy="-3"> ]</tspan>
+  </text>
+</svg>
