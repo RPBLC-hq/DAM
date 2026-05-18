@@ -72,6 +72,41 @@ fn capture_scope_preserves_explicit_empty_enabled_profile_state() {
 }
 
 #[test]
+fn pending_network_extension_approval_keeps_profile_toggle_state() {
+    assert_eq!(
+        network_extension_result_to_reconcile_outcome(
+            dam_net_macos::MacosNetworkExtensionResultState::NeedsApproval,
+        ),
+        ReconcileOutcome::SetupPending
+    );
+    assert_eq!(
+        network_extension_result_to_reconcile_outcome(
+            dam_net_macos::MacosNetworkExtensionResultState::Installed,
+        ),
+        ReconcileOutcome::Reconciled
+    );
+    assert_eq!(
+        network_extension_result_to_reconcile_outcome(
+            dam_net_macos::MacosNetworkExtensionResultState::AlreadyInstalled,
+        ),
+        ReconcileOutcome::Reconciled
+    );
+}
+
+#[test]
+fn pending_setup_reconnect_output_keeps_profile_toggle_state() {
+    assert!(command_output_indicates_pending_setup(
+        "DAM cannot start this transparent setup yet: approve DAM Network Protection first"
+    ));
+    assert!(command_output_indicates_pending_setup(
+        "needs_user_approval approve the DAM Network Protection configuration in System Settings"
+    ));
+    assert!(!command_output_indicates_pending_setup(
+        "unknown daemon option: --anthropic"
+    ));
+}
+
+#[test]
 fn reconnect_runtime_path_uses_web_runtime_path_for_relative_daemon_state() {
     let state_dir = std::path::Path::new("/Users/example/.dam");
 

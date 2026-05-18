@@ -26,6 +26,12 @@ struct CaptureScope {
     routes: Vec<dam_net::TrafficRoute>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReconcileOutcome {
+    Reconciled,
+    SetupPending,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SettingsView {
     pub theme: String,
@@ -237,16 +243,19 @@ fn set_app_enabled(state: &AppState, profile_id: &str, enabled: bool) -> Result<
             .any(|profile| profile.profile_id == profile_id);
     dam_integrations::set_integration_enabled(profile_id, enabled, &integration_state_dir)
         .map_err(settings_error)?;
-    if let Err(error) = reconcile_running_capture_scope(state, &state_dir) {
-        if previously_enabled != enabled {
-            let _ = dam_integrations::set_integration_enabled(
-                profile_id,
-                previously_enabled,
-                &integration_state_dir,
-            );
-            let _ = reconcile_running_capture_scope(state, &state_dir);
+    match reconcile_running_capture_scope(state, &state_dir) {
+        Ok(ReconcileOutcome::Reconciled | ReconcileOutcome::SetupPending) => {}
+        Err(error) => {
+            if previously_enabled != enabled {
+                let _ = dam_integrations::set_integration_enabled(
+                    profile_id,
+                    previously_enabled,
+                    &integration_state_dir,
+                );
+                let _ = reconcile_running_capture_scope(state, &state_dir);
+            }
+            return Err(error);
         }
-        return Err(error);
     }
     state.events.notify(EventTopic::ConnectUpdate);
     Ok(())
@@ -255,19 +264,24 @@ fn set_app_enabled(state: &AppState, profile_id: &str, enabled: bool) -> Result<
 fn reconcile_running_capture_scope(
     state: &AppState,
     state_dir: &std::path::Path,
-) -> Result<(), WebError> {
+) -> Result<ReconcileOutcome, WebError> {
     let daemon = match dam_daemon::daemon_status() {
         Ok(dam_daemon::DaemonStatus::Connected(daemon)) => daemon,
         Ok(dam_daemon::DaemonStatus::Disconnected | dam_daemon::DaemonStatus::Stale(_)) => {
-            return Ok(());
+            return Ok(ReconcileOutcome::Reconciled);
         }
         Err(_) => return Err(WebError::new(WebErrorCode::DaemonUnreachable)),
     };
     let scope = capture_scope_for_state(state.config.as_ref(), state_dir)?;
     match daemon.network_mode {
         dam_net::CaptureMode::Tun => {
-            dam_net_macos::install_network_extension_for_hosts(state_dir, &scope.hosts)
-                .map_err(|_| WebError::new(WebErrorCode::SetupStepFailed))?;
+            let result =
+                dam_net_macos::install_network_extension_for_hosts(state_dir, &scope.hosts)
+                    .map_err(|_| WebError::new(WebErrorCode::SetupStepFailed))?;
+            let outcome = network_extension_result_to_reconcile_outcome(result.state);
+            if outcome == ReconcileOutcome::SetupPending {
+                return Ok(outcome);
+            }
         }
         dam_net::CaptureMode::SystemProxy => {
             dam_net_macos::install_system_proxy_for_hosts(
@@ -280,6 +294,17 @@ fn reconcile_running_capture_scope(
         dam_net::CaptureMode::ExplicitProxy => {}
     }
     reconnect_daemon_for_app_scope(state, state_dir, &daemon, &scope)
+}
+
+fn network_extension_result_to_reconcile_outcome(
+    state: dam_net_macos::MacosNetworkExtensionResultState,
+) -> ReconcileOutcome {
+    match state {
+        dam_net_macos::MacosNetworkExtensionResultState::NeedsApproval => {
+            ReconcileOutcome::SetupPending
+        }
+        _ => ReconcileOutcome::Reconciled,
+    }
 }
 
 fn capture_scope_for_state(
@@ -342,7 +367,7 @@ fn reconnect_daemon_for_app_scope(
     state_dir: &FsPath,
     daemon: &dam_daemon::DaemonState,
     scope: &CaptureScope,
-) -> Result<(), WebError> {
+) -> Result<ReconcileOutcome, WebError> {
     let dam_bin =
         locate_dam_binary().ok_or_else(|| WebError::new(WebErrorCode::DaemonUnreachable))?;
     let mut args = vec!["connect".to_string()];
@@ -389,10 +414,11 @@ fn reconnect_daemon_for_app_scope(
         .output()
         .map_err(|_| WebError::new(WebErrorCode::DaemonUnreachable))?;
     if !output.status.success() {
-        eprintln!(
-            "failed to reconcile DAM profile scope: {}",
-            command_output_summary(&output)
-        );
+        let summary = command_output_summary(&output);
+        eprintln!("failed to reconcile DAM profile scope: {}", summary);
+        if command_output_indicates_pending_setup(&summary) {
+            return Ok(ReconcileOutcome::SetupPending);
+        }
         return Err(WebError::new(WebErrorCode::SetupStepFailed));
     }
     if !running_daemon_matches_scope(scope)? {
@@ -402,7 +428,7 @@ fn reconnect_daemon_for_app_scope(
         dam_daemon::set_protection_enabled(false)
             .map_err(|_| WebError::new(WebErrorCode::DaemonUnreachable))?;
     }
-    Ok(())
+    Ok(ReconcileOutcome::Reconciled)
 }
 
 fn reconnect_runtime_path(current: &FsPath, fallback: &FsPath, state_dir: &FsPath) -> PathBuf {
@@ -496,6 +522,12 @@ fn command_output_summary(output: &std::process::Output) -> String {
         return stdout;
     }
     format!("command exited with {}", output.status)
+}
+
+fn command_output_indicates_pending_setup(summary: &str) -> bool {
+    summary.contains("DAM cannot start this transparent setup yet")
+        || summary.contains("Network Extension activation is waiting for user approval")
+        || summary.contains("approve the DAM Network Protection configuration")
 }
 
 #[derive(Debug, Clone, Deserialize)]
