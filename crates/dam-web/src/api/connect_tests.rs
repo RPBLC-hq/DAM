@@ -146,6 +146,20 @@ fn setup_plan_mapping_uses_diagnostics_next_action_for_current_step() {
     assert_eq!(mapped.steps[1].detail, "failed");
 }
 
+#[test]
+fn connected_daemon_with_scope_mismatch_is_degraded() {
+    let daemon = dam_daemon::DaemonStatus::Connected(test_daemon_state());
+
+    assert_eq!(
+        derive_connect_state(&daemon, None, false),
+        ConnectState::Degraded
+    );
+    assert_eq!(
+        derive_connect_state(&daemon, None, true),
+        ConnectState::Protected
+    );
+}
+
 fn log_entry(
     id: i64,
     timestamp: i64,
@@ -164,5 +178,37 @@ fn log_entry(
         reference: None,
         action: action.map(ToOwned::to_owned),
         message: message.to_string(),
+    }
+}
+
+fn test_daemon_state() -> dam_daemon::DaemonState {
+    dam_daemon::DaemonState {
+        version: 6,
+        pid: 1,
+        executable_path: None,
+        executable_sha256: None,
+        listen: "127.0.0.1:7828".to_string(),
+        proxy_url: "http://127.0.0.1:7828".to_string(),
+        config_path: None,
+        vault_path: std::path::PathBuf::from("vault.db"),
+        log_path: Some(std::path::PathBuf::from("log.db")),
+        consent_path: Some(std::path::PathBuf::from("consent.db")),
+        resolve_inbound: true,
+        target_name: None,
+        target_provider: None,
+        upstream: None,
+        proxy_targets: Vec::new(),
+        started_at_unix: 1,
+        network_mode: dam_net::CaptureMode::Tun,
+        transparent_routes: Vec::new(),
+        transparent_routing_readiness: Vec::new(),
+        trust: dam_trust::TrustState {
+            mode: dam_trust::TrustMode::LocalCa,
+            ..dam_trust::TrustState::default()
+        },
+        transparent_trust_readiness: Vec::new(),
+        transparent_interception_readiness: Vec::new(),
+        protection_enabled: true,
+        protection_started_at_unix: Some(1),
     }
 }

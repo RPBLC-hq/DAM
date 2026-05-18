@@ -13,7 +13,7 @@
 use axum::Json;
 use axum::extract::State;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -21,7 +21,7 @@ use crate::AppState;
 use crate::error::{Ok, WebError, WebErrorCode, WebResult};
 use crate::events_bus::EventTopic;
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 #[allow(dead_code)]
 pub enum ConnectState {
@@ -138,7 +138,14 @@ pub async fn get(State(state): State<AppState>) -> WebResult<ConnectView> {
     )
     .ok();
 
-    let connect_state = derive_connect_state(&daemon_status, plan.as_ref());
+    let scope_matches = match &daemon_status {
+        dam_daemon::DaemonStatus::Connected(daemon_state) => {
+            runtime_scope_matches_daemon(state.config.as_ref(), daemon_state).unwrap_or(false)
+        }
+        _ => true,
+    };
+
+    let connect_state = derive_connect_state(&daemon_status, plan.as_ref(), scope_matches);
 
     let setup_plan = plan.as_ref().and_then(|p| match connect_state {
         ConnectState::NeedsSetup | ConnectState::Degraded => Some(map_setup_plan(p)),
@@ -278,6 +285,7 @@ pub async fn post_action(
 fn derive_connect_state(
     daemon_status: &dam_daemon::DaemonStatus,
     plan: Option<&dam_diagnostics::SetupPlan>,
+    scope_matches: bool,
 ) -> ConnectState {
     match daemon_status {
         dam_daemon::DaemonStatus::Connected(daemon_state) => {
@@ -292,6 +300,9 @@ fn derive_connect_state(
                 Some(dam_diagnostics::SetupPlanState::NeedsAction)
             ) {
                 return ConnectState::NeedsSetup;
+            }
+            if !scope_matches {
+                return ConnectState::Degraded;
             }
             if daemon_state.protection_enabled {
                 ConnectState::Protected
@@ -309,6 +320,77 @@ fn derive_connect_state(
             _ => ConnectState::Disconnected,
         },
     }
+}
+
+fn runtime_scope_matches_daemon(
+    config: &dam_config::DamConfig,
+    daemon: &dam_daemon::DaemonState,
+) -> Result<bool, String> {
+    let state_dir = dam_daemon::state_paths()
+        .map(|paths| paths.state_dir)
+        .map_err(|error| error.to_string())?;
+    let integration_state_dir = state_dir.join("integrations");
+    let mut config = config.clone();
+    if let Some(profile_ids) =
+        dam_integrations::runtime_enabled_profile_ids(&integration_state_dir)?
+    {
+        config.traffic.enabled_app_ids = Some(
+            dam_integrations::traffic_app_ids_for_profile_ids_from_state(
+                &profile_ids,
+                &integration_state_dir,
+            )?,
+        );
+    }
+
+    let expected_routes = dam_net::traffic_routes_from_profile(&config.traffic.effective_profile());
+    let current_routes = daemon
+        .transparent_routes
+        .iter()
+        .map(route_identity)
+        .collect::<BTreeSet<_>>();
+    let expected_route_set = expected_routes
+        .iter()
+        .map(route_identity)
+        .collect::<BTreeSet<_>>();
+    if current_routes != expected_route_set {
+        return Ok(false);
+    }
+    if expected_routes.is_empty() {
+        return Ok(true);
+    }
+
+    let current_targets = daemon
+        .proxy_targets
+        .iter()
+        .map(|target| {
+            (
+                target.name.clone(),
+                target.provider.clone(),
+                target.upstream.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let expected_targets = expected_routes
+        .iter()
+        .map(|route| {
+            (
+                route.target_name.clone(),
+                route.provider.clone(),
+                route.upstream.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    Ok(current_targets == expected_targets)
+}
+
+fn route_identity(route: &dam_net::TrafficRoute) -> (String, String, String, String, &'static str) {
+    (
+        route.host.clone(),
+        route.provider.clone(),
+        route.target_name.clone(),
+        route.upstream.clone(),
+        route.adapter.tag(),
+    )
 }
 
 fn map_setup_plan(plan: &dam_diagnostics::SetupPlan) -> SetupPlan {

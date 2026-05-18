@@ -5,7 +5,12 @@
 use axum::Json;
 use axum::extract::{Path, State};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeSet, env, path::PathBuf, process::Stdio};
+use std::{
+    collections::BTreeSet,
+    env,
+    path::{Path as FsPath, PathBuf},
+    process::Stdio,
+};
 
 use crate::AppState;
 use crate::error::{Ok, WebError, WebErrorCode, WebResult};
@@ -18,6 +23,7 @@ struct CaptureScope {
     hosts: Vec<String>,
     traffic_app_ids: Option<Vec<String>>,
     proxy_targets: Vec<dam_config::ProxyTargetConfig>,
+    routes: Vec<dam_net::TrafficRoute>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -224,9 +230,24 @@ fn set_app_enabled(state: &AppState, profile_id: &str, enabled: bool) -> Result<
     let integration_state_dir = state_dir.join("integrations");
     dam_integrations::ensure_bundled_profile_files(&integration_state_dir)
         .map_err(settings_error)?;
+    let previously_enabled =
+        dam_integrations::read_effective_enabled_integrations(&integration_state_dir)
+            .map_err(settings_error)?
+            .into_iter()
+            .any(|profile| profile.profile_id == profile_id);
     dam_integrations::set_integration_enabled(profile_id, enabled, &integration_state_dir)
         .map_err(settings_error)?;
-    reconcile_running_capture_scope(state, &state_dir)?;
+    if let Err(error) = reconcile_running_capture_scope(state, &state_dir) {
+        if previously_enabled != enabled {
+            let _ = dam_integrations::set_integration_enabled(
+                profile_id,
+                previously_enabled,
+                &integration_state_dir,
+            );
+            let _ = reconcile_running_capture_scope(state, &state_dir);
+        }
+        return Err(error);
+    }
     state.events.notify(EventTopic::ConnectUpdate);
     Ok(())
 }
@@ -284,6 +305,7 @@ fn capture_scope_for_state(
         hosts: routes.iter().map(|route| route.host.clone()).collect(),
         traffic_app_ids,
         proxy_targets: proxy_targets_from_traffic_routes(&routes),
+        routes,
     })
 }
 
@@ -315,13 +337,9 @@ fn proxy_targets_from_traffic_routes(
     targets
 }
 
-fn proxy_target_arg(target: &dam_config::ProxyTargetConfig) -> String {
-    format!("{}|{}|{}", target.name, target.provider, target.upstream)
-}
-
 fn reconnect_daemon_for_app_scope(
     state: &AppState,
-    state_dir: &std::path::Path,
+    state_dir: &FsPath,
     daemon: &dam_daemon::DaemonState,
     scope: &CaptureScope,
 ) -> Result<(), WebError> {
@@ -333,30 +351,30 @@ fn reconnect_daemon_for_app_scope(
     }
     args.extend([
         "--db".to_string(),
-        daemon.vault_path.display().to_string(),
+        reconnect_runtime_path(&daemon.vault_path, state.db_path.as_ref(), state_dir)
+            .display()
+            .to_string(),
         "--network-mode".to_string(),
         daemon.network_mode.tag().to_string(),
         "--trust-mode".to_string(),
         daemon.trust.mode.tag().to_string(),
     ]);
-    for target in &scope.proxy_targets {
-        args.extend(["--target".to_string(), proxy_target_arg(target)]);
-    }
-    if let Some(app_ids) = &scope.traffic_app_ids {
-        if app_ids.is_empty() {
-            args.push("--no-traffic-apps".to_string());
-        } else {
-            for app_id in app_ids {
-                args.extend(["--traffic-app".to_string(), app_id.clone()]);
-            }
-        }
-    }
     match &daemon.log_path {
-        Some(path) => args.extend(["--log".to_string(), path.display().to_string()]),
+        Some(path) => args.extend([
+            "--log".to_string(),
+            reconnect_runtime_path(path, state.log_path.as_ref(), state_dir)
+                .display()
+                .to_string(),
+        ]),
         None => args.push("--no-log".to_string()),
     }
     if let Some(path) = &daemon.consent_path {
-        args.extend(["--consent-db".to_string(), path.display().to_string()]);
+        args.extend([
+            "--consent-db".to_string(),
+            reconnect_runtime_path(path, &state.config.consent.sqlite_path, state_dir)
+                .display()
+                .to_string(),
+        ]);
     }
     args.push(if daemon.resolve_inbound {
         "--resolve-inbound".to_string()
@@ -371,6 +389,13 @@ fn reconnect_daemon_for_app_scope(
         .output()
         .map_err(|_| WebError::new(WebErrorCode::DaemonUnreachable))?;
     if !output.status.success() {
+        eprintln!(
+            "failed to reconcile DAM profile scope: {}",
+            command_output_summary(&output)
+        );
+        return Err(WebError::new(WebErrorCode::SetupStepFailed));
+    }
+    if !running_daemon_matches_scope(scope)? {
         return Err(WebError::new(WebErrorCode::SetupStepFailed));
     }
     if !daemon.protection_enabled {
@@ -378,6 +403,99 @@ fn reconnect_daemon_for_app_scope(
             .map_err(|_| WebError::new(WebErrorCode::DaemonUnreachable))?;
     }
     Ok(())
+}
+
+fn reconnect_runtime_path(current: &FsPath, fallback: &FsPath, state_dir: &FsPath) -> PathBuf {
+    if current.is_absolute() {
+        current.to_path_buf()
+    } else {
+        absolute_state_path(fallback, state_dir)
+    }
+}
+
+fn absolute_state_path(path: &FsPath, state_dir: &FsPath) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        state_dir.join(path)
+    }
+}
+
+fn running_daemon_matches_scope(scope: &CaptureScope) -> Result<bool, WebError> {
+    let daemon = match dam_daemon::daemon_status() {
+        Ok(dam_daemon::DaemonStatus::Connected(daemon)) => daemon,
+        Ok(dam_daemon::DaemonStatus::Disconnected | dam_daemon::DaemonStatus::Stale(_)) => {
+            return Ok(false);
+        }
+        Err(_) => return Err(WebError::new(WebErrorCode::DaemonUnreachable)),
+    };
+    Ok(daemon_matches_scope(&daemon, scope))
+}
+
+fn daemon_matches_scope(daemon: &dam_daemon::DaemonState, scope: &CaptureScope) -> bool {
+    let current_routes = daemon
+        .transparent_routes
+        .iter()
+        .map(route_identity)
+        .collect::<BTreeSet<_>>();
+    let scope_routes = scope_route_identities(scope);
+    if current_routes != scope_routes {
+        return false;
+    }
+    if scope.routes.is_empty() {
+        return true;
+    }
+    let current_targets = daemon
+        .proxy_targets
+        .iter()
+        .map(|target| {
+            (
+                target.name.clone(),
+                target.provider.clone(),
+                target.upstream.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    let expected_targets = scope
+        .proxy_targets
+        .iter()
+        .map(|target| {
+            (
+                target.name.clone(),
+                target.provider.clone(),
+                target.upstream.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    current_targets == expected_targets
+}
+
+fn scope_route_identities(
+    scope: &CaptureScope,
+) -> BTreeSet<(String, String, String, String, &'static str)> {
+    scope.routes.iter().map(route_identity).collect()
+}
+
+fn route_identity(route: &dam_net::TrafficRoute) -> (String, String, String, String, &'static str) {
+    (
+        route.host.clone(),
+        route.provider.clone(),
+        route.target_name.clone(),
+        route.upstream.clone(),
+        route.adapter.tag(),
+    )
+}
+
+fn command_output_summary(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if !stderr.is_empty() {
+        return stderr;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if !stdout.is_empty() {
+        return stdout;
+    }
+    format!("command exited with {}", output.status)
 }
 
 #[derive(Debug, Clone, Deserialize)]
