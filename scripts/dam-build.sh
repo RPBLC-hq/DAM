@@ -160,7 +160,8 @@ restart_installed_app() {
     echo "missing installed dam binary: $dam_bin" >&2
     exit 1
   fi
-  run "$dam_bin" connect --json
+  run "$dam_bin" disconnect --stop --json
+  run "$dam_bin" connect --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
   run open "$app"
 }
 
