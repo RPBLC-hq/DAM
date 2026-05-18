@@ -193,6 +193,7 @@ pub fn profiles_from_state(
 }
 
 pub fn profile(id: &str, proxy_url: &str) -> Option<IntegrationProfile> {
+    let id = canonical_runtime_profile_id(id).ok().flatten()?;
     profiles(proxy_url)
         .into_iter()
         .find(|profile| profile.id == id)
@@ -203,6 +204,9 @@ pub fn profile_from_state(
     proxy_url: &str,
     integration_state_dir: &Path,
 ) -> Result<Option<IntegrationProfile>, String> {
+    let Some(id) = canonical_runtime_profile_id(id)? else {
+        return Ok(None);
+    };
     Ok(profiles_from_state(proxy_url, integration_state_dir)?
         .into_iter()
         .find(|profile| profile.id == id))
@@ -227,12 +231,29 @@ fn upsert_profile(profiles: &mut Vec<IntegrationProfile>, profile: IntegrationPr
     }
 }
 
-const PROFILE_IDS: &[&str] = &["claude-code", "codex"];
+const PROFILE_IDS: &[&str] = &["claude", "codex"];
 
-const DEFAULT_ENABLED_PROFILE_IDS: &[&str] = &["claude-code"];
+const DEFAULT_ENABLED_PROFILE_IDS: &[&str] = &["claude"];
+
+const PROFILE_ID_ALIASES: &[(&str, &str)] = &[
+    ("claude-code", "claude"),
+    ("anthropic", "claude"),
+    ("openai-compatible", "codex"),
+    ("codex-api", "codex"),
+    ("codex-chatgpt", "codex"),
+];
+
+const RETIRED_PROFILE_FILE_IDS: &[&str] = &[
+    "claude-code",
+    "anthropic",
+    "openai-compatible",
+    "codex-api",
+    "codex-chatgpt",
+    "xai-compatible",
+];
 
 const PROFILE_JSONS: &[&str] = &[
-    include_str!("../profiles/claude-code.json"),
+    include_str!("../profiles/claude.json"),
     include_str!("../profiles/codex.json"),
 ];
 
@@ -250,7 +271,7 @@ pub fn profile_definition_path(integration_state_dir: &Path, id: &str) -> PathBu
 }
 
 pub fn ensure_bundled_profile_files(integration_state_dir: &Path) -> Result<Vec<PathBuf>, String> {
-    migrate_legacy_apply_records(integration_state_dir)?;
+    migrate_profile_state(integration_state_dir)?;
     let dir = profile_definitions_dir(integration_state_dir);
     fs::create_dir_all(&dir).map_err(|error| {
         format!(
@@ -275,6 +296,7 @@ pub fn ensure_bundled_profile_files(integration_state_dir: &Path) -> Result<Vec<
         atomic_write(&path, format!("{}\n", raw.trim_end()).as_bytes())?;
         written.push(path);
     }
+    prune_retired_profile_files(&dir)?;
     Ok(written)
 }
 
@@ -379,9 +401,13 @@ fn canonical_runtime_profile_id(profile_id: &str) -> Result<Option<String>, Stri
     if PROFILE_IDS.contains(&profile_id) {
         return Ok(Some(profile_id.to_string()));
     }
+    if let Some((_, canonical)) = PROFILE_ID_ALIASES
+        .iter()
+        .find(|(alias, _canonical)| *alias == profile_id)
+    {
+        return Ok(Some((*canonical).to_string()));
+    }
     match profile_id {
-        "openai-compatible" | "codex-api" | "codex-chatgpt" => Ok(Some("codex".to_string())),
-        "anthropic" => Ok(Some("claude-code".to_string())),
         "xai-compatible" => Ok(None),
         _ => Err(unknown_profile_error(profile_id)),
     }
@@ -689,11 +715,17 @@ pub fn default_apply_path(
     _codex_home: Option<PathBuf>,
     _home: Option<PathBuf>,
 ) -> Result<PathBuf, String> {
-    if profile_from_state(profile_id, DEFAULT_PROXY_URL, integration_state_dir)?.is_some() {
-        return Ok(profile_definition_path(integration_state_dir, profile_id));
+    let Some(profile_id) = canonical_runtime_profile_id(profile_id)? else {
+        return Err(unknown_profile_error_with_state(
+            profile_id,
+            integration_state_dir,
+        ));
+    };
+    if profile_from_state(&profile_id, DEFAULT_PROXY_URL, integration_state_dir)?.is_some() {
+        return Ok(profile_definition_path(integration_state_dir, &profile_id));
     }
     Err(unknown_profile_error_with_state(
-        profile_id,
+        &profile_id,
         integration_state_dir,
     ))
 }
@@ -703,9 +735,12 @@ pub fn prepare_apply(
     proxy_url: &str,
     target_path: PathBuf,
 ) -> Result<PreparedIntegrationApply, String> {
+    let Some(profile_id) = canonical_runtime_profile_id(profile_id)? else {
+        return Err(unknown_profile_error(profile_id));
+    };
     let profile =
-        profile(profile_id, proxy_url).ok_or_else(|| unknown_profile_error(profile_id))?;
-    prepare_apply_for_profile(profile_id, profile, proxy_url, target_path)
+        profile(&profile_id, proxy_url).ok_or_else(|| unknown_profile_error(&profile_id))?;
+    prepare_apply_for_profile(&profile_id, profile, proxy_url, target_path)
 }
 
 pub fn prepare_apply_in_state(
@@ -714,23 +749,29 @@ pub fn prepare_apply_in_state(
     target_path: PathBuf,
     integration_state_dir: &Path,
 ) -> Result<PreparedIntegrationApply, String> {
-    if target_path == profile_definition_path(integration_state_dir, profile_id)
+    let Some(profile_id) = canonical_runtime_profile_id(profile_id)? else {
+        return Err(unknown_profile_error_with_state(
+            profile_id,
+            integration_state_dir,
+        ));
+    };
+    if target_path == profile_definition_path(integration_state_dir, &profile_id)
         && let Some((_stored_profile_id, profile_name, desired_content, notes)) =
-            profile_catalog_apply_content(profile_id, integration_state_dir)?
+            profile_catalog_apply_content(&profile_id, integration_state_dir)?
     {
         return prepare_apply_for_content(
-            profile_id.to_string(),
+            profile_id.clone(),
             profile_name,
             proxy_url,
             target_path,
             desired_content,
-            profile_apply_description(profile_id),
+            profile_apply_description(&profile_id),
             notes,
         );
     }
-    let profile = profile_from_state(profile_id, proxy_url, integration_state_dir)?
-        .ok_or_else(|| unknown_profile_error_with_state(profile_id, integration_state_dir))?;
-    prepare_apply_for_profile(profile_id, profile, proxy_url, target_path)
+    let profile = profile_from_state(&profile_id, proxy_url, integration_state_dir)?
+        .ok_or_else(|| unknown_profile_error_with_state(&profile_id, integration_state_dir))?;
+    prepare_apply_for_profile(&profile_id, profile, proxy_url, target_path)
 }
 
 fn profile_catalog_apply_content(
@@ -863,7 +904,7 @@ pub fn run_apply(
         });
     }
 
-    migrate_legacy_apply_records(state_dir)?;
+    migrate_profile_state(state_dir)?;
     let profile_dir = profile_state_dir(state_dir, &prepared.profile_id);
     let record_path = profile_dir.join("latest.json");
     let (rollback_available, record_error) =
@@ -982,9 +1023,12 @@ fn inspect_prepared_apply(
     profile_id: &str,
     state_dir: &Path,
 ) -> Result<IntegrationApplyInspection, String> {
-    migrate_legacy_apply_records(state_dir)?;
-    let record_path = profile_state_dir(state_dir, profile_id).join("latest.json");
-    let (rollback_available, record_error) = rollback_record_state(profile_id, &record_path);
+    migrate_profile_state(state_dir)?;
+    let record_profile_id =
+        canonical_runtime_profile_id(profile_id)?.unwrap_or_else(|| profile_id.to_string());
+    let record_path = profile_state_dir(state_dir, &record_profile_id).join("latest.json");
+    let (rollback_available, record_error) =
+        rollback_record_state(&record_profile_id, &record_path);
     let status = match (prepared.action, rollback_available, false) {
         (FileAction::Unchanged, _, _) => IntegrationApplyStatus::Applied,
         (_, true, false) => IntegrationApplyStatus::Modified,
@@ -1039,8 +1083,11 @@ pub fn rollback_profile(
     profile_id: &str,
     state_dir: &Path,
 ) -> Result<IntegrationRollbackResult, String> {
-    migrate_legacy_apply_records(state_dir)?;
-    let record_path = profile_state_dir(state_dir, profile_id).join("latest.json");
+    migrate_profile_state(state_dir)?;
+    let Some(profile_id) = canonical_runtime_profile_id(profile_id)? else {
+        return Err(unknown_profile_error(profile_id));
+    };
+    let record_path = profile_state_dir(state_dir, &profile_id).join("latest.json");
     let raw = fs::read_to_string(&record_path).map_err(|error| {
         format!(
             "failed to read rollback record for {profile_id} at {}: {error}",
@@ -1053,6 +1100,8 @@ pub fn rollback_profile(
             record_path.display()
         )
     })?;
+    let result_profile_id =
+        canonical_runtime_profile_id(&record.profile_id)?.unwrap_or_else(|| profile_id.clone());
     let mut changes = Vec::new();
     for file in &record.files {
         if file.existed {
@@ -1104,7 +1153,7 @@ pub fn rollback_profile(
     })?;
 
     Ok(IntegrationRollbackResult {
-        profile_id: record.profile_id,
+        profile_id: result_profile_id,
         changes,
         message: "integration profile rolled back".to_string(),
     })
@@ -1117,6 +1166,169 @@ pub fn profile_state_dir(state_dir: &Path, profile_id: &str) -> PathBuf {
 #[cfg(test)]
 fn legacy_profile_state_dir(state_dir: &Path, profile_id: &str) -> PathBuf {
     state_dir.join(PROFILE_DEFINITIONS_DIR).join(profile_id)
+}
+
+fn migrate_profile_state(state_dir: &Path) -> Result<(), String> {
+    migrate_legacy_apply_records(state_dir)?;
+    migrate_profile_id_alias_records(state_dir)?;
+    migrate_enabled_profile_aliases(state_dir)?;
+    migrate_active_profile_alias(state_dir)
+}
+
+fn migrate_profile_id_alias_records(state_dir: &Path) -> Result<(), String> {
+    for (alias, canonical) in PROFILE_ID_ALIASES {
+        let old_dir = profile_state_dir(state_dir, alias);
+        if !old_dir.exists() {
+            continue;
+        }
+        let new_dir = profile_state_dir(state_dir, canonical);
+        if new_dir.exists() {
+            continue;
+        }
+        if let Some(parent) = new_dir.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                format!(
+                    "failed to create integration state directory {}: {error}",
+                    parent.display()
+                )
+            })?;
+        }
+        fs::rename(&old_dir, &new_dir).map_err(|error| {
+            format!(
+                "failed to migrate profile state {} to {}: {error}",
+                old_dir.display(),
+                new_dir.display()
+            )
+        })?;
+        rewrite_alias_apply_record(&new_dir, &old_dir, alias, canonical)?;
+    }
+    Ok(())
+}
+
+fn rewrite_alias_apply_record(
+    new_dir: &Path,
+    old_dir: &Path,
+    alias: &str,
+    canonical: &str,
+) -> Result<(), String> {
+    let record_path = new_dir.join("latest.json");
+    let raw = match fs::read_to_string(&record_path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "failed to read migrated rollback record {}: {error}",
+                record_path.display()
+            ));
+        }
+    };
+    let mut record = serde_json::from_str::<IntegrationApplyRecord>(&raw).map_err(|error| {
+        format!(
+            "failed to parse migrated rollback record {}: {error}",
+            record_path.display()
+        )
+    })?;
+    if record.profile_id == alias {
+        record.profile_id = canonical.to_string();
+    }
+    for file in &mut record.files {
+        if let Some(backup_path) = &file.backup_path
+            && let Ok(relative) = backup_path.strip_prefix(old_dir)
+        {
+            file.backup_path = Some(new_dir.join(relative));
+        }
+    }
+    write_json_file(&record_path, &record)
+}
+
+fn prune_retired_profile_files(profile_dir: &Path) -> Result<(), String> {
+    for profile_id in RETIRED_PROFILE_FILE_IDS {
+        let path = profile_dir.join(format!("{profile_id}.json"));
+        match fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "failed to remove retired profile file {}: {error}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn migrate_enabled_profile_aliases(state_dir: &Path) -> Result<(), String> {
+    let path = enabled_integrations_path(state_dir);
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "failed to read enabled integrations {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let state = serde_json::from_str::<EnabledIntegrationsState>(&raw).map_err(|error| {
+        format!(
+            "failed to parse enabled integrations {}: {error}",
+            path.display()
+        )
+    })?;
+    let mut changed = false;
+    let mut profiles = Vec::new();
+    for enabled in state.profiles {
+        let original_profile_id = enabled.profile_id;
+        let enabled_at_unix = enabled.enabled_at_unix;
+        let Some(profile_id) = canonical_runtime_profile_id(&original_profile_id)? else {
+            changed = true;
+            continue;
+        };
+        changed |= profile_id != original_profile_id;
+        let before_len = profiles.len();
+        push_dedup_enabled(&mut profiles, profile_id, enabled_at_unix);
+        changed |= profiles.len() == before_len;
+    }
+    if changed {
+        write_enabled_integrations(state_dir, profiles)?;
+    }
+    Ok(())
+}
+
+fn migrate_active_profile_alias(state_dir: &Path) -> Result<(), String> {
+    let path = active_profile_path(state_dir);
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "failed to read active profile {}: {error}",
+                path.display()
+            ));
+        }
+    };
+    let state = serde_json::from_str::<ActiveProfileState>(&raw)
+        .map_err(|error| format!("failed to parse active profile {}: {error}", path.display()))?;
+    let Some(profile_id) = canonical_runtime_profile_id(&state.profile_id)? else {
+        fs::remove_file(&path).map_err(|error| {
+            format!(
+                "failed to remove retired active profile {}: {error}",
+                path.display()
+            )
+        })?;
+        return Ok(());
+    };
+    if profile_id != state.profile_id {
+        write_json_file(
+            &path,
+            &ActiveProfileState {
+                profile_id,
+                selected_at_unix: state.selected_at_unix,
+            },
+        )?;
+    }
+    Ok(())
 }
 
 fn migrate_legacy_apply_records(state_dir: &Path) -> Result<(), String> {

@@ -3,6 +3,13 @@ use super::*;
 const OPENAI_API_UPSTREAM: &str = "https://api.openai.com";
 const ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
 
+fn claude_traffic_app_ids() -> Vec<String> {
+    ["anthropic-api", "claude-web", "anthropic-console"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
 #[test]
 fn removed_tool_launchers_are_not_cli_commands() {
     for command in ["codex", "claude"] {
@@ -240,7 +247,7 @@ fn parses_connect_profile_apply() {
     let cli = parse_cli([
         "connect".to_string(),
         "--profile".to_string(),
-        "claude-code".to_string(),
+        "claude".to_string(),
         "--apply".to_string(),
         "--listen".to_string(),
         "127.0.0.1:9000".to_string(),
@@ -250,16 +257,13 @@ fn parses_connect_profile_apply() {
     let CommandKind::Connect(args) = cli.command else {
         panic!("expected connect");
     };
-    assert_eq!(args.apply_profile_ids, vec!["claude-code".to_string()]);
+    assert_eq!(args.apply_profile_ids, vec!["claude".to_string()]);
     assert_eq!(args.proxy.listen, "127.0.0.1:9000");
     let targets = args.proxy.targets.as_ref().unwrap();
     assert_eq!(targets[0].name, "anthropic");
     assert_eq!(targets[0].provider, "anthropic");
     assert_eq!(targets[0].upstream, ANTHROPIC_UPSTREAM);
-    assert_eq!(
-        args.proxy.traffic_app_ids,
-        Some(vec!["anthropic-api".to_string()])
-    );
+    assert_eq!(args.proxy.traffic_app_ids, Some(claude_traffic_app_ids()));
     assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
     assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
 }
@@ -273,22 +277,19 @@ fn parses_connect_apply_with_enabled_profile() {
             "--listen".to_string(),
             "127.0.0.1:9000".to_string(),
         ],
-        vec!["claude-code".to_string()],
+        vec!["claude".to_string()],
     )
     .unwrap();
 
     let CommandKind::Connect(args) = cli.command else {
         panic!("expected connect");
     };
-    assert_eq!(args.apply_profile_ids, vec!["claude-code".to_string()]);
+    assert_eq!(args.apply_profile_ids, vec!["claude".to_string()]);
     assert_eq!(args.proxy.listen, "127.0.0.1:9000");
     let targets = args.proxy.targets.as_ref().unwrap();
     assert_eq!(targets[0].provider, "anthropic");
     assert_eq!(targets[0].upstream, ANTHROPIC_UPSTREAM);
-    assert_eq!(
-        args.proxy.traffic_app_ids,
-        Some(vec!["anthropic-api".to_string()])
-    );
+    assert_eq!(args.proxy.traffic_app_ids, Some(claude_traffic_app_ids()));
     assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
     assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
 }
@@ -301,7 +302,7 @@ fn parses_connect_with_enabled_profile_selecting_targets_only() {
             "--listen".to_string(),
             "127.0.0.1:9000".to_string(),
         ],
-        vec!["claude-code".to_string()],
+        vec!["claude".to_string()],
     )
     .unwrap();
 
@@ -324,9 +325,9 @@ fn connect_with_stale_stored_profile_ignores_legacy_provider_flags() {
     let profiles_dir = dam_integrations::profile_definitions_dir(&integration_state_dir);
     std::fs::create_dir_all(&profiles_dir).unwrap();
     std::fs::write(
-        dam_integrations::profile_definition_path(&integration_state_dir, "claude-code"),
+        dam_integrations::profile_definition_path(&integration_state_dir, "claude"),
         r#"{
-          "id": "claude-code",
+          "id": "claude",
           "name": "Claude Code",
           "summary": "Stale profile",
           "provider": "anthropic",
@@ -347,7 +348,7 @@ fn connect_with_stale_stored_profile_ignores_legacy_provider_flags() {
             "127.0.0.1:9000".to_string(),
         ],
         ConnectProfileSelection {
-            profile_ids: vec!["claude-code".to_string()],
+            profile_ids: vec!["claude".to_string()],
             explicit_selection: true,
             integration_state_dir: Some(integration_state_dir),
         },
@@ -361,10 +362,7 @@ fn connect_with_stale_stored_profile_ignores_legacy_provider_flags() {
     assert_eq!(targets[0].provider, "anthropic");
     assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
     assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
-    assert_eq!(
-        args.proxy.traffic_app_ids,
-        Some(vec!["anthropic-api".to_string()])
-    );
+    assert_eq!(args.proxy.traffic_app_ids, Some(claude_traffic_app_ids()));
 }
 
 #[test]
@@ -392,8 +390,8 @@ fn parses_connect_with_explicit_empty_enabled_profiles_as_empty_traffic_scope() 
 }
 
 #[test]
-fn connect_profile_defaults_can_be_overridden_for_explicit_proxy_tests() {
-    let cli = parse_cli_with_active_profiles(
+fn connect_profile_upstream_override_rejects_multi_target_profiles() {
+    let error = parse_cli_with_active_profiles(
         [
             "connect".to_string(),
             "--apply".to_string(),
@@ -406,21 +404,11 @@ fn connect_profile_defaults_can_be_overridden_for_explicit_proxy_tests() {
             "--trust-mode".to_string(),
             "disabled".to_string(),
         ],
-        vec!["claude-code".to_string()],
+        vec!["claude".to_string()],
     )
-    .unwrap();
+    .unwrap_err();
 
-    let CommandKind::Connect(args) = cli.command else {
-        panic!("expected connect");
-    };
-    assert_eq!(args.apply_profile_ids, vec!["claude-code".to_string()]);
-    assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::ExplicitProxy);
-    assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::Disabled);
-    let targets = args.proxy.targets.unwrap();
-    assert_eq!(targets.len(), 1);
-    assert_eq!(targets[0].name, "anthropic");
-    assert_eq!(targets[0].provider, "anthropic");
-    assert_eq!(targets[0].upstream, "http://127.0.0.1:9999");
+    assert!(error.contains("--upstream can override only single-target profiles"));
 }
 
 #[test]
@@ -432,7 +420,7 @@ fn parses_connect_apply_with_multiple_enabled_profiles() {
             "--listen".to_string(),
             "127.0.0.1:9000".to_string(),
         ],
-        vec!["codex".to_string(), "claude-code".to_string()],
+        vec!["codex".to_string(), "claude".to_string()],
     )
     .unwrap();
 
@@ -441,18 +429,20 @@ fn parses_connect_apply_with_multiple_enabled_profiles() {
     };
     assert_eq!(
         args.apply_profile_ids,
-        vec!["codex".to_string(), "claude-code".to_string()]
+        vec!["codex".to_string(), "claude".to_string()]
     );
     assert_eq!(
         args.proxy.traffic_app_ids,
         Some(vec![
             "openai-api".to_string(),
             "chatgpt-codex".to_string(),
-            "anthropic-api".to_string()
+            "anthropic-api".to_string(),
+            "claude-web".to_string(),
+            "anthropic-console".to_string()
         ])
     );
     let targets = args.proxy.targets.unwrap();
-    assert_eq!(targets.len(), 3);
+    assert_eq!(targets.len(), 5);
     assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
     assert!(
         targets
@@ -567,7 +557,7 @@ fn connect_apply_profile_targets_override_low_level_provider_flag() {
     let cli = parse_cli([
         "connect".to_string(),
         "--profile".to_string(),
-        "claude-code".to_string(),
+        "claude".to_string(),
         "--apply".to_string(),
         "--provider".to_string(),
         "openai-compatible".to_string(),
@@ -652,12 +642,8 @@ fn connect_preflight_blocks_missing_network_extension_setup() {
 fn connect_preflight_blocks_missing_network_extension_for_empty_app_scope() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
-    dam_integrations::set_integration_enabled(
-        "claude-code",
-        false,
-        &state_dir.join("integrations"),
-    )
-    .unwrap();
+    dam_integrations::set_integration_enabled("claude", false, &state_dir.join("integrations"))
+        .unwrap();
     dam_integrations::set_integration_enabled("codex", false, &state_dir.join("integrations"))
         .unwrap();
     let options = dam_daemon::ProxyOptions {
@@ -975,7 +961,7 @@ fn parses_profile_set_json() {
     let cli = parse_cli([
         "profile".to_string(),
         "set".to_string(),
-        "claude-code".to_string(),
+        "claude".to_string(),
         "--json".to_string(),
     ])
     .unwrap();
@@ -983,7 +969,7 @@ fn parses_profile_set_json() {
     assert_eq!(
         cli.command,
         CommandKind::Profile(ProfileArgs::Set {
-            profile_id: "claude-code".to_string(),
+            profile_id: "claude".to_string(),
             json: true,
         })
     );

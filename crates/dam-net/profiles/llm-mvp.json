@@ -65,6 +65,52 @@
       "inbound": {"resolve_references": false, "protect_sensitive_data": true}
     },
     {
+      "id": "claude-web",
+      "name": "Claude Web",
+      "enabled": true,
+      "priority": 0,
+      "match": {
+        "domains": ["claude.ai"],
+        "ports": [443],
+        "protocols": ["https", "web_socket"]
+      },
+      "action": "inspect",
+      "adapter": "http",
+      "provider": "generic-http",
+      "target_name": "claude-web",
+      "upstream": "https://claude.ai",
+      "steps": [
+        {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
+        {"id": "consent", "kind": "apply_consents", "direction": "outbound"},
+        {"id": "tokenize", "kind": "replace_sensitive_data", "direction": "outbound"}
+      ],
+      "outbound": {"filter": {"default_action": "tokenize"}},
+      "inbound": {"resolve_references": false, "protect_sensitive_data": true}
+    },
+    {
+      "id": "anthropic-console",
+      "name": "Anthropic Console",
+      "enabled": true,
+      "priority": 0,
+      "match": {
+        "domains": ["console.anthropic.com"],
+        "ports": [443],
+        "protocols": ["https", "web_socket"]
+      },
+      "action": "inspect",
+      "adapter": "http",
+      "provider": "generic-http",
+      "target_name": "anthropic-console",
+      "upstream": "https://console.anthropic.com",
+      "steps": [
+        {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
+        {"id": "consent", "kind": "apply_consents", "direction": "outbound"},
+        {"id": "tokenize", "kind": "replace_sensitive_data", "direction": "outbound"}
+      ],
+      "outbound": {"filter": {"default_action": "tokenize"}},
+      "inbound": {"resolve_references": false, "protect_sensitive_data": true}
+    },
+    {
       "id": "chatgpt-codex",
       "name": "ChatGPT Codex",
       "enabled": true,

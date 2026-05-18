@@ -158,7 +158,7 @@ Traffic profile selection example:
 ```toml
 [traffic]
 profile_path = "traffic-profile.json"
-enabled_apps = ["openai-api", "anthropic-api", "chatgpt-codex"]
+enabled_apps = ["openai-api", "anthropic-api", "claude-web", "anthropic-console", "chatgpt-codex"]
 ```
 
 Private OpenAI-compatible endpoint profile example:
@@ -189,7 +189,7 @@ Private OpenAI-compatible endpoint profile example:
 
 The traffic profile controls transparent host recognition, adapter intent, per-app inbound reference restoration, and explicit raw inbound protection. Active forwarding targets are configured separately through `[[proxy.targets]]`; the daemon also adds active profile routes as non-secret proxy targets for transparent matching. The local proxy can host multiple targets in one process. Direct app-layer requests use the first target; transparent/profile-matched requests select the target from the matched route metadata. Provider API path/header guessing is intentionally out of the router.
 
-The profile creator/import/export workflow that will produce generic website/service profiles is parked. Until that returns, `generic-http` is only a low-level target value and the visible catalog is limited to Claude Code and Codex app profiles.
+The profile creator/import/export workflow that will produce generic website/service profiles is parked. Until that returns, `generic-http` is only a low-level target value and the visible catalog is limited to Claude and Codex app profiles.
 
 Secrets must be supplied through environment variables or deployment secret stores, not plaintext config files. For local proxy/interception flows, omit `api_key_env` so DAM forwards caller-owned auth headers instead of injecting a provider key.
 

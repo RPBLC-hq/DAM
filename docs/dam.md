@@ -12,7 +12,7 @@ cargo run -p dam -- status
 cargo run -p dam -- logs
 cargo run -p dam -- disconnect
 cargo run -p dam -- integrations list
-cargo run -p dam -- connect --profile claude-code
+cargo run -p dam -- connect --profile claude
 cargo run -p dam -- connect --profile codex
 ```
 
@@ -28,7 +28,7 @@ By default, the daemon proxy redacts outbound requests before they reach the pro
 
 The local UX uses pass-through provider authentication by default.
 
-- `dam connect --profile claude-code` selects the Anthropic target while Claude keeps its normal Anthropic endpoint and traffic routes through DAM.
+- `dam connect --profile claude` selects the Anthropic target while Claude keeps its normal Anthropic endpoint and traffic routes through DAM.
 - `dam connect --profile codex` selects Codex API-key traffic for `api.openai.com` and ChatGPT-login traffic for `chatgpt.com` and `ab.chatgpt.com` while Codex keeps its normal OpenAI endpoint or subscription login behavior.
 - `dam integrations apply <profile> --write` ensures DAM-owned catalog profile JSON for source builds and unsupported environments. Use `--target-path` for rendered JSON exports with rollback support. Network Extension capture is the primary installed-app path.
 - Provider credentials stay with the tool. DAM forwards the caller's auth headers.
@@ -98,7 +98,7 @@ Examples:
 
 ```bash
 dam connect
-dam connect --profile claude-code
+dam connect --profile claude
 dam connect --profile codex
 dam doctor --json
 dam setup status --network-mode tun --trust-mode local_ca --json
@@ -107,10 +107,10 @@ dam setup rescue --json
 dam setup rescue --yes --json
 dam setup repair --json
 dam setup export-diagnostics --json
-dam profile set claude-code
+dam profile set claude
 dam connect --network-mode tun --trust-mode local_ca
 dam profile status
-dam connect --profile claude-code
+dam connect --profile claude
 dam status
 dam logs
 dam logs --operation <operation_id>
@@ -142,9 +142,9 @@ The previous one-shot `npx @rpblc/dam claude` and `npx @rpblc/dam codex --api` t
 - `dam connect --json` and `dam disconnect --json` return stable machine-readable lifecycle results for agent and script callers.
 - `dam logs` reads the local SQLite log and renders concise non-sensitive operation summaries by default. `--operation <id>` shows one operation's event timeline, and `--json` keeps the same data machine-readable for local debugging.
 - `dam disconnect` pauses protection without stopping the daemon. `dam connect` resumes a paused daemon using its existing routing/trust setup. If the connected daemon was launched by a missing or different `dam` executable path/fingerprint, Connect restarts it from the current executable while preserving that setup, so source builds and app updates do not keep running stale proxy code. Use `dam disconnect --stop` before intentionally changing setup.
-- `dam profile set <id>` persists the legacy active local harness profile. The tray/web Settings flow persists enabled app profiles; when no state exists, DAM defaults to Claude Code enabled only.
+- `dam profile set <id>` persists the legacy active local harness profile. The tray/web Settings flow persists enabled app profiles; when no state exists, DAM defaults to the Claude profile enabled only.
 - `dam connect --network-mode system_proxy` refuses to start until DAM sees macOS PAC routing installed. Run `dam network install-system-proxy --yes` first after reviewing the preview.
-- `dam connect --trust-mode local_ca` refuses to start until local CA trust is ready. Run `dam trust install-local-ca --yes` first after reviewing the preview. The `claude-code` integration profile uses `local_ca` because proxy-routed Anthropic HTTPS bodies require guarded TLS interception.
+- `dam connect --trust-mode local_ca` refuses to start until local CA trust is ready. Run `dam trust install-local-ca --yes` first after reviewing the preview. The `claude` integration profile uses `local_ca` because proxy-routed Anthropic HTTPS bodies require guarded TLS interception.
 - `dam trust generate-local-ca` creates local CA certificate/key artifacts only. It does not install them into system trust.
 - `dam trust delete-local-ca` deletes uninstalled DAM-managed local CA artifacts only.
 - `dam trust install-local-ca` and `dam trust remove-local-ca` preview by default. On macOS only, `--yes` applies the System keychain change and may require administrator approval.

@@ -583,8 +583,7 @@ fn setup_plan_installs_network_extension_and_trust_for_empty_app_scope() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
     let integration_state_dir = state_dir.join("integrations");
-    dam_integrations::set_integration_enabled("claude-code", false, &integration_state_dir)
-        .unwrap();
+    dam_integrations::set_integration_enabled("claude", false, &integration_state_dir).unwrap();
     dam_integrations::set_integration_enabled("codex", false, &integration_state_dir).unwrap();
     let config = proxy_config("https://api.openai.com", "openai-compatible");
 
@@ -622,8 +621,7 @@ fn setup_plan_treats_empty_scope_network_extension_config_as_ready() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
     let integration_state_dir = state_dir.join("integrations");
-    dam_integrations::set_integration_enabled("claude-code", false, &integration_state_dir)
-        .unwrap();
+    dam_integrations::set_integration_enabled("claude", false, &integration_state_dir).unwrap();
     dam_integrations::set_integration_enabled("codex", false, &integration_state_dir).unwrap();
     let record_dir = state_dir.join("network/macos-network-extension");
     std::fs::create_dir_all(&record_dir).unwrap();

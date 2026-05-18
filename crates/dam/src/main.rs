@@ -2707,8 +2707,9 @@ fn expand_connect_profile_args(
                         dam_integrations::profile_ids().join(", ")
                     )
                 })?;
+                let profile_id = profile.id.clone();
                 expanded.extend(profile.connect_args);
-                selected_profile_ids.push(id.to_string());
+                selected_profile_ids.push(profile_id);
                 traffic_selection_explicit = true;
             }
             "--apply" => apply = true,
@@ -4166,7 +4167,7 @@ fn usage() -> &'static str {
 }
 
 fn usage_connect() -> &'static str {
-    "Usage: dam connect [--profile PROFILE] [--apply] [--json] [DAM_OPTIONS]\n\nStarts a background DAM proxy daemon for proxy/interception routing. Enabled app profiles select daemon targets automatically. --apply additionally ensures selected DAM profile files before connecting.\n\nDAM options:\n  --profile <id>          Use integration profile daemon defaults\n  --apply                 Ensure selected or enabled DAM profile files before connecting\n  --json                  Print a stable machine-readable connect result\n  --config <path>         Load DAM config file before daemon overrides\n  --listen <addr>         Local proxy listen address (default: 127.0.0.1:7828)\n  --network-mode <mode>   Control-plane network mode: explicit_proxy, system_proxy, or tun\n  --trust-mode <mode>     Control-plane trust mode: disabled or local_ca\n  --target-name <name>    Low-level proxy target name\n  --provider <provider>   Low-level target label\n  --upstream <url>        Low-level target upstream URL\n  --target <json>         Internal repeated target JSON\n  --db <path>             Vault SQLite path (default: vault.db)\n  --log <path>            Log SQLite path (default: log.db)\n  --consent-db <path>     Consent SQLite path (default: consent.db)\n  --no-log                Disable DAM log writes\n  --no-resolve-inbound    Leave DAM references unresolved in inbound responses\n  --resolve-inbound       Restore DAM references in inbound responses (default)\n\nKnown profiles: claude-code, codex"
+    "Usage: dam connect [--profile PROFILE] [--apply] [--json] [DAM_OPTIONS]\n\nStarts a background DAM proxy daemon for proxy/interception routing. Enabled app profiles select daemon targets automatically. --apply additionally ensures selected DAM profile files before connecting.\n\nDAM options:\n  --profile <id>          Use integration profile daemon defaults\n  --apply                 Ensure selected or enabled DAM profile files before connecting\n  --json                  Print a stable machine-readable connect result\n  --config <path>         Load DAM config file before daemon overrides\n  --listen <addr>         Local proxy listen address (default: 127.0.0.1:7828)\n  --network-mode <mode>   Control-plane network mode: explicit_proxy, system_proxy, or tun\n  --trust-mode <mode>     Control-plane trust mode: disabled or local_ca\n  --target-name <name>    Low-level proxy target name\n  --provider <provider>   Low-level target label\n  --upstream <url>        Low-level target upstream URL\n  --target <json>         Internal repeated target JSON\n  --db <path>             Vault SQLite path (default: vault.db)\n  --log <path>            Log SQLite path (default: log.db)\n  --consent-db <path>     Consent SQLite path (default: consent.db)\n  --no-log                Disable DAM log writes\n  --no-resolve-inbound    Leave DAM references unresolved in inbound responses\n  --resolve-inbound       Restore DAM references in inbound responses (default)\n\nKnown profiles: claude, codex"
 }
 
 fn usage_status() -> &'static str {

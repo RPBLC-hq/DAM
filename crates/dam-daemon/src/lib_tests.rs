@@ -73,7 +73,7 @@ fn proxy_config_uses_caller_auth_passthrough() {
     let options = ProxyOptions::default();
     let config = proxy_config(&options).unwrap();
 
-    assert_eq!(config.proxy.targets.len(), 3);
+    assert_eq!(config.proxy.targets.len(), 5);
     assert_eq!(config.proxy.targets[0].name, "openai");
     assert_eq!(config.proxy.targets[0].provider, "openai-compatible");
     assert_eq!(config.proxy.targets[0].api_key_env, None);
@@ -91,6 +91,20 @@ fn proxy_config_uses_caller_auth_passthrough() {
             .targets
             .iter()
             .any(|target| target.name == "chatgpt-codex")
+    );
+    assert!(
+        config
+            .proxy
+            .targets
+            .iter()
+            .any(|target| target.name == "claude-web" && target.provider == "generic-http")
+    );
+    assert!(
+        config
+            .proxy
+            .targets
+            .iter()
+            .any(|target| target.name == "anthropic-console" && target.provider == "generic-http")
     );
     assert!(config.proxy.enabled);
     assert!(config.log.enabled);
@@ -136,7 +150,7 @@ fn proxy_options_round_trip_multiple_targets() {
         options
     );
     let config = proxy_config(&options).unwrap();
-    assert_eq!(config.proxy.targets.len(), 3);
+    assert_eq!(config.proxy.targets.len(), 5);
     assert_eq!(config.proxy.targets[1].provider, "anthropic");
 }
 

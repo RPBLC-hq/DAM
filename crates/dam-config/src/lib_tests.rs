@@ -23,7 +23,7 @@ fn defaults_are_local_development_safe() {
     assert_eq!(config.consent.sqlite_path, PathBuf::from("consent.db"));
     assert_eq!(config.consent.default_ttl_seconds, 86_400);
     assert!(config.consent.mcp_write_enabled);
-    assert_eq!(config.traffic.profile.apps.len(), 3);
+    assert_eq!(config.traffic.profile.apps.len(), 5);
     assert_eq!(config.traffic.profile.apps[0].id, "openai-api");
     assert!(config.traffic.enabled_app_ids.is_none());
     assert_eq!(config.web.addr, "127.0.0.1:2896");

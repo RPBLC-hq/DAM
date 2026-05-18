@@ -47,7 +47,7 @@ Parked work:
 
 ## Integration Profile Catalog And Portability
 
-Current state: the visible bundled app profile catalog is intentionally narrow: `claude-code` and the merged `codex` profile are available, but only `claude-code` is enabled by default when no user app-selection state exists. The merged Codex profile covers both OpenAI API-key traffic and ChatGPT subscription/login traffic through separate traffic app IDs, and must be explicitly enabled for now. Generic OpenAI-compatible, generic Anthropic-compatible, xAI-compatible, and split Codex API/ChatGPT-login profiles are removed from the visible catalog for now. Existing local state that references retired profile IDs is normalized where possible so upgrades do not break the Settings or Connect views.
+Current state: the visible bundled app profile catalog is intentionally narrow: `claude` and the merged `codex` profile are available, but only `claude` is enabled by default when no user app-selection state exists. The merged Codex profile covers both OpenAI API-key traffic and ChatGPT subscription/login traffic through separate traffic app IDs, and must be explicitly enabled for now. Generic OpenAI-compatible, generic Anthropic-compatible, xAI-compatible, and split Codex API/ChatGPT-login profiles are removed from the visible catalog for now. Existing local state that references retired profile IDs is normalized where possible so upgrades do not break the Settings or Connect views.
 
 Parked work:
 

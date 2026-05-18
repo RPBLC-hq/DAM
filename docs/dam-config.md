@@ -51,7 +51,7 @@ log_write = "warn_continue"
 
 [traffic]
 profile_path = "traffic-profile.json"
-enabled_apps = ["openai-api", "anthropic-api", "chatgpt-codex"]
+enabled_apps = ["openai-api", "anthropic-api", "claude-web", "anthropic-console", "chatgpt-codex"]
 
 [web]
 addr = "127.0.0.1:2896"
@@ -147,7 +147,7 @@ export DAM_POLICY_SSN_ACTION=redact
 export DAM_FAILURE_VAULT_WRITE=redact_only
 export DAM_FAILURE_LOG_WRITE=warn_continue
 export DAM_TRAFFIC_PROFILE=/etc/dam/traffic-profile.json
-export DAM_TRAFFIC_ENABLED_APPS=openai-api,anthropic-api,chatgpt-codex
+export DAM_TRAFFIC_ENABLED_APPS=openai-api,anthropic-api,claude-web,anthropic-console,chatgpt-codex
 export DAM_WEB_ADDR=127.0.0.1:2896
 export DAM_PROXY_ENABLED=true
 export DAM_PROXY_LISTEN=127.0.0.1:7828

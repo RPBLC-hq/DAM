@@ -48,6 +48,16 @@ fn classifies_configured_hosts() {
         classify_traffic_host("ab.chatgpt.com").unwrap().adapter,
         ProtocolAdapterKind::WebSocket
     );
+    assert_eq!(
+        classify_traffic_host("claude.ai").unwrap().target_name,
+        "claude-web"
+    );
+    assert_eq!(
+        classify_traffic_host("console.anthropic.com")
+            .unwrap()
+            .target_name,
+        "anthropic-console"
+    );
     assert!(classify_traffic_host("API.X.AI.").is_none());
     assert!(classify_traffic_host("example.com").is_none());
 }
@@ -56,7 +66,7 @@ fn classifies_configured_hosts() {
 fn default_traffic_routes_are_unique_and_non_empty() {
     let routes = default_traffic_routes();
 
-    assert_eq!(routes.len(), 4);
+    assert_eq!(routes.len(), 6);
     assert_eq!(routes[0].host, "api.openai.com");
     assert_eq!(routes[0].target_name, "openai");
     assert_eq!(default_traffic_hosts()[0], "api.openai.com");
@@ -149,7 +159,7 @@ fn explicit_proxy_is_ready_for_configured_clients() {
     let readiness =
         transparent_capture_readiness_for_default_routes(CaptureMode::ExplicitProxy, false, false);
 
-    assert_eq!(readiness.len(), 4);
+    assert_eq!(readiness.len(), 6);
     assert!(
         readiness
             .iter()

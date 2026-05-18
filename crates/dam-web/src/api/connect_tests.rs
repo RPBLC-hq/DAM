@@ -94,7 +94,7 @@ fn apps_mediated_count_reads_enabled_integrations() {
     let dir = tempfile::tempdir().unwrap();
     let integration_state_dir = dir.path().join("integrations");
 
-    dam_integrations::set_integration_enabled("claude-code", true, &integration_state_dir).unwrap();
+    dam_integrations::set_integration_enabled("claude", true, &integration_state_dir).unwrap();
     dam_integrations::set_integration_enabled("codex", true, &integration_state_dir).unwrap();
 
     assert_eq!(apps_mediated_count_from(&integration_state_dir).unwrap(), 2);

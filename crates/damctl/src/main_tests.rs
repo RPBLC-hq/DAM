@@ -531,21 +531,21 @@ fn daemon_inspect_reports_connected_state() {
     assert!(output.stdout.contains("process: running"));
     assert!(output.stdout.contains("target: openai"));
     assert!(output.stdout.contains("network_mode: explicit_proxy"));
-    assert!(output.stdout.contains("transparent_routes: 4"));
-    assert!(output.stdout.contains("routing_routes: 4"));
+    assert!(output.stdout.contains("transparent_routes: 6"));
+    assert!(output.stdout.contains("routing_routes: 6"));
     assert!(output.stdout.contains(
         "routing_route openai: ready - explicit proxy routing is active for clients configured to use DAM"
     ));
     assert!(output.stdout.contains("trust_mode: disabled"));
     assert!(output.stdout.contains("local_ca_installed: false"));
-    assert!(output.stdout.contains("trusted_hosts: 4"));
-    assert!(output.stdout.contains("trust_routes: 4"));
+    assert!(output.stdout.contains("trusted_hosts: 6"));
+    assert!(output.stdout.contains("trust_routes: 6"));
     assert!(
         output
             .stdout
             .contains("trust_route openai: disabled - TLS interception is disabled")
     );
-    assert!(output.stdout.contains("interception_routes: 4"));
+    assert!(output.stdout.contains("interception_routes: 6"));
     assert!(output.stdout.contains(
         "interception_route openai: needs_user_consent - TLS interception requires explicit user approval"
     ));
@@ -571,7 +571,7 @@ fn trust_inspect_reports_default_read_only_state() {
     assert!(output.stdout.contains("trust_mode: disabled"));
     assert!(output.stdout.contains("local_ca_installed: false"));
     assert!(output.stdout.contains("local_ca_artifact: missing"));
-    assert!(output.stdout.contains("trust_routes: 4"));
+    assert!(output.stdout.contains("trust_routes: 6"));
     assert!(output.stdout.contains("action inspect: implemented"));
     let expected_install_support = if dam_trust::PlatformTrustStore::current()
         == dam_trust::PlatformTrustStore::MacosKeychain
@@ -607,7 +607,7 @@ fn trust_inspect_reports_local_ca_artifact_when_present() {
         report["local_ca_artifact"]["record"]["installed_at_unix"],
         serde_json::Value::Null
     );
-    assert_eq!(report["route_readiness"].as_array().unwrap().len(), 4);
+    assert_eq!(report["route_readiness"].as_array().unwrap().len(), 6);
 }
 
 #[test]
@@ -628,7 +628,7 @@ fn trust_inspect_uses_daemon_trust_state_when_present() {
     let report: serde_json::Value = serde_json::from_str(&output.stdout).unwrap();
     assert_eq!(report["source"], "daemon");
     assert_eq!(report["trust"]["mode"], "local_ca");
-    assert_eq!(report["route_readiness"].as_array().unwrap().len(), 4);
+    assert_eq!(report["route_readiness"].as_array().unwrap().len(), 6);
     assert_eq!(report["actions"].as_array().unwrap().len(), 3);
 }
 
@@ -646,7 +646,7 @@ fn network_inspect_reports_not_installed_state() {
     assert_eq!(output.code, 0);
     assert!(output.stdout.contains("state: not_installed"));
     assert!(output.stdout.contains("system_proxy_installed: false"));
-    assert!(output.stdout.contains("configured_hosts: 4"));
+    assert!(output.stdout.contains("configured_hosts: 6"));
     assert!(
         output
             .stdout
@@ -677,8 +677,8 @@ fn network_inspect_reports_installed_state_from_rollback_record() {
     let report: serde_json::Value = serde_json::from_str(&output.stdout).unwrap();
     assert_eq!(report["state"], "installed");
     assert_eq!(report["system_proxy_installed"], true);
-    assert_eq!(report["configured_hosts"].as_array().unwrap().len(), 4);
-    assert_eq!(report["route_readiness"].as_array().unwrap().len(), 4);
+    assert_eq!(report["configured_hosts"].as_array().unwrap().len(), 6);
+    assert_eq!(report["route_readiness"].as_array().unwrap().len(), 6);
     assert_eq!(report["route_readiness"][0]["readiness"], "ready");
 }
 
@@ -746,10 +746,10 @@ fn network_inspect_uses_configured_traffic_profile_routes() {
 fn integrations_check_reports_specific_missing_profile_as_needs_apply() {
     let dir = tempfile::tempdir().unwrap();
     let output = integrations_check(IntegrationsCheckArgs {
-        profile_id: Some("claude-code".to_string()),
+        profile_id: Some("claude".to_string()),
         json: true,
         proxy_url: Some("http://127.0.0.1:9000".to_string()),
-        target_path: Some(dir.path().join("claude-code.json")),
+        target_path: Some(dir.path().join("claude.json")),
         state_dir: Some(dir.path().join("state")),
     });
 
@@ -767,17 +767,14 @@ fn integrations_check_reports_specific_missing_profile_as_needs_apply() {
 fn integrations_check_reports_applied_profile() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state").join("integrations");
-    let profile_path = dir.path().join("claude-code.json");
-    let prepared = dam_integrations::prepare_apply(
-        "claude-code",
-        "http://127.0.0.1:9000",
-        profile_path.clone(),
-    )
-    .unwrap();
+    let profile_path = dir.path().join("claude.json");
+    let prepared =
+        dam_integrations::prepare_apply("claude", "http://127.0.0.1:9000", profile_path.clone())
+            .unwrap();
     dam_integrations::run_apply(prepared, false, &state_dir).unwrap();
 
     let output = integrations_check(IntegrationsCheckArgs {
-        profile_id: Some("claude-code".to_string()),
+        profile_id: Some("claude".to_string()),
         json: false,
         proxy_url: Some("http://127.0.0.1:9000".to_string()),
         target_path: Some(profile_path),
@@ -785,7 +782,7 @@ fn integrations_check_reports_applied_profile() {
     });
 
     assert_eq!(output.code, 0);
-    assert!(output.stdout.contains("profile: claude-code"));
+    assert!(output.stdout.contains("profile: claude"));
     assert!(output.stdout.contains("state: applied"));
     assert!(output.stdout.contains("rollback: available"));
 }

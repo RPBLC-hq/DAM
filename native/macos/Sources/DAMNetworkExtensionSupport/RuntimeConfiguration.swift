@@ -14,7 +14,10 @@ public struct DAMProxyRuntimeConfiguration: Equatable, Sendable {
     public static let defaultProtectedHosts = [
         "api.openai.com",
         "api.anthropic.com",
+        "claude.ai",
+        "console.anthropic.com",
         "chatgpt.com",
+        "ab.chatgpt.com",
     ]
 
     public static let defaultExcludedSigningIdentifiers = [

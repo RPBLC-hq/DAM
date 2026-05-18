@@ -29,11 +29,15 @@ fn capture_scope_expands_enabled_profiles_to_hosts_apps_and_targets() {
         scope.traffic_app_ids,
         Some(vec![
             "anthropic-api".to_string(),
+            "claude-web".to_string(),
+            "anthropic-console".to_string(),
             "openai-api".to_string(),
             "chatgpt-codex".to_string(),
         ])
     );
     assert!(scope.hosts.contains(&"api.anthropic.com".to_string()));
+    assert!(scope.hosts.contains(&"claude.ai".to_string()));
+    assert!(scope.hosts.contains(&"console.anthropic.com".to_string()));
     assert!(scope.hosts.contains(&"api.openai.com".to_string()));
     assert!(scope.hosts.contains(&"chatgpt.com".to_string()));
     assert!(scope.hosts.contains(&"ab.chatgpt.com".to_string()));
@@ -42,6 +46,18 @@ fn capture_scope_expands_enabled_profiles_to_hosts_apps_and_targets() {
             .proxy_targets
             .iter()
             .any(|target| target.name == "anthropic")
+    );
+    assert!(
+        scope
+            .proxy_targets
+            .iter()
+            .any(|target| target.name == "claude-web")
+    );
+    assert!(
+        scope
+            .proxy_targets
+            .iter()
+            .any(|target| target.name == "anthropic-console")
     );
     assert!(
         scope
@@ -62,7 +78,7 @@ fn capture_scope_preserves_explicit_empty_enabled_profile_state() {
     let dir = tempfile::tempdir().unwrap();
     let integration_dir = dir.path().join("integrations");
     dam_integrations::ensure_bundled_profile_files(&integration_dir).unwrap();
-    dam_integrations::set_integration_enabled("claude-code", false, &integration_dir).unwrap();
+    dam_integrations::set_integration_enabled("claude", false, &integration_dir).unwrap();
 
     let scope = capture_scope_for_state(&dam_config::DamConfig::default(), dir.path()).unwrap();
 

@@ -37,7 +37,7 @@ local proxy URL for proxy-aware harnesses: http://127.0.0.1:7828
 Use the Anthropic preset when the harness expects Anthropic-compatible traffic:
 
 ```bash
-dam connect --profile claude-code
+dam connect --profile claude
 ```
 
 That starts the same daemon/proxy lifecycle with:
@@ -116,7 +116,7 @@ Daemon options:
 --resolve-inbound    Restore DAM references in inbound responses
 ```
 
-`--profile` and `--apply` are `dam connect` front-end options. They are resolved before daemon startup and are not accepted by the standalone `dam-daemon run` parser. The selected or enabled profile controls the first daemon target for direct app-layer requests and supplies runtime `traffic.enabled_apps` filtering. With no saved app selection, DAM defaults to the Claude Code profile only for now. It then expands the runtime target set with every active bundled traffic profile route, so one daemon can match OpenAI, Anthropic, and Codex ChatGPT-login transparent routes at the same local endpoint. Settings app toggles use the same capture scope: the web layer writes enabled profile state, reinstalls the platform route host list, and reconnects the daemon with explicit `--traffic-app` and `--target` args so the running proxy cannot keep a stale Anthropic-only or OpenAI-only route set. `--apply` additionally ensures selected DAM-owned catalog profile JSON when explicitly requested; Connect onboarding does not require that fallback setup.
+`--profile` and `--apply` are `dam connect` front-end options. They are resolved before daemon startup and are not accepted by the standalone `dam-daemon run` parser. The selected or enabled profile controls the first daemon target for direct app-layer requests and supplies runtime `traffic.enabled_apps` filtering. With no saved app selection, DAM defaults to the Claude profile only for now. It then expands the runtime target set with every active bundled traffic profile route, so one daemon can match OpenAI, Claude, Anthropic, and Codex ChatGPT-login transparent routes at the same local endpoint. Settings app toggles use the same capture scope: the web layer writes enabled profile state, reinstalls the platform route host list, and reconnects the daemon with explicit `--traffic-app` and `--target` args so the running proxy cannot keep a stale Anthropic-only or OpenAI-only route set. `--apply` additionally ensures selected DAM-owned catalog profile JSON when explicitly requested; Connect onboarding does not require that fallback setup.
 
 `dam connect` preflights transparent setup before daemon startup. `system_proxy` mode requires DAM-managed macOS PAC routing to already be installed. `tun` mode requires macOS Network Extension capture to be active. `local_ca` trust mode requires local CA trust readiness. Missing prerequisites are reported with the next explicit `dam network ...` or `dam trust ...` command instead of starting a partially transparent daemon.
 

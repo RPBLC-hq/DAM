@@ -1,21 +1,28 @@
 use super::*;
 
+fn claude_traffic_app_ids() -> Vec<String> {
+    ["anthropic-api", "claude-web", "anthropic-console"]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+}
+
 #[test]
 fn lists_stable_profile_ids() {
-    assert_eq!(profile_ids(), ["claude-code", "codex"]);
-    assert_eq!(default_enabled_profile_ids(), ["claude-code"]);
+    assert_eq!(profile_ids(), ["claude", "codex"]);
+    assert_eq!(default_enabled_profile_ids(), ["claude"]);
 }
 
 #[test]
 fn claude_code_profile_uses_proxy_env_not_anthropic_base_url() {
-    let profile = profile("claude-code", "http://127.0.0.1:7828/").unwrap();
+    let profile = profile("claude", "http://127.0.0.1:7828/").unwrap();
 
     assert!(!profile.connect_args.contains(&"--anthropic".to_string()));
     assert!(profile.connect_args.contains(&"--network-mode".to_string()));
     assert!(profile.connect_args.contains(&"tun".to_string()));
     assert!(profile.connect_args.contains(&"--trust-mode".to_string()));
     assert!(profile.connect_args.contains(&"local_ca".to_string()));
-    assert_eq!(profile.traffic_app_ids, vec!["anthropic-api"]);
+    assert_eq!(profile.traffic_app_ids, claude_traffic_app_ids());
     assert_eq!(profile.settings[0].key, HTTPS_PROXY_ENV);
     assert_eq!(profile.settings[0].value, "http://127.0.0.1:7828");
     assert_eq!(profile.settings[1].key, HTTP_PROXY_ENV);
@@ -48,15 +55,29 @@ fn codex_profile_merges_api_and_subscription_traffic() {
 
 #[test]
 fn removed_profiles_are_not_visible_catalog_entries() {
-    for profile_id in [
-        "openai-compatible",
-        "anthropic",
-        "codex-api",
-        "codex-chatgpt",
-        "xai-compatible",
-    ] {
-        assert!(profile(profile_id, DEFAULT_PROXY_URL).is_none());
-    }
+    let visible_ids = profiles(DEFAULT_PROXY_URL)
+        .into_iter()
+        .map(|profile| profile.id)
+        .collect::<Vec<_>>();
+
+    assert_eq!(visible_ids, vec!["claude", "codex"]);
+    assert!(profile("xai-compatible", DEFAULT_PROXY_URL).is_none());
+}
+
+#[test]
+fn retired_profile_aliases_resolve_to_current_profiles() {
+    assert_eq!(
+        profile("claude-code", DEFAULT_PROXY_URL).unwrap().id,
+        "claude"
+    );
+    assert_eq!(
+        profile("anthropic", DEFAULT_PROXY_URL).unwrap().id,
+        "claude"
+    );
+    assert_eq!(
+        profile("openai-compatible", DEFAULT_PROXY_URL).unwrap().id,
+        "codex"
+    );
 }
 
 #[test]
@@ -72,12 +93,9 @@ fn codex_default_path_lives_under_integration_state() {
 fn claude_default_path_lives_under_profile_folder() {
     let dir = tempfile::tempdir().unwrap();
     let integration_dir = dir.path().join("integrations");
-    let path = default_apply_path("claude-code", &integration_dir, None, None).unwrap();
+    let path = default_apply_path("claude", &integration_dir, None, None).unwrap();
 
-    assert_eq!(
-        path,
-        integration_dir.join("profiles").join("claude-code.json")
-    );
+    assert_eq!(path, integration_dir.join("profiles").join("claude.json"));
 }
 
 #[test]
@@ -88,7 +106,7 @@ fn bundled_profile_files_are_seeded_as_json() {
     let written = ensure_bundled_profile_files(&state_dir).unwrap();
 
     assert_eq!(written.len(), 2);
-    for profile_id in ["claude-code", "codex"] {
+    for profile_id in ["claude", "codex"] {
         let path = profile_definition_path(&state_dir, profile_id);
         let raw = fs::read_to_string(path).unwrap();
         let profile: IntegrationProfile = serde_json::from_str(&raw).unwrap();
@@ -102,11 +120,11 @@ fn ensure_bundled_profile_files_refreshes_stale_known_profiles() {
     let state_dir = dir.path().join("integrations");
     let profiles_dir = profile_definitions_dir(&state_dir);
     fs::create_dir_all(&profiles_dir).unwrap();
-    let path = profile_definition_path(&state_dir, "claude-code");
+    let path = profile_definition_path(&state_dir, "claude");
     fs::write(
         &path,
         r#"{
-          "id": "claude-code",
+          "id": "claude",
           "name": "Claude Code",
           "summary": "Stale profile",
           "provider": "anthropic",
@@ -132,6 +150,21 @@ fn ensure_bundled_profile_files_refreshes_stale_known_profiles() {
 }
 
 #[test]
+fn ensure_bundled_profile_files_removes_retired_alias_profile_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("integrations");
+    let profiles_dir = profile_definitions_dir(&state_dir);
+    fs::create_dir_all(&profiles_dir).unwrap();
+    let retired_path = profiles_dir.join("claude-code.json");
+    fs::write(&retired_path, "{\"id\":\"claude-code\"}\n").unwrap();
+
+    ensure_bundled_profile_files(&state_dir).unwrap();
+
+    assert!(!retired_path.exists());
+    assert!(profile_definition_path(&state_dir, "claude").exists());
+}
+
+#[test]
 fn profiles_from_state_does_not_seed_profile_files() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("integrations");
@@ -143,7 +176,7 @@ fn profiles_from_state_does_not_seed_profile_files() {
             .iter()
             .map(|profile| profile.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["claude-code", "codex"]
+        vec!["claude", "codex"]
     );
     assert!(!state_dir.exists());
 }
@@ -155,9 +188,9 @@ fn profiles_from_state_uses_current_bundled_profile_for_stale_catalog_files() {
     let profiles_dir = profile_definitions_dir(&state_dir);
     fs::create_dir_all(&profiles_dir).unwrap();
     fs::write(
-        profiles_dir.join("claude-code.json"),
+        profiles_dir.join("claude.json"),
         r#"{
-          "id": "claude-code",
+          "id": "claude",
           "name": "Claude Code",
           "summary": "Stale profile",
           "provider": "anthropic",
@@ -190,7 +223,7 @@ fn profiles_from_state_uses_current_bundled_profile_for_stale_catalog_files() {
     let profiles = profiles_from_state(DEFAULT_PROXY_URL, &state_dir).unwrap();
     let claude = profiles
         .iter()
-        .find(|profile| profile.id == "claude-code")
+        .find(|profile| profile.id == "claude")
         .unwrap();
     let codex = profiles
         .iter()
@@ -198,7 +231,7 @@ fn profiles_from_state_uses_current_bundled_profile_for_stale_catalog_files() {
         .unwrap();
 
     assert!(!claude.connect_args.contains(&"--anthropic".to_string()));
-    assert_eq!(claude.traffic_app_ids, vec!["anthropic-api"]);
+    assert_eq!(claude.traffic_app_ids, claude_traffic_app_ids());
     assert!(!codex.connect_args.contains(&"--openai".to_string()));
     assert_eq!(codex.traffic_app_ids, vec!["openai-api", "chatgpt-codex"]);
 }
@@ -233,7 +266,7 @@ fn profiles_from_state_ignores_retired_stored_profile_files() {
             .iter()
             .map(|profile| profile.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["claude-code", "codex"]
+        vec!["claude", "codex"]
     );
 }
 
@@ -282,6 +315,57 @@ fn ensure_bundled_profile_files_migrates_legacy_rollback_records() {
 }
 
 #[test]
+fn ensure_bundled_profile_files_migrates_retired_claude_rollback_records() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("integrations");
+    let target_path = dir.path().join("claude.json");
+    let alias_dir = profile_state_dir(&state_dir, "claude-code");
+    let alias_backup_dir = alias_dir.join("backups").join("123");
+    let alias_backup_path = alias_backup_dir.join("target.backup");
+    fs::create_dir_all(&alias_backup_dir).unwrap();
+    fs::write(&target_path, "{\"id\":\"claude\"}\n").unwrap();
+    fs::write(&alias_backup_path, "{\"id\":\"old\"}\n").unwrap();
+    write_json_file(
+        &alias_dir.join("latest.json"),
+        &IntegrationApplyRecord {
+            profile_id: "claude-code".to_string(),
+            applied_at_unix: 123,
+            files: vec![IntegrationBackupFile {
+                path: target_path.clone(),
+                existed: true,
+                backup_path: Some(alias_backup_path),
+            }],
+        },
+    )
+    .unwrap();
+
+    ensure_bundled_profile_files(&state_dir).unwrap();
+
+    let migrated_record_path = profile_state_dir(&state_dir, "claude").join("latest.json");
+    let migrated_raw = fs::read_to_string(&migrated_record_path).unwrap();
+    let migrated_record: IntegrationApplyRecord = serde_json::from_str(&migrated_raw).unwrap();
+
+    assert_eq!(migrated_record.profile_id, "claude");
+    assert!(migrated_record_path.exists());
+    assert!(!alias_dir.exists());
+    assert!(
+        migrated_record.files[0]
+            .backup_path
+            .as_ref()
+            .unwrap()
+            .starts_with(profile_state_dir(&state_dir, "claude"))
+    );
+
+    let rollback = rollback_profile("claude-code", &state_dir).unwrap();
+    assert_eq!(rollback.profile_id, "claude");
+    assert_eq!(rollback.changes[0].action, FileAction::Restore);
+    assert_eq!(
+        fs::read_to_string(&target_path).unwrap(),
+        "{\"id\":\"old\"}\n"
+    );
+}
+
+#[test]
 fn prepare_apply_in_state_refreshes_known_catalog_profile_content() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("integrations");
@@ -320,10 +404,10 @@ fn catalog_profile_file_is_already_applied_when_seeded() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("integrations");
     ensure_bundled_profile_files(&state_dir).unwrap();
-    let target_path = profile_definition_path(&state_dir, "claude-code");
+    let target_path = profile_definition_path(&state_dir, "claude");
 
     let inspection = inspect_apply_in_state(
-        "claude-code",
+        "claude",
         DEFAULT_PROXY_URL,
         target_path,
         &state_dir,
@@ -342,8 +426,8 @@ fn active_profile_state_roundtrips_and_clears() {
 
     assert_eq!(read_active_profile(&state_dir).unwrap(), None);
 
-    let selected = set_active_profile("claude-code", &state_dir).unwrap();
-    assert_eq!(selected.profile_id, "claude-code");
+    let selected = set_active_profile("claude", &state_dir).unwrap();
+    assert_eq!(selected.profile_id, "claude");
     assert_eq!(read_active_profile(&state_dir).unwrap(), Some(selected));
 
     assert!(clear_active_profile(&state_dir).unwrap());
@@ -364,11 +448,11 @@ fn enabled_integrations_roundtrip_and_fallback_to_active_profile() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("integrations");
 
-    let active = set_active_profile("claude-code", &state_dir).unwrap();
+    let active = set_active_profile("claude", &state_dir).unwrap();
     assert_eq!(
         read_effective_enabled_integrations(&state_dir).unwrap(),
         vec![EnabledIntegrationState {
-            profile_id: "claude-code".to_string(),
+            profile_id: "claude".to_string(),
             enabled_at_unix: active.selected_at_unix,
         }]
     );
@@ -379,25 +463,25 @@ fn enabled_integrations_roundtrip_and_fallback_to_active_profile() {
             .iter()
             .map(|profile| profile.profile_id.as_str())
             .collect::<Vec<_>>(),
-        vec!["claude-code", "codex"]
+        vec!["claude", "codex"]
     );
     assert_eq!(
         enabled_profile_ids(&state_dir).unwrap(),
-        vec!["claude-code".to_string(), "codex".to_string()]
+        vec!["claude".to_string(), "codex".to_string()]
     );
 
-    let enabled = set_integration_enabled("claude-code", true, &state_dir).unwrap();
+    let enabled = set_integration_enabled("claude", true, &state_dir).unwrap();
     assert_eq!(
         enabled
             .iter()
             .map(|profile| profile.profile_id.as_str())
             .collect::<Vec<_>>(),
-        vec!["codex", "claude-code"]
+        vec!["codex", "claude"]
     );
 
     let enabled = set_integration_enabled("codex", false, &state_dir).unwrap();
     assert_eq!(enabled.len(), 1);
-    assert_eq!(enabled[0].profile_id, "claude-code");
+    assert_eq!(enabled[0].profile_id, "claude");
 
     assert!(clear_enabled_integrations(&state_dir).unwrap());
     assert!(!clear_enabled_integrations(&state_dir).unwrap());
@@ -410,24 +494,26 @@ fn runtime_enabled_integrations_default_to_claude_code_only() {
 
     assert_eq!(
         runtime_enabled_profile_ids(&state_dir).unwrap(),
-        Some(vec!["claude-code".to_string()])
+        Some(vec!["claude".to_string()])
     );
 
-    set_active_profile("claude-code", &state_dir).unwrap();
+    set_active_profile("claude", &state_dir).unwrap();
     assert_eq!(
         runtime_enabled_profile_ids(&state_dir).unwrap(),
-        Some(vec!["claude-code".to_string()])
+        Some(vec!["claude".to_string()])
     );
 
-    set_integration_enabled("claude-code", false, &state_dir).unwrap();
+    set_integration_enabled("claude", false, &state_dir).unwrap();
     assert_eq!(
         runtime_enabled_profile_ids(&state_dir).unwrap(),
         Some(Vec::new())
     );
     assert_eq!(
-        traffic_app_ids_for_profile_ids(&["claude-code".to_string(), "codex".to_string()]).unwrap(),
+        traffic_app_ids_for_profile_ids(&["claude".to_string(), "codex".to_string()]).unwrap(),
         vec![
             "anthropic-api".to_string(),
+            "claude-web".to_string(),
+            "anthropic-console".to_string(),
             "openai-api".to_string(),
             "chatgpt-codex".to_string()
         ]
@@ -466,8 +552,51 @@ fn retired_enabled_profile_ids_are_migrated_for_runtime_state() {
 
     assert_eq!(
         runtime_enabled_profile_ids(&state_dir).unwrap(),
-        Some(vec!["codex".to_string(), "claude-code".to_string()])
+        Some(vec!["codex".to_string(), "claude".to_string()])
     );
+}
+
+#[test]
+fn ensure_bundled_profile_files_rewrites_retired_runtime_state_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("integrations");
+    fs::create_dir_all(&state_dir).unwrap();
+    write_json_file(
+        &enabled_integrations_path(&state_dir),
+        &EnabledIntegrationsState {
+            profiles: vec![
+                EnabledIntegrationState {
+                    profile_id: "claude-code".to_string(),
+                    enabled_at_unix: 1,
+                },
+                EnabledIntegrationState {
+                    profile_id: "anthropic".to_string(),
+                    enabled_at_unix: 2,
+                },
+            ],
+        },
+    )
+    .unwrap();
+    write_json_file(
+        &active_profile_path(&state_dir),
+        &ActiveProfileState {
+            profile_id: "claude-code".to_string(),
+            selected_at_unix: 3,
+        },
+    )
+    .unwrap();
+
+    ensure_bundled_profile_files(&state_dir).unwrap();
+
+    let enabled_raw = fs::read_to_string(enabled_integrations_path(&state_dir)).unwrap();
+    let enabled: EnabledIntegrationsState = serde_json::from_str(&enabled_raw).unwrap();
+    let active = read_active_profile(&state_dir).unwrap().unwrap();
+
+    assert_eq!(enabled.profiles.len(), 1);
+    assert_eq!(enabled.profiles[0].profile_id, "claude");
+    assert_eq!(enabled.profiles[0].enabled_at_unix, 1);
+    assert_eq!(active.profile_id, "claude");
+    assert_eq!(active.selected_at_unix, 3);
 }
 
 #[test]
@@ -508,27 +637,22 @@ fn codex_apply_writes_profile_json_and_rollback_restores_backup() {
 fn claude_code_apply_writes_profile_json_and_rollback_restores_backup() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
-    let profile_path = dir.path().join("claude-code.json");
+    let profile_path = dir.path().join("claude.json");
     let original = "{\"id\":\"old-profile\"}\n";
     fs::write(&profile_path, original).unwrap();
 
-    let prepared = prepare_apply(
-        "claude-code",
-        "http://127.0.0.1:9000/",
-        profile_path.clone(),
-    )
-    .unwrap();
+    let prepared = prepare_apply("claude", "http://127.0.0.1:9000/", profile_path.clone()).unwrap();
     let result = run_apply(prepared, false, &state_dir).unwrap();
 
     assert_eq!(result.changes[0].action, FileAction::Update);
     let applied = fs::read_to_string(&profile_path).unwrap();
     let profile: IntegrationProfile = serde_json::from_str(&applied).unwrap();
-    assert_eq!(profile.id, "claude-code");
-    assert_eq!(profile.traffic_app_ids, vec!["anthropic-api"]);
+    assert_eq!(profile.id, "claude");
+    assert_eq!(profile.traffic_app_ids, claude_traffic_app_ids());
     assert_eq!(profile.settings[0].value, "http://127.0.0.1:9000");
     assert_eq!(profile.settings[1].value, "http://127.0.0.1:9000");
 
-    let rollback = rollback_profile("claude-code", &state_dir).unwrap();
+    let rollback = rollback_profile("claude", &state_dir).unwrap();
 
     assert_eq!(rollback.changes[0].action, FileAction::Restore);
     assert_eq!(fs::read_to_string(&profile_path).unwrap(), original);

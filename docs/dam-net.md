@@ -75,10 +75,12 @@ The bundled MVP profile lives at `crates/dam-net/profiles/llm-mvp.json`. Its act
 ```text
 openai-api       -> api.openai.com / HTTP
 anthropic-api    -> api.anthropic.com / HTTP
+claude-web       -> claude.ai / HTTP
+anthropic-console -> console.anthropic.com / HTTP
 chatgpt-codex    -> chatgpt.com, ab.chatgpt.com / WebSocket
 ```
 
-Inbound HTTP response mutation is explicit per traffic app. `inbound.resolve_references` controls local restoration of existing DAM references, and `inbound.protect_sensitive_data` controls whether raw inbound response text is redetected/tokenized when no reference resolves. The bundled OpenAI API and Anthropic API apps opt into raw inbound protection; the ChatGPT Codex app does not opt into HTTP inbound protection because its `chatgpt.com` bootstrap and web backend responses are not safe to rewrite generically. WebSocket text-frame protection is handled by the WebSocket adapter's per-connection protection snapshot.
+Inbound HTTP response mutation is explicit per traffic app. `inbound.resolve_references` controls local restoration of existing DAM references, and `inbound.protect_sensitive_data` controls whether raw inbound response text is redetected/tokenized when no reference resolves. The bundled OpenAI API, Anthropic API, Claude Web, and Anthropic Console apps opt into raw inbound protection; the ChatGPT Codex app does not opt into HTTP inbound protection because its `chatgpt.com` bootstrap and web backend responses are not safe to rewrite generically. WebSocket text-frame protection is handled by the WebSocket adapter's per-connection protection snapshot.
 
 `default_traffic_routes()` is now a compatibility view derived from the bundled traffic profile. New mediated services, including private OpenAI-compatible and Anthropic-compatible endpoints, must be added as traffic profile JSON app entries. User-authored profile create/import/export is parked; when it returns, new services should still be validated JSON profile data rather than provider-specific Rust code.
 
