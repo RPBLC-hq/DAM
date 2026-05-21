@@ -313,6 +313,8 @@ export type MessageKey =
   | 'activity.tryAgain'
   | 'activity.loadingReason'
   | 'activity.add'
+  | 'activity.adding'
+  | 'activity.added'
   | 'activity.factsAria'
   | 'activity.outcome'
   | 'activity.type'
@@ -698,6 +700,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'activity.tryAgain': 'try again',
     'activity.loadingReason': 'reading activity',
     'activity.add': 'add to wallet',
+    'activity.adding': 'adding…',
+    'activity.added': 'added',
     'activity.factsAria': 'activity facts',
     'activity.outcome': 'outcome',
     'activity.type': 'type',
@@ -1089,6 +1093,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'activity.tryAgain': 'réessayer',
     'activity.loadingReason': 'lecture de l’activité',
     'activity.add': 'ajouter',
+    'activity.adding': 'ajout…',
+    'activity.added': 'ajouté',
     'activity.factsAria': 'faits de l’activité',
     'activity.outcome': 'résultat',
     'activity.type': 'type',

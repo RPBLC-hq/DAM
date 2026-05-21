@@ -1,21 +1,15 @@
 use super::*;
 use axum::extract::{Query, State};
-use dam_core::{LogEvent, LogEventType, LogLevel, Reference, SensitiveType, VaultWriter};
+use dam_core::{LogEvent, LogEventType, LogLevel, Reference, SensitiveType};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 #[tokio::test]
-async fn activity_resolves_profile_label_and_wallet_value_from_catalog() {
+async fn activity_resolves_profile_label_without_wallet_lookup() {
     let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
     let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
     let (profile_label, target_label) = catalog_profile_fixture();
-    let reference = vault
-        .write(&dam_core::VaultRecord {
-            reference: Reference::generate(SensitiveType::Email),
-            kind: SensitiveType::Email,
-            value: "ada@example.test".to_string(),
-        })
-        .unwrap();
+    let reference = Reference::generate(SensitiveType::Email);
     logs.record(
         &LogEvent::new(
             "op-1",
@@ -34,6 +28,7 @@ async fn activity_resolves_profile_label_and_wallet_value_from_catalog() {
             "replacement applied with tokenized reference",
         )
         .with_kind(SensitiveType::Email)
+        .with_value("ada@example.test")
         .with_reference(reference.clone())
         .with_action("tokenized"),
     )
@@ -50,7 +45,7 @@ async fn activity_resolves_profile_label_and_wallet_value_from_catalog() {
     assert_ne!(event.profile, target_label);
     assert_eq!(event.kind, "email");
     assert_eq!(event.value.as_deref(), Some("ada@example.test"));
-    assert_eq!(event.wallet_id.as_deref(), Some(reference.id.as_str()));
+    assert_eq!(event.reference.as_deref(), Some(reference.key().as_str()));
     assert!(matches!(event.decision, Decision::Sealed));
 }
 
@@ -62,20 +57,20 @@ async fn activity_defaults_to_last_hour_and_since_zero_shows_all() {
     let mut recent = LogEvent::new(
         "op-recent",
         LogLevel::Info,
-        LogEventType::PolicyDecision,
-        "recent policy",
+        LogEventType::Redaction,
+        "recent redaction",
     )
     .with_kind(SensitiveType::Email)
-    .with_action("tokenize");
+    .with_action("redacted");
     recent.timestamp = now - 60;
     let mut old = LogEvent::new(
         "op-old",
         LogLevel::Info,
-        LogEventType::PolicyDecision,
-        "old policy",
+        LogEventType::Redaction,
+        "old redaction",
     )
     .with_kind(SensitiveType::Email)
-    .with_action("tokenize");
+    .with_action("redacted");
     old.timestamp = now - 7_200;
     logs.record(&recent).unwrap();
     logs.record(&old).unwrap();
@@ -104,6 +99,169 @@ async fn activity_defaults_to_last_hour_and_since_zero_shows_all() {
     assert_eq!(all_response.data.events.len(), 2);
 }
 
+#[tokio::test]
+async fn activity_uses_redaction_event_for_sealed_activity_without_policy_duplicate() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::PolicyDecision,
+            "policy decision applied",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_action("redact"),
+    )
+    .unwrap();
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::Redaction,
+            "replacement applied with policy redaction",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_value("ada@example.test")
+        .with_action("redacted"),
+    )
+    .unwrap();
+
+    let response = list(
+        State(test_state(vault, logs)),
+        Query(ActivityQuery {
+            since: Some(0),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.data.events.len(), 1);
+    assert_eq!(response.data.events[0].id, 2);
+    assert_eq!(response.data.events[0].kind, "email");
+    assert_eq!(
+        response.data.events[0].value.as_deref(),
+        Some("ada@example.test")
+    );
+    assert_eq!(response.data.summary.total, 1);
+}
+
+#[tokio::test]
+async fn activity_shows_consent_outcome_without_wallet_lookup() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::PolicyDecision,
+            "policy decision applied",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_value("ada@example.test")
+        .with_action("allow"),
+    )
+    .unwrap();
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::Redaction,
+            "replacement applied with policy redaction",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_value("ada@example.test")
+        .with_action("redacted"),
+    )
+    .unwrap();
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::Consent,
+            "active consent allowed detected value",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_action("allow:consent_example"),
+    )
+    .unwrap();
+
+    let response = list(
+        State(test_state(vault, logs)),
+        Query(ActivityQuery {
+            since: Some(0),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.data.events.len(), 2);
+    let sealed = &response.data.events[0];
+    assert_eq!(sealed.id, 2);
+    assert_eq!(sealed.kind, "email");
+    assert_eq!(sealed.value.as_deref(), Some("ada@example.test"));
+    assert!(matches!(sealed.decision, Decision::Sealed));
+
+    let granted = &response.data.events[1];
+    assert_eq!(granted.id, 1);
+    assert_eq!(granted.kind, "email");
+    assert_eq!(granted.value.as_deref(), Some("ada@example.test"));
+    assert!(matches!(granted.decision, Decision::Granted));
+    assert_eq!(response.data.summary.total, 2);
+}
+
+#[tokio::test]
+async fn activity_uses_bounded_relevant_log_query_without_request_summaries() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::ProxyForward,
+            "inbound reference left unresolved",
+        )
+        .with_action("resolve_disabled"),
+    )
+    .unwrap();
+    logs.record(
+        &LogEvent::new(
+            "op-request",
+            LogLevel::Info,
+            LogEventType::ProxyForward,
+            "request protection detections=1 replacements=1 tokenized=1 blocked=0",
+        )
+        .with_action("request_protection"),
+    )
+    .unwrap();
+    logs.record(
+        &LogEvent::new(
+            "op-provider",
+            LogLevel::Error,
+            LogEventType::ProxyFailure,
+            "upstream provider is unavailable",
+        )
+        .with_action("provider_down"),
+    )
+    .unwrap();
+
+    let response = list(
+        State(test_state(vault, logs)),
+        Query(ActivityQuery {
+            since: Some(0),
+            limit: Some(1),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.data.events.len(), 1);
+    assert_eq!(response.data.events[0].kind, "provider");
+}
+
 fn catalog_profile_fixture() -> (String, String) {
     let config = dam_config::DamConfig::default();
     let profiles = dam_integrations::profiles(&format!("http://{}", config.proxy.listen));
@@ -129,11 +287,19 @@ fn catalog_profile_fixture() -> (String, String) {
 }
 
 fn test_state(vault: Arc<dam_vault::Vault>, logs: Arc<dam_log::LogStore>) -> crate::AppState {
+    test_state_with_consent(vault, logs, None)
+}
+
+fn test_state_with_consent(
+    vault: Arc<dam_vault::Vault>,
+    logs: Arc<dam_log::LogStore>,
+    consent_store: Option<Arc<dam_consent::ConsentStore>>,
+) -> crate::AppState {
     crate::AppState {
         surface: crate::Surface::Web,
         tray_post_token: None,
         vault,
-        consent_store: None,
+        consent_store,
         logs,
         config: Arc::new(dam_config::DamConfig::default()),
         config_path: None,

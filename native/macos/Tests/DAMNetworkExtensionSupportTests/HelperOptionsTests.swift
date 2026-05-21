@@ -47,11 +47,15 @@ final class HelperOptionsTests: XCTestCase {
         let configuration = DAMProxyRuntimeConfiguration()
 
         XCTAssertTrue(configuration.shouldProtect(host: "api.openai.com"))
+        XCTAssertTrue(configuration.shouldProtect(host: "platform.openai.com"))
         XCTAssertTrue(configuration.shouldProtect(host: "api.anthropic.com"))
         XCTAssertTrue(configuration.shouldProtect(host: "claude.ai"))
         XCTAssertTrue(configuration.shouldProtect(host: "console.anthropic.com"))
+        XCTAssertTrue(configuration.shouldProtect(host: "mcp-proxy.anthropic.com"))
+        XCTAssertTrue(configuration.shouldProtect(host: "platform.claude.com"))
         XCTAssertTrue(configuration.shouldProtect(host: "chatgpt.com"))
         XCTAssertTrue(configuration.shouldProtect(host: "ab.chatgpt.com"))
+        XCTAssertTrue(configuration.shouldProtect(host: "chat.openai.com"))
         XCTAssertFalse(configuration.shouldProtect(host: "example.com"))
         XCTAssertEqual(configuration.routingFailurePolicy, .failOpen)
     }

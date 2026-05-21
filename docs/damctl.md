@@ -45,7 +45,7 @@ With an explicit proxy URL:
 
 ```bash
 cargo run -p damctl -- status --proxy-url http://127.0.0.1:7828
-cargo run -p damctl -- integrations check codex --proxy-url http://127.0.0.1:7828
+cargo run -p damctl -- integrations check chatgpt --proxy-url http://127.0.0.1:7828
 ```
 
 JSON output:
@@ -92,7 +92,7 @@ It checks:
 - proxy runtime `/health` when proxy is enabled;
 - default setup-plan readiness for the local proxy/interception connect flow;
 - integration profile apply state summary;
-- enabled integration profile and Codex ChatGPT-login setup readiness.
+- enabled integration profile and ChatGPT-login setup readiness.
 
 Exit codes:
 
@@ -246,8 +246,8 @@ Exit codes:
 
 ```bash
 cargo run -p damctl -- integrations check
-cargo run -p damctl -- integrations check codex
-cargo run -p damctl -- integrations check codex --target-path ./codex-test.json
+cargo run -p damctl -- integrations check chatgpt
+cargo run -p damctl -- integrations check chatgpt --target-path ./chatgpt-test.json
 ```
 
 It reports each profile as:

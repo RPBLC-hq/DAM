@@ -139,7 +139,7 @@ fn route_table_selects_target_from_traffic_route() {
     anthropic.name = "anthropic".to_string();
     anthropic.upstream = "https://api.anthropic.com".to_string();
     let mut chatgpt = target(OPENAI_PROVIDER);
-    chatgpt.name = "chatgpt-codex".to_string();
+    chatgpt.name = "chatgpt-web".to_string();
     chatgpt.upstream = "https://chatgpt.com".to_string();
     let mut config = proxy_config(anthropic);
     config.targets.push(chatgpt);
@@ -148,13 +148,13 @@ fn route_table_selects_target_from_traffic_route() {
         dam_net::ProtocolAdapterKind::WebSocket,
         "chatgpt.com",
         OPENAI_PROVIDER,
-        "chatgpt-codex",
+        "chatgpt-web",
         "https://chatgpt.com",
     );
 
     let decision = table.decide_for_traffic_route(&HeaderMap::new(), &traffic_route);
 
-    assert_eq!(decision.target().name, "chatgpt-codex");
+    assert_eq!(decision.target().name, "chatgpt-web");
 }
 
 #[test]

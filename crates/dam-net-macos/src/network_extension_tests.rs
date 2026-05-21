@@ -116,7 +116,7 @@ fn install_records_active_network_extension_state() {
     let status = network_extension_status(dir.path()).unwrap();
     assert_eq!(
         status.plan.backend_status.readiness,
-        dam_net::CaptureBackendReadiness::Ready
+        dam_net::CaptureBackendReadiness::NeedsApproval
     );
     assert_eq!(
         status.record.unwrap().protected_hosts,
@@ -572,6 +572,34 @@ fn system_extension_activation_method_maps_live_states() {
 }
 
 #[test]
+fn connected_manager_with_stale_system_extension_requires_activation() {
+    let status = MacosNetworkExtensionManagerStatus {
+        configured: true,
+        enabled: true,
+        connection_status: "connected".to_string(),
+        connected: true,
+        message: "macOS Network Extension live status: enabled connected".to_string(),
+    };
+
+    assert_eq!(
+        manager_status_activation_method_for_state(
+            None,
+            &status,
+            MacosSystemExtensionState::Unknown
+        ),
+        "system_extension_needs_user_approval"
+    );
+    assert_eq!(
+        manager_status_activation_method_for_state(
+            None,
+            &status,
+            MacosSystemExtensionState::Enabled
+        ),
+        "app_owned_system_extension_native_helper_config"
+    );
+}
+
+#[test]
 fn status_reconciles_deleted_manager_to_system_extension_step_without_live_extension() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -610,6 +638,20 @@ fn parses_live_enabled_system_extension_when_build_is_current() {
 
     assert_eq!(
         parse_system_extension_state(output, DEFAULT_BUNDLE_ID, Some(3)),
+        MacosSystemExtensionState::Enabled
+    );
+}
+
+#[test]
+fn parses_current_system_extension_when_old_build_is_terminating() {
+    let output = concat!(
+        "enabled\tactive\tteamID\tbundleID (version)\tname\t[state]\n",
+        "\t\t2T6856RWGV\tcom.rpblc.dam.network-extension (1.0.2/3)\tDAM Network Protection\t[terminated waiting to uninstall on reboot]\n",
+        "*\t*\t2T6856RWGV\tcom.rpblc.dam.network-extension (1.0.3/4)\tDAM Network Protection\t[activated enabled]\n",
+    );
+
+    assert_eq!(
+        parse_system_extension_state(output, DEFAULT_BUNDLE_ID, Some(4)),
         MacosSystemExtensionState::Enabled
     );
 }

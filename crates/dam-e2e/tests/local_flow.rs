@@ -250,7 +250,7 @@ fn dam_connect_status_disconnect_tracks_profile_target() {
         .args([
             "connect",
             "--profile",
-            "codex",
+            "chatgpt",
             "--listen",
             "127.0.0.1:0",
             "--db",
@@ -718,10 +718,10 @@ async fn dam_connect_apply_restarts_paused_daemon_when_profile_target_changes() 
     let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&response_body).unwrap(),
-        serde_json::from_str::<serde_json::Value>(&upstream_body).unwrap()
+        serde_json::from_str::<serde_json::Value>(raw_body).unwrap()
     );
-    assert!(!response_body.contains("frank@example.com"));
-    assert!(response_body.contains("[email:"));
+    assert!(response_body.contains("frank@example.com"));
+    assert!(!response_body.contains("[email:"));
     assert!(!upstream_body.contains("frank@example.com"));
     assert!(upstream_body.contains("[email:"));
 
@@ -733,10 +733,10 @@ async fn dam_connect_apply_restarts_paused_daemon_when_profile_target_changes() 
 }
 
 #[test]
-fn dam_integrations_apply_codex_and_rollback_from_binary() {
+fn dam_integrations_apply_chatgpt_and_rollback_from_binary() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
-    let profile_path = dir.path().join("codex.json");
+    let profile_path = dir.path().join("chatgpt.json");
     let original_profile = "{\"id\":\"old-profile\"}\n";
     std::fs::write(&profile_path, original_profile).unwrap();
 
@@ -745,7 +745,7 @@ fn dam_integrations_apply_codex_and_rollback_from_binary() {
         .args([
             "integrations",
             "apply",
-            "codex",
+            "chatgpt",
             "--dry-run",
             "--target-path",
             profile_path.to_str().unwrap(),
@@ -768,7 +768,7 @@ fn dam_integrations_apply_codex_and_rollback_from_binary() {
         .args([
             "integrations",
             "apply",
-            "codex",
+            "chatgpt",
             "--write",
             "--target-path",
             profile_path.to_str().unwrap(),
@@ -785,13 +785,13 @@ fn dam_integrations_apply_codex_and_rollback_from_binary() {
 
     let raw = std::fs::read_to_string(&profile_path).unwrap();
     let profile: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    assert_eq!(profile["id"], "codex");
+    assert_eq!(profile["id"], "chatgpt");
     assert_eq!(profile["settings"][0]["value"], "http://127.0.0.1:9000");
     assert_eq!(profile["settings"][1]["value"], "http://127.0.0.1:9000");
     assert!(!raw.contains("dam_openai"));
 
     let rollback = Command::new(binary("dam"))
-        .args(["integrations", "rollback", "codex"])
+        .args(["integrations", "rollback", "chatgpt"])
         .current_dir(dir.path())
         .env("DAM_STATE_DIR", &state_dir)
         .output()
@@ -977,8 +977,9 @@ async fn web_api_reads_vault_and_activity_populated_by_filter() {
         .await
         .unwrap();
     assert!(wallet_json.contains("\"ok\":true"));
-    assert!(wallet_json.contains("alice@example.com"));
-    assert!(wallet_json.contains("123-45-6789"));
+    assert!(wallet_json.contains("\"items\":[]"));
+    assert!(!wallet_json.contains("alice@example.com"));
+    assert!(!wallet_json.contains("123-45-6789"));
 
     let activity_json = reqwest::get(format!("{base}/api/v1/activity"))
         .await
@@ -1004,7 +1005,7 @@ async fn web_api_reads_vault_and_activity_populated_by_filter() {
 }
 
 #[tokio::test]
-async fn proxy_redacts_outbound_and_keeps_inbound_references_tokenized() {
+async fn proxy_tokenizes_outbound_and_resolves_inbound_references() {
     let dir = tempfile::tempdir().unwrap();
     let vault_path = dir.path().join("vault.db");
     let log_path = dir.path().join("log.db");
@@ -1044,9 +1045,9 @@ async fn proxy_redacts_outbound_and_keeps_inbound_references_tokenized() {
         .unwrap();
 
     let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
-    assert_eq!(response_body, upstream_body);
-    assert!(!response_body.contains("carol@example.com"));
-    assert!(response_body.contains("[email:"));
+    assert_eq!(response_body, raw_body);
+    assert!(response_body.contains("carol@example.com"));
+    assert!(!response_body.contains("[email:"));
     assert!(!upstream_body.contains("carol@example.com"));
     assert!(upstream_body.contains("[email:"));
     let vault_entries = dam_vault::Vault::open(&vault_path).unwrap().list().unwrap();

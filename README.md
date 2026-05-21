@@ -93,7 +93,7 @@ cargo build -p dam -p dam-web -p dam-tray
 cargo run -p dam-tray
 ```
 
-Headless setup, app profiles (Claude Code, Codex, …), and every routing/trust
+Headless setup, app profiles (Claude, ChatGPT, …), and every routing/trust
 flag are in [docs/dam.md](docs/dam.md),
 [docs/dam-tray.md](docs/dam-tray.md), and
 [docs/dam-integrations.md](docs/dam-integrations.md).

@@ -24,7 +24,7 @@ import { ApiError, api, apiPost } from '@/lib/api/client'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { resolveSurface } from '@/lib/surface'
 import { useUrlSearchParam, useUrlSearchString } from '@/lib/url-search'
-import type { WalletDetail, WalletItem, WalletList } from './types'
+import type { WalletDetail, WalletItem, WalletKind, WalletList } from './types'
 import { WalletInlineDetail } from './WalletInlineDetail'
 
 // Animation duration for the inline-detail expand/collapse. Must be
@@ -35,7 +35,6 @@ import { WalletInlineDetail } from './WalletInlineDetail'
 const INLINE_DETAIL_ANIM_MS = 460
 const ADDED_ROW_OPEN_DELAY_MS = 260
 const ADDED_ROW_REVEAL_DELAY_MS = INLINE_DETAIL_ANIM_MS + 40
-type WalletKind = 'email' | 'domain' | 'phone' | 'ssn' | 'cc'
 type WalletFilter = 'all' | 'protected' | 'allowed'
 
 export function WalletListPage() {

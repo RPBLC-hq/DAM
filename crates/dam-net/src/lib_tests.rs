@@ -58,6 +58,30 @@ fn classifies_configured_hosts() {
             .target_name,
         "anthropic-console"
     );
+    assert_eq!(
+        classify_traffic_host("mcp-proxy.anthropic.com")
+            .unwrap()
+            .target_name,
+        "claude-mcp-proxy"
+    );
+    assert_eq!(
+        classify_traffic_host("platform.claude.com")
+            .unwrap()
+            .target_name,
+        "claude-platform"
+    );
+    assert_eq!(
+        classify_traffic_host("platform.openai.com")
+            .unwrap()
+            .target_name,
+        "openai-platform"
+    );
+    assert_eq!(
+        classify_traffic_host("chat.openai.com")
+            .unwrap()
+            .target_name,
+        "chatgpt-legacy-web"
+    );
     assert!(classify_traffic_host("API.X.AI.").is_none());
     assert!(classify_traffic_host("example.com").is_none());
 }
@@ -66,7 +90,7 @@ fn classifies_configured_hosts() {
 fn default_traffic_routes_are_unique_and_non_empty() {
     let routes = default_traffic_routes();
 
-    assert_eq!(routes.len(), 6);
+    assert_eq!(routes.len(), 10);
     assert_eq!(routes[0].host, "api.openai.com");
     assert_eq!(routes[0].target_name, "openai");
     assert_eq!(default_traffic_hosts()[0], "api.openai.com");
@@ -159,7 +183,7 @@ fn explicit_proxy_is_ready_for_configured_clients() {
     let readiness =
         transparent_capture_readiness_for_default_routes(CaptureMode::ExplicitProxy, false, false);
 
-    assert_eq!(readiness.len(), 6);
+    assert_eq!(readiness.len(), 10);
     assert!(
         readiness
             .iter()

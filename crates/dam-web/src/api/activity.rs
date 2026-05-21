@@ -25,7 +25,7 @@ pub struct ActivityEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub wallet_id: Option<String>,
+    pub reference: Option<String>,
     pub decision: Decision,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purpose: Option<String>,
@@ -43,28 +43,42 @@ pub struct ActivitySummary {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ActivityQuery {
     pub since: Option<i64>,
+    pub after_id: Option<i64>,
+    pub limit: Option<usize>,
     pub decision: Option<String>,
     pub q: Option<String>,
 }
 
 const DEFAULT_ACTIVITY_WINDOW_SECONDS: i64 = 3_600;
+const DEFAULT_ACTIVITY_LIMIT: usize = 300;
+const MAX_ACTIVITY_LIMIT: usize = 1_000;
+const ACTIVITY_LOG_ROW_LIMIT: usize = 10_000;
+const ACTIVITY_EVENT_TYPES: [&str; 4] = [
+    "policy_decision",
+    "redaction",
+    "proxy_forward",
+    "proxy_failure",
+];
 
 pub async fn list(
     State(state): State<AppState>,
     Query(query): Query<ActivityQuery>,
 ) -> WebResult<ActivityFeed> {
+    let since = query.since.unwrap_or_else(default_since_timestamp);
     let entries = state
         .logs
-        .list()
+        .list_query(activity_log_query(&query, since))
         .map_err(|_| WebError::new(WebErrorCode::DaemonUnreachable))?;
 
     let q = query.q.as_deref().unwrap_or("").to_lowercase();
     let decision_filter = query.decision.as_deref();
-    let since = query.since.unwrap_or_else(default_since_timestamp);
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_ACTIVITY_LIMIT)
+        .clamp(1, MAX_ACTIVITY_LIMIT);
 
     let actors = operation_actors(&entries);
     let profile_labels = profile_labels_by_target(&state);
-    let values = operation_values(&state, &entries);
     let mut summary = ActivitySummary::default();
     let mut events = Vec::new();
     for entry in &entries {
@@ -87,7 +101,6 @@ pub async fn list(
         {
             continue;
         }
-        let activity_value = activity_value_for_entry(&state, entry, &values);
         let profile = profile_labels
             .get(&ev.actor)
             .cloned()
@@ -96,10 +109,15 @@ pub async fn list(
             && !profile.to_lowercase().contains(&q)
             && !ev.kind.to_lowercase().contains(&q)
             && !decision_tag(ev.decision).contains(&q)
-            && !activity_value
+            && !entry
                 .value
                 .as_deref()
                 .map(|value| value.to_lowercase().contains(&q))
+                .unwrap_or(false)
+            && !entry
+                .reference
+                .as_deref()
+                .map(|reference| reference.to_lowercase().contains(&q))
                 .unwrap_or(false)
             && !ev
                 .purpose
@@ -115,15 +133,29 @@ pub async fn list(
             day: ev.day,
             profile,
             kind: ev.kind,
-            value: activity_value.value,
-            wallet_id: activity_value.wallet_id,
+            value: entry.value.clone(),
+            reference: entry.reference.clone(),
             decision: ev.decision,
             purpose: ev.purpose,
             audit_id: ev.audit_id,
         });
+        if events.len() >= limit {
+            break;
+        }
     }
 
     Ok(Ok::new(ActivityFeed { events, summary }))
+}
+
+fn activity_log_query(query: &ActivityQuery, since: i64) -> dam_log::LogQuery {
+    let mut log_query = dam_log::LogQuery::default()
+        .with_min_timestamp(since)
+        .with_event_types(ACTIVITY_EVENT_TYPES)
+        .with_limit(ACTIVITY_LOG_ROW_LIMIT);
+    if let Some(after_id) = query.after_id {
+        log_query = log_query.with_after_id(after_id);
+    }
+    log_query
 }
 
 fn default_since_timestamp() -> i64 {
@@ -177,6 +209,12 @@ pub async fn detail(
             value: kind.clone(),
         });
     }
+    if let Some(value) = &entry.value {
+        items.push(EvidenceItem {
+            label: "value".into(),
+            value: value.clone(),
+        });
+    }
     if let Some(reference) = &entry.reference {
         items.push(EvidenceItem {
             label: "reference".into(),
@@ -219,56 +257,6 @@ fn operation_actors(entries: &[dam_log::LogEntry]) -> HashMap<String, String> {
             actor_from_message(&entry.message).map(|actor| (entry.operation_id.clone(), actor))
         })
         .collect()
-}
-
-#[derive(Debug, Clone, Default)]
-struct ActivityValue {
-    value: Option<String>,
-    wallet_id: Option<String>,
-}
-
-fn activity_value_for_entry(
-    state: &AppState,
-    entry: &dam_log::LogEntry,
-    values: &HashMap<(String, String), ActivityValue>,
-) -> ActivityValue {
-    if let Some(reference) = &entry.reference {
-        return ActivityValue {
-            value: state.vault.get(reference).ok().flatten(),
-            wallet_id: Some(wallet_id_from_key(reference)),
-        };
-    }
-    let Some(kind) = &entry.kind else {
-        return ActivityValue::default();
-    };
-    values
-        .get(&(entry.operation_id.clone(), kind.clone()))
-        .cloned()
-        .unwrap_or_default()
-}
-
-fn operation_values(
-    state: &AppState,
-    entries: &[dam_log::LogEntry],
-) -> HashMap<(String, String), ActivityValue> {
-    let mut values = HashMap::new();
-    for entry in entries {
-        let (Some(kind), Some(reference)) = (&entry.kind, &entry.reference) else {
-            continue;
-        };
-        let key = (entry.operation_id.clone(), kind.clone());
-        values.entry(key).or_insert_with(|| ActivityValue {
-            value: state.vault.get(reference).ok().flatten(),
-            wallet_id: Some(wallet_id_from_key(reference)),
-        });
-    }
-    values
-}
-
-fn wallet_id_from_key(key: &str) -> String {
-    dam_core::Reference::parse_key(key)
-        .map(|reference| reference.id)
-        .unwrap_or_else(|| key.to_string())
 }
 
 fn profile_labels_by_target(state: &AppState) -> HashMap<String, String> {

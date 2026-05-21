@@ -1,6 +1,6 @@
 //! Wallet list, detail, and consent mutations.
 //!
-//! v1 reads `dam-vault::Vault::list()` and joins simple consent state.
+//! v1 reads user-maintained `dam-vault` wallet entries and joins simple consent state.
 //! Full at-a-glance metadata and per-event last-seen derivation land
 //! progressively.
 
@@ -53,7 +53,7 @@ pub struct WalletList {
     pub total: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct ListQuery {
     pub q: Option<String>,
     pub state: Option<String>,
@@ -67,7 +67,7 @@ pub async fn list(
 ) -> WebResult<WalletList> {
     let entries = state
         .vault
-        .list()
+        .list_wallet()
         .map_err(|_| WebError::new(WebErrorCode::WalletUnreachable))?;
     let consents = consent_entries(&state)?;
 
@@ -103,6 +103,10 @@ pub async fn add(
     let reference = state
         .vault
         .write(&record)
+        .map_err(|_| WebError::new(WebErrorCode::WalletUnreachable))?;
+    state
+        .vault
+        .put_wallet(&reference.key(), value)
         .map_err(|_| WebError::new(WebErrorCode::WalletUnreachable))?;
     state.events.notify(EventTopic::WalletInvalidate);
     state.events.notify(EventTopic::ConnectUpdate);
@@ -248,7 +252,7 @@ pub async fn remove(
     }
     let deleted = state
         .vault
-        .delete(&key)
+        .delete_wallet(&key)
         .map_err(|_| WebError::new(WebErrorCode::WalletUnreachable))?;
     if !deleted {
         return Err(WebError::new(WebErrorCode::WalletValueMissing));
@@ -268,7 +272,7 @@ fn resolve_wallet_route_key(state: &AppState, route_id: &str) -> Result<String, 
 
     let matches = state
         .vault
-        .list()
+        .list_wallet()
         .map_err(|_| WebError::new(WebErrorCode::WalletUnreachable))?
         .into_iter()
         .filter_map(|entry| {
@@ -287,7 +291,7 @@ fn resolve_wallet_route_key(state: &AppState, route_id: &str) -> Result<String, 
 fn wallet_detail_for_key(state: &AppState, key: &str) -> Result<WalletDetail, WebError> {
     let entry = state
         .vault
-        .list()
+        .list_wallet()
         .map_err(|_| WebError::new(WebErrorCode::WalletUnreachable))?
         .into_iter()
         .find(|entry| entry.key == key)

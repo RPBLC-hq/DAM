@@ -38,7 +38,7 @@ fn active_grants_count_uses_current_unrevoked_consents() {
 #[test]
 fn active_grants_count_collapses_multiple_parties_for_same_wallet_value() {
     let store = dam_consent::ConsentStore::open_in_memory().unwrap();
-    for actor in ["Claude Code", "Codex"] {
+    for actor in ["Claude Code", "ChatGPT"] {
         store
             .grant(&dam_consent::GrantConsent {
                 kind: dam_core::SensitiveType::Email,
@@ -95,7 +95,7 @@ fn apps_mediated_count_reads_enabled_integrations() {
     let integration_state_dir = dir.path().join("integrations");
 
     dam_integrations::set_integration_enabled("claude", true, &integration_state_dir).unwrap();
-    dam_integrations::set_integration_enabled("codex", true, &integration_state_dir).unwrap();
+    dam_integrations::set_integration_enabled("chatgpt", true, &integration_state_dir).unwrap();
 
     assert_eq!(apps_mediated_count_from(&integration_state_dir).unwrap(), 2);
 }
@@ -175,6 +175,7 @@ fn log_entry(
         level: "info".to_string(),
         event_type: event_type.to_string(),
         kind: Some(kind.to_string()),
+        value: None,
         reference: None,
         action: action.map(ToOwned::to_owned),
         message: message.to_string(),

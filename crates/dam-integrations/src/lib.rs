@@ -9,13 +9,18 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_PROXY_URL: &str = "http://127.0.0.1:7828";
-pub const CODEX_API_KEY_ENV: &str = "OPENAI_API_KEY";
 pub const HTTPS_PROXY_ENV: &str = "HTTPS_PROXY";
 pub const HTTP_PROXY_ENV: &str = "HTTP_PROXY";
+
+include!(concat!(env!("OUT_DIR"), "/bundled_profiles.rs"));
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct IntegrationProfile {
     pub id: String,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort_order: Option<i32>,
     pub name: String,
     pub summary: String,
     pub provider: String,
@@ -172,31 +177,25 @@ struct IntegrationBackupFile {
 }
 
 pub fn profiles(proxy_url: &str) -> Vec<IntegrationProfile> {
-    PROFILE_JSONS
-        .iter()
-        .map(|raw| {
-            parse_profile_json(raw, proxy_url)
-                .expect("bundled DAM integration profile JSON must be valid")
-        })
-        .collect()
+    bundled_profiles(proxy_url).expect("bundled DAM integration profile JSON must be valid")
 }
 
 pub fn profiles_from_state(
     proxy_url: &str,
     integration_state_dir: &Path,
 ) -> Result<Vec<IntegrationProfile>, String> {
-    let mut profiles = profiles(proxy_url);
-    for integration in read_stored_profile_files(integration_state_dir, proxy_url)? {
+    let bundled = bundled_profiles(proxy_url)?;
+    let mut profiles = bundled.clone();
+    for integration in read_stored_profile_files(integration_state_dir, proxy_url, &bundled)? {
         upsert_profile(&mut profiles, integration);
     }
     Ok(profiles)
 }
 
 pub fn profile(id: &str, proxy_url: &str) -> Option<IntegrationProfile> {
-    let id = canonical_runtime_profile_id(id).ok().flatten()?;
-    profiles(proxy_url)
-        .into_iter()
-        .find(|profile| profile.id == id)
+    let profiles = profiles(proxy_url);
+    let id = canonical_profile_id_from_catalog(id, &profiles)?;
+    profiles.into_iter().find(|profile| profile.id == id)
 }
 
 pub fn profile_from_state(
@@ -204,20 +203,22 @@ pub fn profile_from_state(
     proxy_url: &str,
     integration_state_dir: &Path,
 ) -> Result<Option<IntegrationProfile>, String> {
-    let Some(id) = canonical_runtime_profile_id(id)? else {
+    let profiles = profiles_from_state(proxy_url, integration_state_dir)?;
+    let Some(id) = canonical_profile_id_from_catalog(id, &profiles) else {
         return Ok(None);
     };
-    Ok(profiles_from_state(proxy_url, integration_state_dir)?
+    Ok(profiles.into_iter().find(|profile| profile.id == id))
+}
+
+pub fn profile_ids() -> Vec<String> {
+    profiles(DEFAULT_PROXY_URL)
         .into_iter()
-        .find(|profile| profile.id == id))
+        .map(|profile| profile.id)
+        .collect()
 }
 
-pub fn profile_ids() -> Vec<&'static str> {
-    PROFILE_IDS.to_vec()
-}
-
-pub fn default_enabled_profile_ids() -> Vec<&'static str> {
-    DEFAULT_ENABLED_PROFILE_IDS.to_vec()
+pub fn default_enabled_profile_ids() -> Vec<String> {
+    profile_ids()
 }
 
 fn upsert_profile(profiles: &mut Vec<IntegrationProfile>, profile: IntegrationProfile) {
@@ -230,32 +231,6 @@ fn upsert_profile(profiles: &mut Vec<IntegrationProfile>, profile: IntegrationPr
         profiles.push(profile);
     }
 }
-
-const PROFILE_IDS: &[&str] = &["claude", "codex"];
-
-const DEFAULT_ENABLED_PROFILE_IDS: &[&str] = &["claude"];
-
-const PROFILE_ID_ALIASES: &[(&str, &str)] = &[
-    ("claude-code", "claude"),
-    ("anthropic", "claude"),
-    ("openai-compatible", "codex"),
-    ("codex-api", "codex"),
-    ("codex-chatgpt", "codex"),
-];
-
-const RETIRED_PROFILE_FILE_IDS: &[&str] = &[
-    "claude-code",
-    "anthropic",
-    "openai-compatible",
-    "codex-api",
-    "codex-chatgpt",
-    "xai-compatible",
-];
-
-const PROFILE_JSONS: &[&str] = &[
-    include_str!("../profiles/claude.json"),
-    include_str!("../profiles/codex.json"),
-];
 
 type ProfileCatalogApplyContent = (String, String, String, Vec<String>);
 
@@ -280,7 +255,7 @@ pub fn ensure_bundled_profile_files(integration_state_dir: &Path) -> Result<Vec<
         )
     })?;
     let mut written = Vec::new();
-    for raw in PROFILE_JSONS {
+    for raw in BUNDLED_PROFILE_JSONS {
         let profile = parse_profile_json(raw, DEFAULT_PROXY_URL)?;
         let path = dir.join(format!("{}.json", profile.id));
         if path.exists() {
@@ -296,13 +271,14 @@ pub fn ensure_bundled_profile_files(integration_state_dir: &Path) -> Result<Vec<
         atomic_write(&path, format!("{}\n", raw.trim_end()).as_bytes())?;
         written.push(path);
     }
-    prune_retired_profile_files(&dir)?;
+    prune_retired_profile_files(&dir, &profiles(DEFAULT_PROXY_URL))?;
     Ok(written)
 }
 
 fn read_stored_profile_files(
     integration_state_dir: &Path,
     proxy_url: &str,
+    bundled: &[IntegrationProfile],
 ) -> Result<Vec<IntegrationProfile>, String> {
     let mut files = Vec::new();
     let mut ids = BTreeSet::new();
@@ -334,11 +310,10 @@ fn read_stored_profile_files(
         let stored_profile = serde_json::from_str::<IntegrationProfile>(&raw)
             .map_err(|error| format!("failed to parse profile {}: {error}", path.display()))?;
         validate_integration_profile(&stored_profile)?;
-        if !PROFILE_IDS.contains(&stored_profile.id.as_str()) {
+        if canonical_profile_id_from_catalog(&stored_profile.id, bundled).is_some() {
             continue;
         }
-        let profile = bundled_profile(&stored_profile.id, proxy_url)?
-            .unwrap_or_else(|| render_profile_templates(stored_profile, proxy_url));
+        let profile = render_profile_templates(stored_profile, proxy_url);
         if !ids.insert(profile.id.clone()) {
             return Err(format!(
                 "duplicate integration profile id {} in {}",
@@ -349,6 +324,21 @@ fn read_stored_profile_files(
         files.push(profile);
     }
     Ok(files)
+}
+
+fn bundled_profiles(proxy_url: &str) -> Result<Vec<IntegrationProfile>, String> {
+    let mut profiles = BUNDLED_PROFILE_JSONS
+        .iter()
+        .map(|raw| parse_profile_json(raw, proxy_url))
+        .collect::<Result<Vec<_>, _>>()?;
+    profiles.sort_by(|left, right| {
+        left.sort_order
+            .unwrap_or(i32::MAX)
+            .cmp(&right.sort_order.unwrap_or(i32::MAX))
+            .then(left.name.cmp(&right.name))
+            .then(left.id.cmp(&right.id))
+    });
+    Ok(profiles)
 }
 
 pub fn traffic_app_ids_for_profile_ids_from_state(
@@ -372,6 +362,18 @@ fn validate_integration_profile(profile: &IntegrationProfile) -> Result<(), Stri
     if profile.id.trim().is_empty() {
         return Err("integration profile id is required".to_string());
     }
+    if profile.aliases.iter().any(|alias| alias.trim().is_empty()) {
+        return Err(format!(
+            "integration profile {} aliases must not be empty",
+            profile.id
+        ));
+    }
+    if profile.aliases.iter().any(|alias| alias == &profile.id) {
+        return Err(format!(
+            "integration profile {} aliases must not repeat its id",
+            profile.id
+        ));
+    }
     if profile.name.trim().is_empty() {
         return Err(format!(
             "integration profile {} name is required",
@@ -387,30 +389,54 @@ fn validate_integration_profile(profile: &IntegrationProfile) -> Result<(), Stri
     Ok(())
 }
 
-fn default_enabled_integrations() -> Vec<EnabledIntegrationState> {
-    DEFAULT_ENABLED_PROFILE_IDS
-        .iter()
+fn default_enabled_integrations(integration_state_dir: &Path) -> Vec<EnabledIntegrationState> {
+    let profiles = profiles_from_state(DEFAULT_PROXY_URL, integration_state_dir)
+        .unwrap_or_else(|_| profiles(DEFAULT_PROXY_URL));
+    profiles
+        .into_iter()
         .map(|profile_id| EnabledIntegrationState {
-            profile_id: (*profile_id).to_string(),
+            profile_id: profile_id.id,
             enabled_at_unix: 0,
         })
         .collect()
 }
 
-fn canonical_runtime_profile_id(profile_id: &str) -> Result<Option<String>, String> {
-    if PROFILE_IDS.contains(&profile_id) {
-        return Ok(Some(profile_id.to_string()));
+fn canonical_profile_id_from_catalog(
+    profile_id: &str,
+    profiles: &[IntegrationProfile],
+) -> Option<String> {
+    if let Some(profile) = profiles.iter().find(|profile| profile.id == profile_id) {
+        return Some(profile.id.clone());
     }
-    if let Some((_, canonical)) = PROFILE_ID_ALIASES
+    profiles
         .iter()
-        .find(|(alias, _canonical)| *alias == profile_id)
-    {
-        return Ok(Some((*canonical).to_string()));
+        .find(|profile| profile.aliases.iter().any(|alias| alias == profile_id))
+        .map(|profile| profile.id.clone())
+}
+
+fn canonical_runtime_profile_id(profile_id: &str) -> Result<String, String> {
+    let profiles = profiles(DEFAULT_PROXY_URL);
+    canonical_profile_id_from_catalog(profile_id, &profiles)
+        .ok_or_else(|| unknown_profile_error(profile_id))
+}
+
+fn canonical_runtime_profile_id_from_state(
+    profile_id: &str,
+    integration_state_dir: &Path,
+) -> Result<String, String> {
+    let profiles = profiles_from_state(DEFAULT_PROXY_URL, integration_state_dir)?;
+    canonical_profile_id_from_catalog(profile_id, &profiles)
+        .ok_or_else(|| unknown_profile_error_with_state(profile_id, integration_state_dir))
+}
+
+fn alias_pairs_from_catalog(profiles: &[IntegrationProfile]) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    for profile in profiles {
+        for alias in &profile.aliases {
+            pairs.push((alias.clone(), profile.id.clone()));
+        }
     }
-    match profile_id {
-        "xai-compatible" => Ok(None),
-        _ => Err(unknown_profile_error(profile_id)),
-    }
+    pairs
 }
 
 fn push_dedup_enabled(
@@ -436,24 +462,24 @@ fn parse_profile_json(raw: &str, proxy_url: &str) -> Result<IntegrationProfile, 
 }
 
 fn bundled_profile_raw(profile_id: &str) -> Result<Option<&'static str>, String> {
-    for raw in PROFILE_JSONS {
+    let mut raw_profiles = Vec::new();
+    for raw in BUNDLED_PROFILE_JSONS {
         let profile = serde_json::from_str::<IntegrationProfile>(raw).map_err(|error| {
             format!("failed to parse bundled integration profile JSON: {error}")
         })?;
+        raw_profiles.push((*raw, profile));
+    }
+    for (raw, profile) in &raw_profiles {
         if profile.id == profile_id {
-            return Ok(Some(raw));
+            return Ok(Some(*raw));
+        }
+    }
+    for (raw, profile) in &raw_profiles {
+        if profile.aliases.iter().any(|alias| alias == profile_id) {
+            return Ok(Some(*raw));
         }
     }
     Ok(None)
-}
-
-fn bundled_profile(
-    profile_id: &str,
-    proxy_url: &str,
-) -> Result<Option<IntegrationProfile>, String> {
-    bundled_profile_raw(profile_id)?
-        .map(|raw| parse_profile_json(raw, proxy_url))
-        .transpose()
 }
 
 fn render_profile_templates(
@@ -479,7 +505,6 @@ fn render_template(value: &str, proxy_url: &str) -> String {
         .replace("{{proxy_url}}", proxy_url.trim_end_matches('/'))
         .replace("{{https_proxy_env}}", HTTPS_PROXY_ENV)
         .replace("{{http_proxy_env}}", HTTP_PROXY_ENV)
-        .replace("{{codex_api_key_env}}", CODEX_API_KEY_ENV)
 }
 
 pub fn active_profile_path(integration_state_dir: &Path) -> PathBuf {
@@ -506,7 +531,8 @@ pub fn read_active_profile(
     };
     let state = serde_json::from_str::<ActiveProfileState>(&raw)
         .map_err(|error| format!("failed to parse active profile {}: {error}", path.display()))?;
-    let Some(profile_id) = canonical_runtime_profile_id(&state.profile_id)? else {
+    let profiles = profiles_from_state(DEFAULT_PROXY_URL, integration_state_dir)?;
+    let Some(profile_id) = canonical_profile_id_from_catalog(&state.profile_id, &profiles) else {
         return Ok(None);
     };
     Ok(Some(ActiveProfileState {
@@ -525,8 +551,9 @@ pub fn read_enabled_integrations(
 pub fn read_effective_enabled_integrations(
     integration_state_dir: &Path,
 ) -> Result<Vec<EnabledIntegrationState>, String> {
-    read_runtime_enabled_integrations(integration_state_dir)
-        .map(|profiles| profiles.unwrap_or_else(default_enabled_integrations))
+    read_runtime_enabled_integrations(integration_state_dir).map(|profiles| {
+        profiles.unwrap_or_else(|| default_enabled_integrations(integration_state_dir))
+    })
 }
 
 pub fn read_runtime_enabled_integrations(
@@ -543,7 +570,7 @@ pub fn read_runtime_enabled_integrations(
         }]));
     }
 
-    Ok(Some(default_enabled_integrations()))
+    Ok(Some(default_enabled_integrations(integration_state_dir)))
 }
 
 pub fn enabled_profile_ids(integration_state_dir: &Path) -> Result<Vec<String>, String> {
@@ -587,9 +614,7 @@ pub fn set_integration_enabled(
     enabled: bool,
     integration_state_dir: &Path,
 ) -> Result<Vec<EnabledIntegrationState>, String> {
-    let Some(profile_id) = canonical_runtime_profile_id(profile_id)? else {
-        return read_effective_enabled_integrations(integration_state_dir);
-    };
+    let profile_id = canonical_runtime_profile_id_from_state(profile_id, integration_state_dir)?;
     if profile_from_state(&profile_id, DEFAULT_PROXY_URL, integration_state_dir)?.is_none() {
         return Err(unknown_profile_error_with_state(
             &profile_id,
@@ -632,12 +657,7 @@ pub fn set_active_profile(
     profile_id: &str,
     integration_state_dir: &Path,
 ) -> Result<ActiveProfileState, String> {
-    let Some(profile_id) = canonical_runtime_profile_id(profile_id)? else {
-        return Err(unknown_profile_error_with_state(
-            profile_id,
-            integration_state_dir,
-        ));
-    };
+    let profile_id = canonical_runtime_profile_id_from_state(profile_id, integration_state_dir)?;
     if profile_from_state(&profile_id, DEFAULT_PROXY_URL, integration_state_dir)?.is_none() {
         return Err(unknown_profile_error_with_state(
             &profile_id,
@@ -691,13 +711,15 @@ fn read_enabled_integrations_file(
             path.display()
         )
     })?;
-    let mut profiles = Vec::new();
+    let mut enabled_profiles = Vec::new();
+    let catalog = profiles_from_state(DEFAULT_PROXY_URL, integration_state_dir)
+        .unwrap_or_else(|_| profiles(DEFAULT_PROXY_URL));
     for enabled in state.profiles {
-        if let Some(profile_id) = canonical_runtime_profile_id(&enabled.profile_id)? {
-            push_dedup_enabled(&mut profiles, profile_id, enabled.enabled_at_unix);
+        if let Some(profile_id) = canonical_profile_id_from_catalog(&enabled.profile_id, &catalog) {
+            push_dedup_enabled(&mut enabled_profiles, profile_id, enabled.enabled_at_unix);
         }
     }
-    Ok(Some(profiles))
+    Ok(Some(enabled_profiles))
 }
 
 fn write_enabled_integrations(
@@ -712,15 +734,8 @@ fn write_enabled_integrations(
 pub fn default_apply_path(
     profile_id: &str,
     integration_state_dir: &Path,
-    _codex_home: Option<PathBuf>,
-    _home: Option<PathBuf>,
 ) -> Result<PathBuf, String> {
-    let Some(profile_id) = canonical_runtime_profile_id(profile_id)? else {
-        return Err(unknown_profile_error_with_state(
-            profile_id,
-            integration_state_dir,
-        ));
-    };
+    let profile_id = canonical_runtime_profile_id_from_state(profile_id, integration_state_dir)?;
     if profile_from_state(&profile_id, DEFAULT_PROXY_URL, integration_state_dir)?.is_some() {
         return Ok(profile_definition_path(integration_state_dir, &profile_id));
     }
@@ -735,9 +750,7 @@ pub fn prepare_apply(
     proxy_url: &str,
     target_path: PathBuf,
 ) -> Result<PreparedIntegrationApply, String> {
-    let Some(profile_id) = canonical_runtime_profile_id(profile_id)? else {
-        return Err(unknown_profile_error(profile_id));
-    };
+    let profile_id = canonical_runtime_profile_id(profile_id)?;
     let profile =
         profile(&profile_id, proxy_url).ok_or_else(|| unknown_profile_error(&profile_id))?;
     prepare_apply_for_profile(&profile_id, profile, proxy_url, target_path)
@@ -749,12 +762,7 @@ pub fn prepare_apply_in_state(
     target_path: PathBuf,
     integration_state_dir: &Path,
 ) -> Result<PreparedIntegrationApply, String> {
-    let Some(profile_id) = canonical_runtime_profile_id(profile_id)? else {
-        return Err(unknown_profile_error_with_state(
-            profile_id,
-            integration_state_dir,
-        ));
-    };
+    let profile_id = canonical_runtime_profile_id_from_state(profile_id, integration_state_dir)?;
     if target_path == profile_definition_path(integration_state_dir, &profile_id)
         && let Some((_stored_profile_id, profile_name, desired_content, notes)) =
             profile_catalog_apply_content(&profile_id, integration_state_dir)?
@@ -803,18 +811,6 @@ fn profile_catalog_apply_content(
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => return Err(format!("failed to read {}: {error}", path.display())),
-    }
-
-    for raw in PROFILE_JSONS {
-        let profile = parse_profile_json(raw, DEFAULT_PROXY_URL)?;
-        if profile.id == profile_id {
-            return Ok(Some((
-                profile.id,
-                profile.name,
-                profile_file_content(raw),
-                profile.notes,
-            )));
-        }
     }
 
     Ok(None)
@@ -1024,8 +1020,9 @@ fn inspect_prepared_apply(
     state_dir: &Path,
 ) -> Result<IntegrationApplyInspection, String> {
     migrate_profile_state(state_dir)?;
-    let record_profile_id =
-        canonical_runtime_profile_id(profile_id)?.unwrap_or_else(|| profile_id.to_string());
+    let catalog = profiles(DEFAULT_PROXY_URL);
+    let record_profile_id = canonical_profile_id_from_catalog(profile_id, &catalog)
+        .unwrap_or_else(|| prepared.profile_id.clone());
     let record_path = profile_state_dir(state_dir, &record_profile_id).join("latest.json");
     let (rollback_available, record_error) =
         rollback_record_state(&record_profile_id, &record_path);
@@ -1084,9 +1081,9 @@ pub fn rollback_profile(
     state_dir: &Path,
 ) -> Result<IntegrationRollbackResult, String> {
     migrate_profile_state(state_dir)?;
-    let Some(profile_id) = canonical_runtime_profile_id(profile_id)? else {
-        return Err(unknown_profile_error(profile_id));
-    };
+    let catalog = profiles(DEFAULT_PROXY_URL);
+    let profile_id = canonical_profile_id_from_catalog(profile_id, &catalog)
+        .unwrap_or_else(|| profile_id.to_string());
     let record_path = profile_state_dir(state_dir, &profile_id).join("latest.json");
     let raw = fs::read_to_string(&record_path).map_err(|error| {
         format!(
@@ -1100,8 +1097,8 @@ pub fn rollback_profile(
             record_path.display()
         )
     })?;
-    let result_profile_id =
-        canonical_runtime_profile_id(&record.profile_id)?.unwrap_or_else(|| profile_id.clone());
+    let result_profile_id = canonical_profile_id_from_catalog(&record.profile_id, &catalog)
+        .unwrap_or_else(|| record.profile_id.clone());
     let mut changes = Vec::new();
     for file in &record.files {
         if file.existed {
@@ -1176,12 +1173,12 @@ fn migrate_profile_state(state_dir: &Path) -> Result<(), String> {
 }
 
 fn migrate_profile_id_alias_records(state_dir: &Path) -> Result<(), String> {
-    for (alias, canonical) in PROFILE_ID_ALIASES {
-        let old_dir = profile_state_dir(state_dir, alias);
+    for (alias, canonical) in alias_pairs_from_catalog(&profiles(DEFAULT_PROXY_URL)) {
+        let old_dir = profile_state_dir(state_dir, &alias);
         if !old_dir.exists() {
             continue;
         }
-        let new_dir = profile_state_dir(state_dir, canonical);
+        let new_dir = profile_state_dir(state_dir, &canonical);
         if new_dir.exists() {
             continue;
         }
@@ -1200,7 +1197,7 @@ fn migrate_profile_id_alias_records(state_dir: &Path) -> Result<(), String> {
                 new_dir.display()
             )
         })?;
-        rewrite_alias_apply_record(&new_dir, &old_dir, alias, canonical)?;
+        rewrite_alias_apply_record(&new_dir, &old_dir, &alias, &canonical)?;
     }
     Ok(())
 }
@@ -1241,9 +1238,12 @@ fn rewrite_alias_apply_record(
     write_json_file(&record_path, &record)
 }
 
-fn prune_retired_profile_files(profile_dir: &Path) -> Result<(), String> {
-    for profile_id in RETIRED_PROFILE_FILE_IDS {
-        let path = profile_dir.join(format!("{profile_id}.json"));
+fn prune_retired_profile_files(
+    profile_dir: &Path,
+    profiles: &[IntegrationProfile],
+) -> Result<(), String> {
+    for (alias, _canonical) in alias_pairs_from_catalog(profiles) {
+        let path = profile_dir.join(format!("{alias}.json"));
         match fs::remove_file(&path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
@@ -1277,21 +1277,24 @@ fn migrate_enabled_profile_aliases(state_dir: &Path) -> Result<(), String> {
         )
     })?;
     let mut changed = false;
-    let mut profiles = Vec::new();
+    let mut enabled_profiles = Vec::new();
+    let catalog = profiles_from_state(DEFAULT_PROXY_URL, state_dir)
+        .unwrap_or_else(|_| profiles(DEFAULT_PROXY_URL));
     for enabled in state.profiles {
         let original_profile_id = enabled.profile_id;
         let enabled_at_unix = enabled.enabled_at_unix;
-        let Some(profile_id) = canonical_runtime_profile_id(&original_profile_id)? else {
+        let Some(profile_id) = canonical_profile_id_from_catalog(&original_profile_id, &catalog)
+        else {
             changed = true;
             continue;
         };
         changed |= profile_id != original_profile_id;
-        let before_len = profiles.len();
-        push_dedup_enabled(&mut profiles, profile_id, enabled_at_unix);
-        changed |= profiles.len() == before_len;
+        let before_len = enabled_profiles.len();
+        push_dedup_enabled(&mut enabled_profiles, profile_id, enabled_at_unix);
+        changed |= enabled_profiles.len() == before_len;
     }
     if changed {
-        write_enabled_integrations(state_dir, profiles)?;
+        write_enabled_integrations(state_dir, enabled_profiles)?;
     }
     Ok(())
 }
@@ -1310,7 +1313,9 @@ fn migrate_active_profile_alias(state_dir: &Path) -> Result<(), String> {
     };
     let state = serde_json::from_str::<ActiveProfileState>(&raw)
         .map_err(|error| format!("failed to parse active profile {}: {error}", path.display()))?;
-    let Some(profile_id) = canonical_runtime_profile_id(&state.profile_id)? else {
+    let catalog = profiles_from_state(DEFAULT_PROXY_URL, state_dir)
+        .unwrap_or_else(|_| profiles(DEFAULT_PROXY_URL));
+    let Some(profile_id) = canonical_profile_id_from_catalog(&state.profile_id, &catalog) else {
         fs::remove_file(&path).map_err(|error| {
             format!(
                 "failed to remove retired active profile {}: {error}",
@@ -1567,10 +1572,7 @@ fn unknown_profile_error(profile_id: &str) -> String {
 }
 
 fn unknown_profile_error_with_state(profile_id: &str, integration_state_dir: &Path) -> String {
-    let mut ids = profile_ids()
-        .into_iter()
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+    let mut ids = profile_ids();
     if let Ok(profiles) = profiles_from_state(DEFAULT_PROXY_URL, integration_state_dir) {
         ids.extend(profiles.into_iter().map(|profile| profile.id));
     }

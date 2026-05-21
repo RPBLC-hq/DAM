@@ -37,7 +37,7 @@ dam-mcp --config dam.toml
 dam-mcp --db vault.db --consent-db consent.db
 ```
 
-Claude/Codex MCP config can point at the installed binary:
+Claude/ChatGPT MCP config can point at the installed binary:
 
 ```json
 {

@@ -23,8 +23,26 @@ fn defaults_are_local_development_safe() {
     assert_eq!(config.consent.sqlite_path, PathBuf::from("consent.db"));
     assert_eq!(config.consent.default_ttl_seconds, 86_400);
     assert!(config.consent.mcp_write_enabled);
-    assert_eq!(config.traffic.profile.apps.len(), 5);
-    assert_eq!(config.traffic.profile.apps[0].id, "openai-api");
+    assert_eq!(
+        config
+            .traffic
+            .profile
+            .apps
+            .iter()
+            .map(|app| app.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "openai-api",
+            "anthropic-api",
+            "claude-web",
+            "anthropic-console",
+            "claude-mcp-proxy",
+            "claude-platform",
+            "openai-platform",
+            "chatgpt-web",
+            "chatgpt-legacy-web"
+        ]
+    );
     assert!(config.traffic.enabled_app_ids.is_none());
     assert_eq!(config.web.addr, "127.0.0.1:2896");
     assert!(!config.proxy.enabled);
@@ -231,7 +249,7 @@ fn env_overrides_config_file() {
             ("DAM_CONSENT_DEFAULT_TTL_SECONDS", "7200"),
             ("DAM_CONSENT_MCP_WRITE_ENABLED", "false"),
             ("DAM_POLICY_DEDUPLICATE_REPLACEMENTS", "false"),
-            ("DAM_TRAFFIC_ENABLED_APPS", "anthropic-api, chatgpt-codex"),
+            ("DAM_TRAFFIC_ENABLED_APPS", "anthropic-api, chatgpt-web"),
             ("DAM_PROXY_ENABLED", "true"),
             ("DAM_PROXY_LISTEN", "127.0.0.1:8828"),
             ("DAM_PROXY_DEFAULT_FAILURE_MODE", "block_on_error"),
@@ -252,10 +270,7 @@ fn env_overrides_config_file() {
     assert!(!config.policy.deduplicate_replacements);
     assert_eq!(
         config.traffic.enabled_app_ids,
-        Some(vec![
-            "anthropic-api".to_string(),
-            "chatgpt-codex".to_string()
-        ])
+        Some(vec!["anthropic-api".to_string(), "chatgpt-web".to_string()])
     );
     assert!(config.proxy.enabled);
     assert_eq!(config.proxy.listen, "127.0.0.1:8828");

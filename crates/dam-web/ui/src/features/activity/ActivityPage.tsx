@@ -1,10 +1,11 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
 import {
   Button,
   EmptyTile,
   ErrorTile,
+  ProtectionMark,
+  type ProtectionState,
   RedactionLoader,
   SearchBar,
   SegmentedControl,
@@ -14,25 +15,27 @@ import { ApiError, api, apiPost } from '@/lib/api/client'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { useUrlSearchParam, useUrlSearchString } from '@/lib/url-search'
 import type { ActivityDecision, ActivityEvent, ActivityView } from './types'
+import type { WalletDetail, WalletKind } from '@/features/wallet/types'
 
 type Decision = 'all' | ActivityDecision
 type Since = '1h' | 'today' | '7d' | '30d' | 'all'
-type WalletKind = 'email' | 'domain' | 'phone' | 'ssn' | 'cc'
-type WalletDetail = {
-  item: {
-    id: string
-  }
-}
 
 const DECISION_VALUES: Decision[] = ['all', 'granted', 'sealed', 'denied']
 const SINCE_VALUES: Since[] = ['1h', 'today', '7d', '30d', 'all']
 
 const QUERY_KEY = 'activity' as const
+const ACTIVITY_REFETCH_INTERVAL_MS = 5_000
+
+type AddActivityValueRequest = {
+  eventId: number
+  kind: WalletKind
+  value: string
+}
 
 export function ActivityPage() {
   const { t, locale } = useI18n()
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const [addedActivityIds, setAddedActivityIds] = useState<ReadonlySet<number>>(new Set())
   const formatter = useMemo(
     () => new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }),
     [locale],
@@ -63,25 +66,25 @@ export function ActivityPage() {
         { signal },
       )
     },
-    refetchInterval: 5_000,
+    refetchInterval: () =>
+      typeof document !== 'undefined' && document.visibilityState === 'hidden'
+        ? false
+        : ACTIVITY_REFETCH_INTERVAL_MS,
+    refetchOnWindowFocus: true,
+    staleTime: 1_000,
   })
+
   const addToWallet = useMutation({
-    mutationFn: (item: ActivityEvent) => {
-      if (!item.value || !isWalletKind(item.kind)) {
-        throw new Error('activity value cannot be added to wallet')
-      }
-      return apiPost<WalletDetail>('/wallet', {
-        kind: item.kind,
-        value: item.value,
+    mutationFn: ({ kind, value }: AddActivityValueRequest) =>
+      apiPost<WalletDetail>('/wallet', { kind, value }),
+    onSuccess: (_detail, variables) => {
+      setAddedActivityIds((current) => {
+        const next = new Set(current)
+        next.add(variables.eventId)
+        return next
       })
-    },
-    onSuccess: (detail) => {
       void queryClient.invalidateQueries({ queryKey: ['wallet'] })
       void queryClient.invalidateQueries({ queryKey: ['connect'] })
-      void navigate({
-        to: '/wallet',
-        search: { focus: detail.item.id },
-      })
     },
   })
 
@@ -149,27 +152,15 @@ export function ActivityPage() {
               key={item.id}
               item={item}
               relative={(seconds) => relativePast(formatter, seconds)}
-              pending={addToWallet.isPending && addToWallet.variables?.id === item.id}
-              onAdd={() => addToWallet.mutate(item)}
+              addBusy={addToWallet.isPending}
+              addPending={addToWallet.isPending && addToWallet.variables?.eventId === item.id}
+              addSucceeded={addedActivityIds.has(item.id)}
+              addFailed={addToWallet.isError && addToWallet.variables?.eventId === item.id}
+              onAddToWallet={(kind, value) => addToWallet.mutate({ eventId: item.id, kind, value })}
             />
           ))
         )}
       </div>
-      {addToWallet.error && (
-        <ErrorTile
-          message={t('activity.error.addFailed')}
-          action={
-            <Button
-              variant="ghost"
-              size="sm"
-              type="button"
-              onClick={() => addToWallet.reset()}
-            >
-              {t('activity.tryAgain')}
-            </Button>
-          }
-        />
-      )}
     </section>
   )
 }
@@ -177,47 +168,93 @@ export function ActivityPage() {
 function ActivityRow({
   item,
   relative,
-  pending,
-  onAdd,
+  addBusy,
+  addPending,
+  addSucceeded,
+  addFailed,
+  onAddToWallet,
 }: {
   item: ActivityEvent
   relative: (secondsAgo: number) => string
-  pending: boolean
-  onAdd: () => void
+  addBusy: boolean
+  addPending: boolean
+  addSucceeded: boolean
+  addFailed: boolean
+  onAddToWallet: (kind: WalletKind, value: string) => void
 }) {
   const { t } = useI18n()
   const ago = relative(Math.max(0, Math.floor(Date.now() / 1000) - item.ts))
   const decision = t(activityDecisionLabelKey(item.decision))
-  const canAdd = Boolean(item.value && isWalletKind(item.kind))
+  const detected = activityDetectedLabel(item, t('activity.valueUnavailable'))
+  const identifier = activityIdentifierLabel(item)
+  const walletKind = walletKindForActivityKind(item.kind)
+  const walletValue = item.value?.trim() ?? ''
+  const showWalletAction = walletKind !== null
+  const addDisabled = addBusy || addPending || addSucceeded || !walletValue
 
   return (
     <article className="dam-activity__row">
-      <div className="dam-activity__lead">
-        <span className="dam-activity__time">{ago}</span>
-        <span className="dam-activity__value">
-          {item.value ?? t('activity.valueUnavailable')}
-        </span>
-      </div>
+      <header className="dam-activity__row-header">
+        <div className="dam-activity__lead">
+          <span className="dam-activity__time">{ago}</span>
+          <span className="dam-activity__value">{detected}</span>
+        </div>
+        <ProtectionMark
+          state={protectionStateForDecision(item.decision)}
+          label={decision}
+          className="dam-activity__outcome"
+        />
+      </header>
       <div className="dam-activity__facts" aria-label={t('activity.factsAria')}>
-        <ActivityFact label={t('activity.outcome')} value={decision} />
-        <ActivityFact label={t('activity.type')} value={item.kind} />
+        <ActivityIdentifier value={identifier} />
         <ActivityFact label={t('activity.profile')} value={item.profile} />
       </div>
-      <div className="dam-activity__actions">
-        {canAdd && (
+      {showWalletAction && (
+        <div className="dam-activity__actions">
+          {addFailed && (
+            <p className="dam-activity__action-error">{t('activity.error.addFailed')}</p>
+          )}
           <Button
-            variant="primary"
+            variant="secondary"
             size="sm"
             bracketed
             type="button"
-            disabled={pending}
-            onClick={onAdd}
+            disabled={addDisabled}
+            title={!walletValue ? t('activity.valueUnavailable') : undefined}
+            onClick={() => {
+              if (!walletKind || !walletValue) return
+              onAddToWallet(walletKind, walletValue)
+            }}
           >
-            {t('activity.add')}
+            {addPending
+              ? t('activity.adding')
+              : addSucceeded
+                ? t('activity.added')
+                : t('activity.add')}
           </Button>
-        )}
-      </div>
+        </div>
+      )}
     </article>
+  )
+}
+
+function activityDetectedLabel(item: ActivityEvent, unavailable: string): string {
+  if (item.value) return item.value
+  if (item.kind !== 'unknown') return `[${item.kind}]`
+  return unavailable
+}
+
+function activityIdentifierLabel(item: ActivityEvent): string {
+  if (item.reference) return item.reference
+  if (item.kind !== 'unknown') return item.kind
+  return item.audit_id
+}
+
+function ActivityIdentifier({ value }: { value: string }) {
+  return (
+    <span className="dam-activity__fact dam-activity__identifier">
+      [<b>{value}</b>]
+    </span>
   )
 }
 
@@ -227,6 +264,26 @@ function ActivityFact({ label, value }: { label: string; value: string }) {
       [{label}: <b>{value}</b>]
     </span>
   )
+}
+
+function protectionStateForDecision(decision: ActivityDecision): ProtectionState {
+  if (decision === 'granted') return 'allowed'
+  if (decision === 'denied') return 'revoked'
+  return 'protected'
+}
+
+function walletKindForActivityKind(kind: string): WalletKind | null {
+  if (
+    kind === 'email' ||
+    kind === 'domain' ||
+    kind === 'phone' ||
+    kind === 'ssn' ||
+    kind === 'cc'
+  ) {
+    return kind
+  }
+  if (kind === 'credit_card' || kind === 'credit-card') return 'cc'
+  return null
 }
 
 function LoadingState() {
@@ -276,16 +333,6 @@ function activityDecisionLabelKey(value: ActivityDecision): MessageKey {
   if (value === 'granted') return 'activity.decision.granted'
   if (value === 'sealed') return 'activity.decision.sealed'
   return 'activity.decision.denied'
-}
-
-function isWalletKind(value: string): value is WalletKind {
-  return (
-    value === 'email' ||
-    value === 'domain' ||
-    value === 'phone' ||
-    value === 'ssn' ||
-    value === 'cc'
-  )
 }
 
 function sinceLabelKey(value: Since): MessageKey {

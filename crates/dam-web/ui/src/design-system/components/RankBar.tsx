@@ -20,7 +20,7 @@ export type RankBarProps = {
    * bar may be partially full when the sum is less than total.
    */
   total?: number
-  /** Accessible label for the whole bar (e.g. "anthropic — 1,204 events"). */
+  /** Accessible label for the whole bar, for example "example app - 1,204 events". */
   ariaLabel?: string
 } & Omit<HTMLAttributes<HTMLDivElement>, 'children' | 'aria-label'>
 
@@ -28,7 +28,7 @@ export type RankBarProps = {
  * RankBar — horizontal segmented bar for breakdown leaderboards.
  *
  * Used on the privacy-dividend dashboard (Insights) to render rows like
- * "anthropic — 1,204 — [████████████░░] 92% redacted, 8% allowed".
+ * "example app - 1,204 - [████████████░░] 92% redacted, 8% allowed".
  *
  * Each segment fills a fraction of the bar; tones use design-system
  * color tokens. The component is purely visual; the surrounding row

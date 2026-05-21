@@ -46,44 +46,37 @@ fn detects_email_without_absorbing_following_sentence() {
 }
 
 #[test]
-fn detects_email_derived_domain_repeated_standalone() {
+fn does_not_detect_email_derived_domain_repeated_standalone() {
     let detections = detect("email alice@example.com domain example.com");
 
-    assert_eq!(detections.len(), 2);
+    assert_eq!(detections.len(), 1);
     assert_eq!(detections[0].kind, SensitiveType::Email);
-    assert_eq!(detections[1].kind, SensitiveType::Domain);
-    assert_eq!(detections[1].value, "example.com");
 }
 
 #[test]
-fn detects_email_derived_hyphenated_domain_repeated_standalone() {
+fn does_not_detect_email_derived_hyphenated_domain_repeated_standalone() {
     let detections = detect("email alice@corp-example.com domain corp-example.com");
 
-    assert_eq!(detections.len(), 2);
+    assert_eq!(detections.len(), 1);
     assert_eq!(detections[0].kind, SensitiveType::Email);
-    assert_eq!(detections[1].kind, SensitiveType::Domain);
-    assert_eq!(detections[1].value, "corp-example.com");
 }
 
 #[test]
-fn detects_email_derived_domain_with_spaced_dot() {
+fn does_not_detect_email_derived_domain_with_spaced_dot() {
     let detections = detect("email alice@example.com domain example . com");
 
-    assert_eq!(detections.len(), 2);
-    assert_eq!(detections[1].kind, SensitiveType::Domain);
-    assert_eq!(detections[1].value, "example . com");
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::Email);
 }
 
 #[test]
-fn detects_related_domain_without_email_in_input() {
+fn does_not_detect_related_domain_without_email_in_input() {
     let detections = detect_with_related_domains(
         "provider answered example.com",
         &["example.com".to_string()],
     );
 
-    assert_eq!(detections.len(), 1);
-    assert_eq!(detections[0].kind, SensitiveType::Domain);
-    assert_eq!(detections[0].value, "example.com");
+    assert!(detections.is_empty());
 }
 
 #[test]

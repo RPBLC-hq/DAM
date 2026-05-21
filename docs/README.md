@@ -28,7 +28,7 @@ DAM is designed for macOS, Linux, and Windows. Platform-specific routing, trust,
 - [dam-provider-common](dam-provider-common.md): shared response transform utilities for JSON/JSON-lines string-value, raw stream, and SSE text-delta transforms.
 - [dam-router](dam-router.md): proxy target selection, matched-route target choice, auth mode, and failure-mode decisions.
 - [dam-vault](dam-vault.md): local SQLite `VaultWriter` and `VaultReader` implementation.
-- [dam-log](dam-log.md): local SQLite `EventSink` implementation.
+- [dam-log](dam-log.md): local SQLite `EventSink` implementation, Activity values, and bounded indexed log queries for UI surfaces.
 - [dam-net](dam-net.md): network capture-mode vocabulary, generic traffic profile contracts, routing readiness, capture backend status, protocol adapter status, and profile-derived host classification.
 - [dam-net-macos](dam-net-macos.md): macOS PAC system-proxy install/remove plus Network Extension capture planning/status for `tun`.
 - [dam-trust](dam-trust.md): TLS trust-mode vocabulary, local CA artifacts, leaf issuance, macOS trust install/remove, readiness contracts, and trusted host scope for transparent protection.
@@ -36,7 +36,7 @@ DAM is designed for macOS, Linux, and Windows. Platform-specific routing, trust,
 - [dam-filter](dam-filter.md): CLI pipeline wiring detection, policy, vault, logs, and redaction.
 - [dam-resolve](dam-resolve.md): CLI pipeline for resolving `[kind:id]` references through `VaultReader`.
 - [dam-proxy](dam-proxy.md): generic mediation runtime with MVP LLM HTTP/WebSocket adapters plus daemon-gated HTTP/1.1 CONNECT/TLS for ready profile routes.
-- [dam-web](dam-web.md): local web UI for setup-plan-driven Connect/app controls, Settings, Wallet value/allow management, log events, and diagnostics.
+- [dam-web](dam-web.md): local web UI for setup-plan-driven Connect/app controls, Settings, Wallet value/allow management, bounded Activity, and diagnostics.
 - [dam-tray](dam-tray.md): native desktop shell that hosts the Connect surface from the local web UI.
 - [dam-mcp](dam-mcp.md): MCP tools for agent status/setup inspection and consent operations.
 
@@ -60,7 +60,7 @@ dam-core also builds non-sensitive log events
   -> dam-log when enabled
 ```
 
-Replacement planning deduplicates repeated equal canonical values by default, and compatible vault writers reuse an existing canonical reference for the same stored value. Current email canonicalization removes detector-supported whitespace inside the address and lowercases the domain before storage/deduplication; domain canonicalization removes detector-supported whitespace around dots and lowercases the domain. Set `policy.deduplicate_replacements = false` to issue a distinct reference per occurrence when repeated-reference equality is too revealing.
+Replacement planning deduplicates repeated equal canonical values by default, and compatible vault writers reuse an existing canonical reference for the same stored value. Current email canonicalization removes detector-supported whitespace inside the address and lowercases the domain before storage/deduplication. Domain-only values are not detected or redacted. Set `policy.deduplicate_replacements = false` to issue a distinct reference per occurrence when repeated-reference equality is too revealing.
 
 ## Resolve Pipeline
 
@@ -106,7 +106,7 @@ provider response
   -> LLM client
 ```
 
-Proxy defaults are directional: outbound requests are redacted before the provider sees them. Active consent applies to canonical detected values and, in proxy flows with a vault reader, previously tokenized outbound DAM references for that same allowed value. Agent traffic apps leave known DAM references unresolved in inbound local transcripts, while raw inbound HTTP response redetection/tokenization is explicit per route through traffic profile `inbound.protect_sensitive_data`. JSON-shaped responses are transformed string-by-string, including newline-delimited JSON, when reference restoration or explicit raw inbound protection is active. `text/event-stream` responses are transformed under the same route policy; provider-aware SSE text-delta parsing handles references and opted-in raw values split across adjacent OpenAI-compatible or Anthropic JSON delta events with a bounded event window, while raw streams still use tail-buffered transformation. The Codex ChatGPT-login WebSocket MVP freezes protection state at connection start, strips WebSocket extension negotiation, and protects unfragmented client and server text frames on protected connections; fragmented, binary, or compressed WebSocket frames close the protected connection instead of passing through raw.
+Proxy defaults are directional: profile-matched outbound requests are tokenized before the provider sees them, and those automatic detections create Activity log values and token-vault mappings but do not write to Wallet. Active consent applies to canonical detected values and, in proxy flows with a vault reader, previously tokenized outbound DAM references for that same allowed value. Agent traffic apps resolve known DAM references in inbound local transcripts when global inbound resolution is enabled, while raw inbound HTTP response redetection/redaction is explicit per route through traffic profile `inbound.protect_sensitive_data` and does not write to Wallet. JSON-shaped responses are transformed string-by-string, including newline-delimited JSON, when reference restoration or explicit raw inbound protection is active. `text/event-stream` responses are transformed under the same route policy; provider-aware SSE text-delta parsing handles references and opted-in raw values split across adjacent OpenAI-compatible or Anthropic JSON delta events with a bounded event window, while raw streams still use tail-buffered transformation. The ChatGPT-login WebSocket MVP freezes protection state at connection start, strips WebSocket extension negotiation, and protects unfragmented client and server text frames on protected connections; fragmented, binary, or compressed frames close protected connections instead of passing through raw.
 
 `dam-pipeline`, `dam-provider-common`, `dam-http-adapter`, and `dam-router` have been extracted from the first compact proxy implementation.
 

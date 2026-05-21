@@ -277,7 +277,7 @@ fn generated_operation_ids_use_standard_length() {
 }
 
 #[test]
-fn filter_log_events_do_not_include_raw_values() {
+fn filter_log_events_include_activity_values_without_putting_them_in_messages() {
     let detections = [detection(SensitiveType::Email, "alice@example.com", 6, 23)];
     let plan = build_replacement_plan(&detections, &RecordingVault::new());
 
@@ -305,16 +305,35 @@ fn filter_log_events_do_not_include_raw_values() {
             .any(|event| event.event_type == LogEventType::Redaction)
     );
 
-    for event in events {
+    for event in &events {
         assert!(!event.message.contains("alice@example.com"));
         assert!(!event.operation_id.contains("alice@example.com"));
         assert!(
             !event
                 .action
+                .as_deref()
                 .unwrap_or_default()
                 .contains("alice@example.com")
         );
     }
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == LogEventType::Detection
+                && event.value.as_deref() == Some("alice@example.com"))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == LogEventType::Redaction
+                && event.value.as_deref() == Some("alice@example.com"))
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.event_type == LogEventType::PolicyDecision
+                && event.value.as_deref() == Some("alice@example.com"))
+    );
 }
 
 #[test]

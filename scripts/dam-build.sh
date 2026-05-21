@@ -12,6 +12,7 @@ RESTART_AFTER_INSTALL="${DAM_RESTART_AFTER_INSTALL:-1}"
 AGENT_STATUS_STRICT="${DAM_AGENT_STATUS_STRICT:-0}"
 AGENT_NETWORK_MODE="${DAM_AGENT_NETWORK_MODE:-tun}"
 AGENT_TRUST_MODE="${DAM_AGENT_TRUST_MODE:-local_ca}"
+MACOS_NE_BUNDLE_ID="${DAM_MACOS_NE_BUNDLE_ID:-com.rpblc.dam.network-extension}"
 
 usage() {
   cat <<EOF
@@ -51,6 +52,7 @@ Environment:
   DAM_NOTARY_PROFILE        notarytool keychain profile, currently DAM-notary
   DAM_MACOS_TEAM_ID         Optional Team ID override for macOS packaging
   DAM_MACOS_APP_GROUP_ID    Optional App Group override for macOS packaging
+  DAM_MACOS_NE_BUNDLE_ID    Network Extension bundle ID, currently $MACOS_NE_BUNDLE_ID
   DAM_INSTALL_DIR           Local install destination, currently /Applications
   DAM_SKIP_NOTARIZE         Set to 1 to skip notarization in agent-install
   DAM_RESTART_AFTER_INSTALL Set to 0 to skip daemon/tray restart in agent-install
@@ -163,6 +165,22 @@ restart_installed_app() {
   run "$dam_bin" disconnect --stop --json
   run "$dam_bin" connect --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
   run open "$app"
+}
+
+refresh_installed_system_extension() {
+  require_macos
+  local app="$1"
+  if [[ "$AGENT_NETWORK_MODE" != "tun" ]]; then
+    return 0
+  fi
+  local tray_bin="$app/Contents/MacOS/dam-tray"
+  local dam_bin="$app/Contents/MacOS/dam"
+  if [[ ! -x "$tray_bin" || ! -x "$dam_bin" ]]; then
+    echo "missing installed DAM tray or CLI binary under: $app" >&2
+    exit 1
+  fi
+  run "$tray_bin" --activate-system-extension "$MACOS_NE_BUNDLE_ID"
+  run "$dam_bin" network install-network-extension --yes --json
 }
 
 status_try() {
@@ -368,6 +386,7 @@ cmd_agent_install() {
   stop_installed_ui "$destination"
   APP_PATH="$app" cmd_deploy_local
   verify_installed_app "$destination"
+  refresh_installed_system_extension "$destination"
 
   if [[ "$RESTART_AFTER_INSTALL" == "1" ]]; then
     restart_installed_app "$destination"

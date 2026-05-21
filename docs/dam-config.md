@@ -51,7 +51,7 @@ log_write = "warn_continue"
 
 [traffic]
 profile_path = "traffic-profile.json"
-enabled_apps = ["openai-api", "anthropic-api", "claude-web", "anthropic-console", "chatgpt-codex"]
+enabled_apps = ["openai-api", "openai-platform", "anthropic-api", "claude-web", "anthropic-console", "claude-mcp-proxy", "claude-platform", "chatgpt-web", "chatgpt-legacy-web"]
 
 [web]
 addr = "127.0.0.1:2896"
@@ -106,11 +106,14 @@ Private enterprise gateways and provider-compatible endpoints are traffic profil
       "upstream": "https://api.enterprise-ai.example",
       "steps": [
         {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
-        {"id": "tokenize", "kind": "replace_sensitive_data", "direction": "outbound"},
+        {"id": "redact", "kind": "replace_sensitive_data", "direction": "outbound"},
         {"id": "resolve", "kind": "resolve_references", "direction": "inbound"}
       ],
+      "outbound": {
+        "filter": {"default_action": "redact"}
+      },
       "inbound": {
-        "resolve_references": false,
+        "resolve_references": true,
         "protect_sensitive_data": true
       }
     }
@@ -118,7 +121,7 @@ Private enterprise gateways and provider-compatible endpoints are traffic profil
 }
 ```
 
-`inbound.resolve_references` controls whether existing DAM references are restored in HTTP responses. `inbound.protect_sensitive_data` is separate and defaults to `false`; it must be set for routes that should redetect/tokenize raw inbound HTTP response text. Stateful or browser-like routes should leave HTTP inbound protection off unless their response envelopes are known safe to rewrite.
+`inbound.resolve_references` controls whether existing DAM references are restored in HTTP responses. `inbound.protect_sensitive_data` is separate and defaults to `false`; it must be set for routes that should redetect/redact raw inbound HTTP response text without writing those inbound detections to Wallet. Stateful or browser-like routes should leave HTTP inbound protection off unless their response envelopes are known safe to rewrite.
 
 `network.ai_routes` has been removed. Config files that still contain `[[network.ai_routes]]` fail validation with a migration message instead of silently dropping private endpoint protection.
 
@@ -147,7 +150,7 @@ export DAM_POLICY_SSN_ACTION=redact
 export DAM_FAILURE_VAULT_WRITE=redact_only
 export DAM_FAILURE_LOG_WRITE=warn_continue
 export DAM_TRAFFIC_PROFILE=/etc/dam/traffic-profile.json
-export DAM_TRAFFIC_ENABLED_APPS=openai-api,anthropic-api,claude-web,anthropic-console,chatgpt-codex
+export DAM_TRAFFIC_ENABLED_APPS=openai-api,openai-platform,anthropic-api,claude-web,anthropic-console,claude-mcp-proxy,claude-platform,chatgpt-web,chatgpt-legacy-web
 export DAM_WEB_ADDR=127.0.0.1:2896
 export DAM_PROXY_ENABLED=true
 export DAM_PROXY_LISTEN=127.0.0.1:7828

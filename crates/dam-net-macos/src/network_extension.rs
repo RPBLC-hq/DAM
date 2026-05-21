@@ -746,8 +746,9 @@ fn reconcile_record_with_manager_status(
     status: MacosNetworkExtensionManagerStatus,
 ) -> Result<(), MacosNetworkExtensionError> {
     let method = manager_status_activation_method(record.as_ref(), bundle_identifier, &status);
+    let active = status.connected && method == "app_owned_system_extension_native_helper_config";
     if let Some(existing) = record.as_mut() {
-        existing.active = status.connected;
+        existing.active = active;
         existing.pending_reboot = method == "system_extension_pending_reboot";
         existing.activation_method = method.to_string();
         write_state_record(paths, existing)?;
@@ -761,7 +762,7 @@ fn reconcile_record_with_manager_status(
             team_identifier,
             protected_hosts: Vec::new(),
             installed_at_unix: unix_timestamp().unwrap_or(0),
-            active: status.connected,
+            active,
             activation_method: method.to_string(),
             pending_reboot: false,
         };
@@ -775,6 +776,18 @@ fn manager_status_activation_method(
     record: Option<&MacosNetworkExtensionStateRecord>,
     bundle_identifier: &str,
     status: &MacosNetworkExtensionManagerStatus,
+) -> &'static str {
+    manager_status_activation_method_for_state(
+        record,
+        status,
+        system_extension_state(bundle_identifier),
+    )
+}
+
+fn manager_status_activation_method_for_state(
+    record: Option<&MacosNetworkExtensionStateRecord>,
+    status: &MacosNetworkExtensionManagerStatus,
+    system_extension_state: MacosSystemExtensionState,
 ) -> &'static str {
     if !status.connected
         && let Some(record) = record
@@ -800,17 +813,20 @@ fn manager_status_activation_method(
     if !status.configured {
         if record.is_some() {
             return system_extension_activation_method(
-                system_extension_state(bundle_identifier),
+                system_extension_state,
                 "system_extension_ready_needs_network_configuration",
             );
         }
         return "system_extension_ready_needs_network_configuration";
     }
     if status.connected {
-        "app_owned_system_extension_native_helper_config"
+        system_extension_activation_method(
+            system_extension_state,
+            "app_owned_system_extension_native_helper_config",
+        )
     } else {
         match system_extension_activation_method(
-            system_extension_state(bundle_identifier),
+            system_extension_state,
             "app_owned_system_extension_native_helper_config",
         ) {
             "app_owned_system_extension_native_helper_config" => {
@@ -874,24 +890,34 @@ fn parse_system_extension_state(
     bundle_identifier: &str,
     bundled_build: Option<u64>,
 ) -> MacosSystemExtensionState {
-    let Some(line) = output.lines().find(|line| {
-        line.split_whitespace()
-            .any(|part| part == bundle_identifier)
-    }) else {
+    let lines: Vec<&str> = output
+        .lines()
+        .filter(|line| {
+            line.split_whitespace()
+                .any(|part| part == bundle_identifier)
+        })
+        .collect();
+    if lines.is_empty() {
         return MacosSystemExtensionState::Unknown;
-    };
-    if line.contains("[activated enabled]") {
-        if installed_build_is_stale(line, bundled_build) {
-            return MacosSystemExtensionState::Unknown;
-        }
-        MacosSystemExtensionState::Enabled
-    } else if line.contains("[activated waiting for user]") {
-        MacosSystemExtensionState::WaitingForUser
-    } else if line.contains("waiting") && line.contains("reboot") {
-        MacosSystemExtensionState::WaitingForReboot
-    } else {
-        MacosSystemExtensionState::Unknown
     }
+    if lines.iter().any(|line| {
+        line.contains("[activated enabled]") && !installed_build_is_stale(line, bundled_build)
+    }) {
+        return MacosSystemExtensionState::Enabled;
+    }
+    if lines
+        .iter()
+        .any(|line| line.contains("[activated waiting for user]"))
+    {
+        return MacosSystemExtensionState::WaitingForUser;
+    }
+    if lines
+        .iter()
+        .any(|line| line.contains("waiting") && line.contains("reboot"))
+    {
+        return MacosSystemExtensionState::WaitingForReboot;
+    }
+    MacosSystemExtensionState::Unknown
 }
 
 fn installed_build_is_stale(systemextensionsctl_line: &str, bundled_build: Option<u64>) -> bool {

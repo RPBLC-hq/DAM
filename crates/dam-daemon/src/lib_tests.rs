@@ -1,5 +1,8 @@
 use super::*;
 
+const OPENAI_API_UPSTREAM: &str = "https://api.openai.com";
+const ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
+
 #[test]
 fn provider_option_sets_label_without_provider_specific_defaults() {
     let options = parse_proxy_options(["--provider".to_string(), "anthropic".to_string()]).unwrap();
@@ -73,7 +76,7 @@ fn proxy_config_uses_caller_auth_passthrough() {
     let options = ProxyOptions::default();
     let config = proxy_config(&options).unwrap();
 
-    assert_eq!(config.proxy.targets.len(), 5);
+    assert_eq!(config.proxy.targets.len(), 9);
     assert_eq!(config.proxy.targets[0].name, "openai");
     assert_eq!(config.proxy.targets[0].provider, "openai-compatible");
     assert_eq!(config.proxy.targets[0].api_key_env, None);
@@ -90,7 +93,21 @@ fn proxy_config_uses_caller_auth_passthrough() {
             .proxy
             .targets
             .iter()
-            .any(|target| target.name == "chatgpt-codex")
+            .any(|target| target.name == "chatgpt-web")
+    );
+    assert!(
+        config
+            .proxy
+            .targets
+            .iter()
+            .any(|target| target.name == "chatgpt-legacy-web")
+    );
+    assert!(
+        config
+            .proxy
+            .targets
+            .iter()
+            .any(|target| target.name == "openai-platform" && target.provider == "generic-http")
     );
     assert!(
         config
@@ -105,6 +122,20 @@ fn proxy_config_uses_caller_auth_passthrough() {
             .targets
             .iter()
             .any(|target| target.name == "anthropic-console" && target.provider == "generic-http")
+    );
+    assert!(
+        config
+            .proxy
+            .targets
+            .iter()
+            .any(|target| target.name == "claude-mcp-proxy" && target.provider == "generic-http")
+    );
+    assert!(
+        config
+            .proxy
+            .targets
+            .iter()
+            .any(|target| target.name == "claude-platform" && target.provider == "generic-http")
     );
     assert!(config.proxy.enabled);
     assert!(config.log.enabled);
@@ -150,7 +181,7 @@ fn proxy_options_round_trip_multiple_targets() {
         options
     );
     let config = proxy_config(&options).unwrap();
-    assert_eq!(config.proxy.targets.len(), 5);
+    assert_eq!(config.proxy.targets.len(), 9);
     assert_eq!(config.proxy.targets[1].provider, "anthropic");
 }
 

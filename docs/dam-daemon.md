@@ -24,32 +24,25 @@ cargo run -p dam-daemon -- run
 
 ## Defaults
 
-`dam connect` defaults to an OpenAI-compatible proxy target:
+`dam connect` defaults to every loaded integration profile when no explicit enabled-profile state and no legacy active profile exist. The bundled install starts with the Claude and ChatGPT profiles enabled, which expands to all of their traffic app routes:
 
 ```text
 listen: 127.0.0.1:7828
-target: openai
-provider: openai-compatible
-upstream: https://api.openai.com
+profiles: claude, chatgpt
+traffic apps: openai-api, openai-platform, anthropic-api, claude-web, anthropic-console, claude-mcp-proxy, claude-platform, chatgpt-web, chatgpt-legacy-web
 local proxy URL for proxy-aware harnesses: http://127.0.0.1:7828
 ```
 
-Use the Anthropic preset when the harness expects Anthropic-compatible traffic:
+`dam connect` roots relative runtime store paths in `$DAM_STATE_DIR` before spawning `daemon-run`, so vault, log, and consent SQLite stores stay shared with `dam-web`, `dam-tray`, and CLI status/activity commands. A live daemon whose recorded runtime paths no longer match the canonical connect paths is restarted the same way as a changed target or route scope.
+
+Use `--profile` to select one loaded profile for a manual connect:
 
 ```bash
 dam connect --profile claude
+dam connect --profile chatgpt
 ```
 
-That starts the same daemon/proxy lifecycle with:
-
-```text
-target: anthropic
-provider: anthropic
-upstream: https://api.anthropic.com
-local proxy URL for proxy-aware harnesses: http://127.0.0.1:7828
-```
-
-Both presets use caller-owned provider auth headers by default. DAM does not store provider API keys for local daemon mode.
+Profiles use caller-owned provider auth headers by default. DAM does not store provider API keys for local daemon mode.
 
 ## State File
 
@@ -116,7 +109,7 @@ Daemon options:
 --resolve-inbound    Restore DAM references in inbound responses
 ```
 
-`--profile` and `--apply` are `dam connect` front-end options. They are resolved before daemon startup and are not accepted by the standalone `dam-daemon run` parser. The selected or enabled profile controls the first daemon target for direct app-layer requests and supplies runtime `traffic.enabled_apps` filtering. With no saved app selection, DAM defaults to the Claude profile only for now. It then expands the runtime target set with every active bundled traffic profile route, so one daemon can match OpenAI, Claude, Anthropic, and Codex ChatGPT-login transparent routes at the same local endpoint. Settings app toggles use the same capture scope: the web layer writes enabled profile state, reinstalls the platform route host list, and reconnects the daemon with explicit `--traffic-app` and `--target` args so the running proxy cannot keep a stale Anthropic-only or OpenAI-only route set. `--apply` additionally ensures selected DAM-owned catalog profile JSON when explicitly requested; Connect onboarding does not require that fallback setup.
+`--profile` and `--apply` are `dam connect` front-end options. They are resolved before daemon startup and are not accepted by the standalone `dam-daemon run` parser. The selected or enabled profile controls the first daemon target for direct app-layer requests and supplies runtime `traffic.enabled_apps` filtering. With no saved app selection, DAM defaults to every loaded integration profile. It then expands the runtime target set with every active bundled traffic profile route, so one daemon can match all configured transparent routes at the same local endpoint. Settings app toggles use the same capture scope: the web layer writes enabled profile state, reinstalls the platform route host list, and reconnects the daemon with explicit `--traffic-app` and `--target` args so the running proxy cannot keep a stale route set. `--apply` additionally ensures selected DAM-owned catalog profile JSON when explicitly requested; Connect onboarding does not require that fallback setup.
 
 `dam connect` preflights transparent setup before daemon startup. `system_proxy` mode requires DAM-managed macOS PAC routing to already be installed. `tun` mode requires macOS Network Extension capture to be active. `local_ca` trust mode requires local CA trust readiness. Missing prerequisites are reported with the next explicit `dam network ...` or `dam trust ...` command instead of starting a partially transparent daemon.
 
@@ -138,6 +131,6 @@ Daemon options:
 - New mediated services, including private OpenAI-compatible and Anthropic-compatible endpoints, are traffic profile JSON app entries. Active profile routes add non-secret proxy targets for route matching. The first selected proxy target still determines the default app-layer provider/upstream for direct requests.
 - It does not install system proxy settings, mutate harness configs, or start at login. The first tray/menu-bar shell lives in `dam-tray` and hosts `dam-web /connect`; it does not change daemon lifecycle behavior.
 - It records `system_proxy` and `tun` modes and routing readiness. macOS PAC and Network Extension routing are installed/removed by `dam network`; the daemon reports and consumes their state.
-- Transparent interception is HTTP/1.1 CONNECT/TLS for active traffic profile hosts, configured OpenAI-compatible and Anthropic targets, no HTTP/2, and no chunked request bodies. Intercepted JSON and `text/event-stream` responses are transformed for inbound reference resolution when global restoration is enabled and the matched traffic app allows it; raw inbound response redetection/tokenization is a separate traffic-profile opt-in through `inbound.protect_sensitive_data`.
-- Codex ChatGPT-login support keeps inbound HTTP restoration and raw HTTP inbound protection disabled for `chatgpt.com` and `ab.chatgpt.com` backend traffic. Its WebSocket support freezes protection state at connection start and protects unfragmented client and server text frames on protected connections, including raw provider-returned values and related domains learned from the outbound request context. Fragmented, binary, or compressed frames remain unsupported and close protected connections instead of passing through without mutation.
+- Transparent interception is HTTP/1.1 CONNECT/TLS for active traffic profile hosts, configured OpenAI-compatible and Anthropic targets, no HTTP/2, and no chunked request bodies. Intercepted JSON and `text/event-stream` responses are transformed for inbound reference resolution when global restoration is enabled and the matched traffic app allows it; raw inbound response redetection/redaction is a separate traffic-profile opt-in through `inbound.protect_sensitive_data` and does not write inbound detections to Wallet.
+- ChatGPT-login support keeps inbound HTTP restoration and raw HTTP inbound protection disabled for `chatgpt.com`, `ab.chatgpt.com`, and `chat.openai.com` backend traffic. Its WebSocket support freezes protection state at connection start and protects unfragmented client and server text frames on protected connections. Fragmented, binary, or compressed frames remain unsupported and close protected connections instead of passing through without mutation.
 - `dam disconnect --stop` terminates the daemon process by PID, escalates if the process ignores the first termination signal, and removes stale state when the process is no longer running.

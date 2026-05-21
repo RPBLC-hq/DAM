@@ -177,11 +177,11 @@ fn protect_text_applies_scoped_consent_only_for_matching_scope() {
                 created_by: "Codex".to_string(),
                 reason: None,
             },
-            dam_consent::target_scope("chatgpt-codex"),
+            dam_consent::target_scope("chatgpt-web"),
         )
         .unwrap();
     let policy = dam_policy::StaticPolicy::new(PolicyAction::Tokenize);
-    let matching_scopes = vec![dam_consent::target_scope("chatgpt-codex")];
+    let matching_scopes = vec![dam_consent::target_scope("chatgpt-web")];
     let non_matching_scopes = vec![dam_consent::target_scope("anthropic")];
 
     let matching = protect_text(
@@ -316,7 +316,7 @@ fn protect_text_expands_allowed_references_for_matching_scope() {
 }
 
 #[test]
-fn protect_text_tokenizes_related_domain_without_email_in_input() {
+fn protect_text_does_not_tokenize_related_domain_without_email_in_input() {
     let vault = RecordingVault::default();
     let policy = dam_policy::StaticPolicy::new(PolicyAction::Tokenize);
     let related_domains = vec!["example.com".to_string()];
@@ -335,11 +335,9 @@ fn protect_text_tokenizes_related_domain_without_email_in_input() {
     .unwrap();
 
     let output = result.output.unwrap();
-    assert!(!output.contains("example.com"));
-    assert!(output.contains("[domain:"));
-    assert_eq!(result.detections.len(), 1);
-    assert_eq!(result.detections[0].kind, SensitiveType::Domain);
-    assert_eq!(vault.records.lock().unwrap()[0].value, "example.com");
+    assert_eq!(output, "domain example.com");
+    assert!(result.detections.is_empty());
+    assert!(vault.records.lock().unwrap().is_empty());
 }
 
 #[test]

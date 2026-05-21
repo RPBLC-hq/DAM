@@ -922,12 +922,7 @@ fn integrations_check_report(
             Some(_) => {
                 return Err("--target-path can only be used when checking one profile".to_string());
             }
-            None => dam_integrations::default_apply_path(
-                &profile_id,
-                &state_dir,
-                env::var_os("CODEX_HOME").map(PathBuf::from),
-                env::var_os("HOME").map(PathBuf::from),
-            )?,
+            None => dam_integrations::default_apply_path(&profile_id, &state_dir)?,
         };
         profiles.push(dam_integrations::inspect_apply_in_state(
             &profile_id,

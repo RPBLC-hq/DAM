@@ -8,6 +8,7 @@ fn entry(event_type: &str, action: Option<&str>) -> dam_log::LogEntry {
         level: "info".into(),
         event_type: event_type.into(),
         kind: Some("email".into()),
+        value: Some("ada@example.test".into()),
         reference: None,
         action: action.map(|s| s.into()),
         message: "test".into(),
@@ -21,9 +22,15 @@ fn decision_allow_is_granted() {
 }
 
 #[test]
-fn decision_tokenize_is_sealed() {
-    let e = entry("policy_decision", Some("tokenize"));
+fn redaction_event_is_sealed() {
+    let e = entry("redaction", Some("redacted"));
     assert!(matches!(decision_for(&e), Some(Decision::Sealed)));
+}
+
+#[test]
+fn sealed_policy_decision_is_pipeline_internal() {
+    let e = entry("policy_decision", Some("redact"));
+    assert!(decision_for(&e).is_none());
 }
 
 #[test]
@@ -39,7 +46,7 @@ fn non_user_event_returns_none() {
 }
 
 #[test]
-fn proxy_request_without_detections_is_granted_activity() {
+fn proxy_request_summary_is_not_activity() {
     let e = dam_log::LogEntry {
         id: 1,
         timestamp: 0,
@@ -47,33 +54,14 @@ fn proxy_request_without_detections_is_granted_activity() {
         level: "info".into(),
         event_type: "proxy_forward".into(),
         kind: None,
+        value: None,
         reference: None,
         action: Some("request_protection".into()),
         message: "request protection detections=0 replacements=0 tokenized=0 blocked=0".into(),
     };
 
-    let event = derive_event_with_actor(&e, Some("openai")).unwrap();
-
-    assert!(matches!(event.decision, Decision::Granted));
-    assert_eq!(event.kind, "request");
-    assert_eq!(event.actor, "openai");
-}
-
-#[test]
-fn proxy_request_with_replacements_is_sealed_activity() {
-    let e = dam_log::LogEntry {
-        id: 1,
-        timestamp: 0,
-        operation_id: "op-1".into(),
-        level: "info".into(),
-        event_type: "proxy_forward".into(),
-        kind: None,
-        reference: None,
-        action: Some("request_protection".into()),
-        message: "request protection detections=1 replacements=1 tokenized=1 blocked=0".into(),
-    };
-
-    assert!(matches!(decision_for(&e), Some(Decision::Sealed)));
+    assert!(derive_event_with_actor(&e, Some("openai")).is_none());
+    assert!(decision_for(&e).is_none());
 }
 
 #[test]

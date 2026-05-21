@@ -39,6 +39,26 @@ fn enabled_system_extension_with_stale_build_requires_activation() {
 }
 
 #[test]
+fn current_enabled_system_extension_wins_over_terminating_old_build() {
+    let output = concat!(
+        "enabled\tactive\tteamID\tbundleID (version)\tname\t[state]\n",
+        "\t\t2T6856RWGV\tcom.rpblc.dam.network-extension (1.0.2/3)\tDAM Network Protection\t[terminated waiting to uninstall on reboot]\n",
+        "*\t*\t2T6856RWGV\tcom.rpblc.dam.network-extension (1.0.3/4)\tDAM Network Protection\t[activated enabled]\n",
+    );
+
+    assert_eq!(
+        parse_systemextensionsctl_outcome_with_bundled_build(
+            output,
+            "com.rpblc.dam.network-extension",
+            Some(4)
+        ),
+        Some(ActivationOutcome::Ready(
+            "DAM Network Protection is active".to_string()
+        ))
+    );
+}
+
+#[test]
 fn parses_systemextensionsctl_build_number() {
     assert_eq!(
         parse_systemextensionsctl_build(

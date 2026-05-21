@@ -27,6 +27,7 @@ struct CliArgs {
     config_path: Option<PathBuf>,
     db_path: Option<PathBuf>,
     log_path: Option<PathBuf>,
+    activate_system_extension: Option<String>,
     deactivate_system_extension: Option<String>,
 }
 
@@ -75,6 +76,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, String>
         config_path: None,
         db_path: None,
         log_path: None,
+        activate_system_extension: None,
         deactivate_system_extension: None,
     };
 
@@ -93,6 +95,10 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, String>
             }
             "--db" => cli.db_path = Some(PathBuf::from(required_value(&mut args, "--db")?)),
             "--log" => cli.log_path = Some(PathBuf::from(required_value(&mut args, "--log")?)),
+            "--activate-system-extension" => {
+                cli.activate_system_extension =
+                    Some(required_value(&mut args, "--activate-system-extension")?)
+            }
             "--deactivate-system-extension" => {
                 cli.deactivate_system_extension =
                     Some(required_value(&mut args, "--deactivate-system-extension")?)
@@ -114,7 +120,7 @@ fn required_value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result
 }
 
 fn usage() -> &'static str {
-    "Usage: dam-tray [--addr 127.0.0.1:2896] [--config dam.toml] [--db vault.db] [--log log.db] [--dam-bin /path/to/dam] [--dam-web-bin /path/to/dam-web] [--deactivate-system-extension BUNDLE_ID]"
+    "Usage: dam-tray [--addr 127.0.0.1:2896] [--config dam.toml] [--db vault.db] [--log log.db] [--dam-bin /path/to/dam] [--dam-web-bin /path/to/dam-web] [--activate-system-extension BUNDLE_ID] [--deactivate-system-extension BUNDLE_ID]"
 }
 
 fn choose_web_addr(explicit: Option<&str>) -> Result<String, String> {
@@ -306,6 +312,21 @@ mod macos {
     }
 
     pub(super) fn run(cli: CliArgs) -> Result<(), String> {
+        if let Some(bundle_identifier) = cli.activate_system_extension.as_deref() {
+            let data_paths = data_paths(&cli)?;
+            let outcome = activate_system_extension(&data_paths, bundle_identifier)?;
+            match outcome {
+                SystemExtensionActivation::Ready => println!("DAM Network Protection is active"),
+                SystemExtensionActivation::NeedsApproval => {
+                    println!("approve DAM Network Protection in System Settings")
+                }
+                SystemExtensionActivation::NeedsReboot => {
+                    println!("restart macOS to finish the DAM Network Protection system change")
+                }
+            }
+            return Ok(());
+        }
+
         if let Some(bundle_identifier) = cli.deactivate_system_extension.as_deref() {
             let outcome = crate::macos_system_extension::deactivate(
                 bundle_identifier,
@@ -950,7 +971,14 @@ mod macos {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| DEFAULT_MACOS_NE_BUNDLE_ID.to_string());
-        match crate::macos_system_extension::activate(&bundle_identifier, Duration::from_secs(20)) {
+        activate_system_extension(data_paths, &bundle_identifier)
+    }
+
+    fn activate_system_extension(
+        data_paths: &DataPaths,
+        bundle_identifier: &str,
+    ) -> Result<SystemExtensionActivation, String> {
+        match crate::macos_system_extension::activate(bundle_identifier, Duration::from_secs(20)) {
             Ok(crate::macos_system_extension::ActivationOutcome::Ready(_)) => {
                 // System Extension activation is only the native
                 // host becoming available. The helper still has to
@@ -958,7 +986,7 @@ mod macos {
                 // before DAM can mark capture active.
                 let _ = dam_net_macos::record_system_extension_ready(
                     &data_paths.state_dir,
-                    bundle_identifier,
+                    bundle_identifier.to_string(),
                     None,
                     Vec::new(),
                 );
@@ -967,7 +995,7 @@ mod macos {
             Ok(crate::macos_system_extension::ActivationOutcome::NeedsApproval(_)) => {
                 let _ = dam_net_macos::record_system_extension_needs_approval(
                     &data_paths.state_dir,
-                    bundle_identifier,
+                    bundle_identifier.to_string(),
                     None,
                     Vec::new(),
                 );
@@ -981,7 +1009,7 @@ mod macos {
                 // state before continuing.
                 let _ = dam_net_macos::record_pending_reboot(
                     &data_paths.state_dir,
-                    bundle_identifier,
+                    bundle_identifier.to_string(),
                     None,
                     Vec::new(),
                 );

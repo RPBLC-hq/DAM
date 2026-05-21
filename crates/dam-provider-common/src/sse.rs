@@ -17,9 +17,9 @@ struct SseEvent {
 
 #[derive(Clone, Debug)]
 enum TextDeltaPath {
-    AnthropicDeltaText,
-    OpenAiChoiceDeltaContent(usize),
-    OpenAiResponseDelta,
+    DeltaText,
+    ChoiceDeltaContent(usize),
+    ResponseDelta,
     TopLevelCompletion,
     TopLevelText,
     ContentText(usize),
@@ -166,15 +166,15 @@ fn collect_text_delta_events(events: &[SseEvent]) -> Vec<TextDeltaEvent> {
 
 fn text_delta(value: &Value) -> Option<(TextDeltaPath, &str)> {
     if let Some(text) = value.pointer("/delta/text").and_then(Value::as_str) {
-        return Some((TextDeltaPath::AnthropicDeltaText, text));
+        return Some((TextDeltaPath::DeltaText, text));
     }
     if let Some(text) = value.get("delta").and_then(Value::as_str) {
-        return Some((TextDeltaPath::OpenAiResponseDelta, text));
+        return Some((TextDeltaPath::ResponseDelta, text));
     }
     if let Some(choices) = value.get("choices").and_then(Value::as_array) {
         for (index, choice) in choices.iter().enumerate() {
             if let Some(text) = choice.pointer("/delta/content").and_then(Value::as_str) {
-                return Some((TextDeltaPath::OpenAiChoiceDeltaContent(index), text));
+                return Some((TextDeltaPath::ChoiceDeltaContent(index), text));
             }
         }
     }
@@ -207,8 +207,8 @@ fn array_text_field(value: Option<&Value>) -> Option<(usize, &str)> {
 
 fn set_text_delta(value: &mut Value, path: &TextDeltaPath, replacement: &str) -> bool {
     match path {
-        TextDeltaPath::AnthropicDeltaText => set_pointer_string(value, "/delta/text", replacement),
-        TextDeltaPath::OpenAiChoiceDeltaContent(index) => {
+        TextDeltaPath::DeltaText => set_pointer_string(value, "/delta/text", replacement),
+        TextDeltaPath::ChoiceDeltaContent(index) => {
             let Some(choices) = value.get_mut("choices").and_then(Value::as_array_mut) else {
                 return false;
             };
@@ -217,7 +217,7 @@ fn set_text_delta(value: &mut Value, path: &TextDeltaPath, replacement: &str) ->
             };
             set_pointer_string(choice, "/delta/content", replacement)
         }
-        TextDeltaPath::OpenAiResponseDelta => {
+        TextDeltaPath::ResponseDelta => {
             let Some(delta) = value.get_mut("delta") else {
                 return false;
             };

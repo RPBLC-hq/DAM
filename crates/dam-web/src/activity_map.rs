@@ -52,11 +52,8 @@ fn decision_for(entry: &dam_log::LogEntry) -> Option<Decision> {
     let action = entry.action.as_deref()?;
     match (entry.event_type.as_str(), action) {
         ("policy_decision", "allow") => Some(Decision::Granted),
-        ("policy_decision", "tokenize") | ("policy_decision", "redact") => Some(Decision::Sealed),
         ("policy_decision", "block") => Some(Decision::Denied),
-        ("consent", _) => Some(Decision::Granted),
         ("redaction", _) => Some(Decision::Sealed),
-        ("proxy_forward", "request_protection") => proxy_request_decision(&entry.message),
         ("proxy_failure", "provider_down") => Some(Decision::Denied),
         _ => None,
     }
@@ -80,30 +77,11 @@ pub fn actor_from_message(message: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn proxy_request_decision(message: &str) -> Option<Decision> {
-    let blocked = numeric_field(message, "blocked").unwrap_or(0);
-    let replacements = numeric_field(message, "replacements").unwrap_or(0);
-    let tokenized = numeric_field(message, "tokenized").unwrap_or(0);
-    let detections = numeric_field(message, "detections").unwrap_or(0);
-    if blocked > 0 {
-        Some(Decision::Denied)
-    } else if replacements > 0 || tokenized > 0 || detections > 0 {
-        Some(Decision::Sealed)
-    } else {
-        Some(Decision::Granted)
-    }
-}
-
 fn kind_for(entry: &dam_log::LogEntry) -> String {
     match (entry.event_type.as_str(), entry.action.as_deref()) {
-        ("proxy_forward", Some("request_protection")) => "request".to_string(),
         ("proxy_failure", Some("provider_down")) => "provider".to_string(),
         _ => "unknown".to_string(),
     }
-}
-
-fn numeric_field(message: &str, key: &str) -> Option<u64> {
-    field_value(message, key)?.parse().ok()
 }
 
 fn field_value(message: &str, key: &str) -> Option<String> {

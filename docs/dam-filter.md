@@ -53,7 +53,7 @@ blocked: 0
 fallback_redactions: 0
 ```
 
-Persisted logs do not include raw values. Vault write failures use the stable `vault_write_failed` code instead of backend error text.
+Persisted Activity logs include detected values so the Activity UI can show what was detected independently from Wallet. Vault write failures use the stable `vault_write_failed` code instead of backend error text.
 
 `--json-report` writes the standardized `dam-api` filter report JSON to stderr. Stdout remains the filtered payload. If both `--report` and `--json-report` are provided, JSON wins.
 

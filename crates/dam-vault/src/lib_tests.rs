@@ -82,6 +82,30 @@ fn list_deduplicates_equal_values_per_kind() {
 }
 
 #[test]
+fn wallet_entries_are_separate_from_token_vault_entries() {
+    let vault = Vault::open_in_memory().unwrap();
+    let token_reference = Reference::generate(dam_core::SensitiveType::Email);
+    let wallet_reference = Reference::generate(dam_core::SensitiveType::Email);
+
+    vault
+        .put(&token_reference.key(), "token-only@example.com")
+        .unwrap();
+    vault
+        .put_wallet(&wallet_reference.key(), "wallet@example.com")
+        .unwrap();
+
+    let token_entries = vault.list().unwrap();
+    let wallet_entries = vault.list_wallet().unwrap();
+
+    assert_eq!(token_entries.len(), 1);
+    assert_eq!(token_entries[0].value, "token-only@example.com");
+    assert_eq!(wallet_entries.len(), 1);
+    assert_eq!(wallet_entries[0].value, "wallet@example.com");
+    assert_eq!(vault.get_wallet(&token_reference.key()).unwrap(), None);
+    assert_eq!(vault.get(&wallet_reference.key()).unwrap(), None);
+}
+
+#[test]
 fn entries_persist_on_disk() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("vault.db");

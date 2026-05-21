@@ -33,7 +33,7 @@ scripts/dam-build.sh agent-status --network-mode tun --trust-mode local_ca
 
 `agent-check` is the default verification command for local agents and maintainers. It runs `check` and adds `git diff --check` when the source tree is a git checkout.
 
-`agent-install` is the idempotent local release-path install command for macOS. It optionally runs `agent-check`, builds the app, notarizes Developer ID builds unless notarization is disabled, stops the installed tray/web processes before replacing the app bundle, verifies the installed app, restarts the daemon with the persisted DAM configuration, opens the tray app, and prints `agent-status`.
+`agent-install` is the idempotent local release-path install command for macOS. It optionally runs `agent-check`, builds the app, notarizes Developer ID builds unless notarization is disabled, stops the installed tray/web processes before replacing the app bundle, verifies the installed app, refreshes app-owned System Extension activation, reconfigures the Network Extension manager for `tun` installs, restarts the daemon with the persisted DAM configuration, opens the tray app, and prints `agent-status`.
 
 `agent-status` inspects the installed app without mutating setup. It reports matching DAM processes, verifies code signing, validates notarization/Gatekeeper when notarization is enabled, and runs the installed `dam doctor --json`, `dam setup status --json`, `dam setup next-action --json`, and `dam status --json` probes. Setup probes default to the release-path `tun` + `local_ca` modes and can be overridden with `--network-mode` and `--trust-mode`. The npm wrapper package doctor remains part of `check`/`agent-check` through the npm smoke test; it is not an installed native app command.
 
@@ -44,6 +44,7 @@ scripts/dam-build.sh agent-status --network-mode tun --trust-mode local_ca
 - `DAM_NOTARY_PROFILE`: notarytool keychain profile, default `DAM-notary`.
 - `DAM_MACOS_TEAM_ID`: optional Team ID override passed through to macOS packaging.
 - `DAM_MACOS_APP_GROUP_ID`: optional App Group override passed through to macOS packaging.
+- `DAM_MACOS_NE_BUNDLE_ID`: optional Network Extension bundle identifier override for local install refreshes.
 - `DAM_INSTALL_DIR`: local deploy destination, default `/Applications`.
 - `DAM_SKIP_NOTARIZE`: set to `1` to skip notarization in `agent-install`.
 - `DAM_RESTART_AFTER_INSTALL`: set to `0` to install without restarting daemon/tray.

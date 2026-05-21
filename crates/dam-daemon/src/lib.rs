@@ -20,11 +20,6 @@ const STATE_FILE: &str = "daemon.json";
 const PROTECTION_FILE: &str = "protection.state";
 const STATE_VERSION: u32 = 6;
 
-#[cfg(test)]
-const OPENAI_API_UPSTREAM: &str = "https://api.openai.com";
-#[cfg(test)]
-const ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyOptions {
     pub config_path: Option<PathBuf>,

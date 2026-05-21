@@ -196,24 +196,35 @@ fn parse_systemextensionsctl_outcome_with_bundled_build(
     bundle_identifier: &str,
     bundled_build: Option<u64>,
 ) -> Option<ActivationOutcome> {
-    let line = output.lines().find(|line| {
-        line.split_whitespace()
-            .any(|part| part == bundle_identifier)
-    })?;
-    if line.contains("[activated enabled]") {
-        if installed_build_is_stale(line, bundled_build) {
-            return None;
-        }
+    let lines: Vec<&str> = output
+        .lines()
+        .filter(|line| {
+            line.split_whitespace()
+                .any(|part| part == bundle_identifier)
+        })
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+    if lines.iter().any(|line| {
+        line.contains("[activated enabled]") && !installed_build_is_stale(line, bundled_build)
+    }) {
         return Some(ActivationOutcome::Ready(
             "DAM Network Protection is active".to_string(),
         ));
     }
-    if line.contains("[activated waiting for user]") {
+    if lines
+        .iter()
+        .any(|line| line.contains("[activated waiting for user]"))
+    {
         return Some(ActivationOutcome::NeedsApproval(
             APPROVAL_MESSAGE.to_string(),
         ));
     }
-    if line.contains("waiting") && line.contains("reboot") {
+    if lines
+        .iter()
+        .any(|line| line.contains("waiting") && line.contains("reboot"))
+    {
         return Some(ActivationOutcome::NeedsReboot(REBOOT_MESSAGE.to_string()));
     }
     None

@@ -1,6 +1,7 @@
-<svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect x="1" y="1" width="62" height="62" rx="0" stroke="#faf8f2" stroke-width="2"/>
-  <text x="32" y="46" text-anchor="middle" font-family="'JetBrains Mono', monospace" font-size="36" font-weight="700">
-    <tspan fill="#3d3a32">[</tspan><tspan fill="#faf8f2">R</tspan><tspan fill="#B8965A">:</tspan><tspan fill="#3d3a32">]</tspan>
-  </text>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-label="RPBLC">
+  <rect width="1024" height="1024" rx="232" ry="232" fill="#0a0a08"/>
+  <g transform="translate(128 621) scale(0.32 -0.32)" fill="#ffffff"><path d="M185 -110V830H465V715H310V5H465V-110Z"/></g>
+  <g transform="translate(320 621) scale(0.32 -0.32)" fill="#ffffff"><path d="M77 0V730H307Q380 730 433.5 703.0Q487 676 517.0 627.5Q547 579 547 513Q547 440 511.0 385.5Q475 331 414 308L557 0H420L292 290H201V0ZM201 400H307Q360 400 390.0 429.0Q420 458 420 509Q420 560 389.5 590.0Q359 620 307 620H201Z"/></g>
+  <g transform="translate(512 621) scale(0.32 -0.32)" fill="#d4ad68"><path d="M300 393Q257 393 232.0 416.0Q207 439 207 477Q207 514 232.0 537.0Q257 560 300 560Q343 560 368.0 537.0Q393 514 393 477Q393 439 368.0 416.0Q343 393 300 393ZM300 -10Q257 -10 232.0 13.0Q207 36 207 73Q207 111 232.0 134.0Q257 157 300 157Q343 157 368.0 134.0Q393 111 393 73Q393 36 368.0 13.0Q343 -10 300 -10Z"/></g>
+  <g transform="translate(704 621) scale(0.32 -0.32)" fill="#ffffff"><path d="M135 -110V5H290V715H135V830H415V-110Z"/></g>
 </svg>

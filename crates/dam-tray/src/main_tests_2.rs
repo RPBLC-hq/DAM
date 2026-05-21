@@ -15,6 +15,8 @@ fn parses_tray_args() {
         "vault.db".to_string(),
         "--log".to_string(),
         "log.db".to_string(),
+        "--activate-system-extension".to_string(),
+        "com.rpblc.dam.network-extension".to_string(),
         "--deactivate-system-extension".to_string(),
         "com.rpblc.dam.network-extension".to_string(),
     ])
@@ -26,6 +28,10 @@ fn parses_tray_args() {
     assert_eq!(args.config_path, Some(PathBuf::from("dam.toml")));
     assert_eq!(args.db_path, Some(PathBuf::from("vault.db")));
     assert_eq!(args.log_path, Some(PathBuf::from("log.db")));
+    assert_eq!(
+        args.activate_system_extension.as_deref(),
+        Some("com.rpblc.dam.network-extension")
+    );
     assert_eq!(
         args.deactivate_system_extension.as_deref(),
         Some("com.rpblc.dam.network-extension")

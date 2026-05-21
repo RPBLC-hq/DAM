@@ -1,5 +1,7 @@
 export type WalletItemState = 'protected' | 'allowed' | 'revoked' | 'expired'
 
+export type WalletKind = 'email' | 'domain' | 'phone' | 'ssn' | 'cc'
+
 export type WalletShare = {
   name: string
   since?: string

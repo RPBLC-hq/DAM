@@ -59,11 +59,11 @@ fn scoped_grant_matches_only_when_scope_is_requested() {
                 created_by: "Codex".to_string(),
                 reason: None,
             },
-            target_scope("chatgpt-codex"),
+            target_scope("chatgpt-web"),
         )
         .unwrap();
 
-    assert_eq!(entry.scope, "target:chatgpt-codex");
+    assert_eq!(entry.scope, "target:chatgpt-web");
     assert!(
         store
             .active_for_value(SensitiveType::Email, "alice@example.test")
@@ -75,7 +75,7 @@ fn scoped_grant_matches_only_when_scope_is_requested() {
             .active_for_value_in_scopes(
                 SensitiveType::Email,
                 "alice@example.test",
-                &["target:chatgpt-codex".to_string()],
+                &["target:chatgpt-web".to_string()],
             )
             .unwrap()
             .is_some()
@@ -111,7 +111,7 @@ fn global_grant_matches_scoped_lookup() {
             .active_for_value_in_scopes(
                 SensitiveType::Email,
                 "alice@example.test",
-                &["target:chatgpt-codex".to_string()],
+                &["target:chatgpt-web".to_string()],
             )
             .unwrap()
             .is_some()

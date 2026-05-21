@@ -7,7 +7,7 @@ final class TCPFlowProxy: @unchecked Sendable {
     let id = UUID()
 
     private let flow: NEAppProxyTCPFlow
-    private let endpoint: FlowEndpoint
+    private var endpoint: FlowEndpoint
     private let runtimeConfiguration: DAMProxyRuntimeConfiguration
     private let sourceSigningIdentifier: String?
     private let sourceProcess: DAMProcessInfo?
@@ -43,7 +43,13 @@ final class TCPFlowProxy: @unchecked Sendable {
                 self.finish()
                 return
             }
-            self.connectToProxy()
+            if self.runtimeConfiguration.shouldProtect(host: self.endpoint.host) {
+                self.connectToProxy()
+            } else if self.endpoint.isHostlessTLSCandidate {
+                self.readTLSClientHello(buffer: Data())
+            } else {
+                self.finish()
+            }
         }
     }
 
@@ -51,7 +57,64 @@ final class TCPFlowProxy: @unchecked Sendable {
         finish()
     }
 
-    private func connectToProxy() {
+    private func readTLSClientHello(buffer: Data) {
+        flow.readData { [weak self] data, error in
+            guard let self else {
+                return
+            }
+            guard error == nil, let data, !data.isEmpty else {
+                self.finish()
+                return
+            }
+            var nextBuffer = buffer
+            nextBuffer.append(data)
+
+            switch tlsClientHelloServerName(in: nextBuffer) {
+            case .hostname(let host) where self.runtimeConfiguration.shouldProtect(host: host):
+                self.endpoint = self.endpoint.replacingHost(host)
+                self.connectToProxy(initialFlowData: nextBuffer)
+            case .hostname, .noServerName, .notClientHello:
+                self.connectDirect(initialFlowData: nextBuffer)
+            case .needMore:
+                if nextBuffer.count > 16 * 1024 {
+                    self.connectDirect(initialFlowData: nextBuffer)
+                } else {
+                    self.readTLSClientHello(buffer: nextBuffer)
+                }
+            }
+        }
+    }
+
+    private func connectDirect(initialFlowData: Data) {
+        guard let endpointPort = NWEndpoint.Port(rawValue: endpoint.port) else {
+            finish()
+            return
+        }
+        let connection = NWConnection(
+            host: NWEndpoint.Host(endpoint.host),
+            port: endpointPort,
+            using: .tcp
+        )
+        self.connection = connection
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .ready:
+                guard let self else {
+                    return
+                }
+                self.sendConnectionData(initialFlowData) { [weak self] in
+                    self?.startPumps()
+                }
+            case .failed, .cancelled:
+                self?.finish()
+            default:
+                break
+            }
+        }
+        connection.start(queue: queue)
+    }
+
+    private func connectToProxy(initialFlowData: Data? = nil) {
         guard let proxyPort = NWEndpoint.Port(rawValue: runtimeConfiguration.proxyPort) else {
             finish()
             return
@@ -65,7 +128,7 @@ final class TCPFlowProxy: @unchecked Sendable {
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
             case .ready:
-                self?.sendConnectPreface()
+                self?.sendConnectPreface(initialFlowData: initialFlowData)
             case .failed, .cancelled:
                 self?.finish()
             default:
@@ -75,7 +138,7 @@ final class TCPFlowProxy: @unchecked Sendable {
         connection.start(queue: queue)
     }
 
-    private func sendConnectPreface() {
+    private func sendConnectPreface(initialFlowData: Data?) {
         var headers = [
             "CONNECT \(endpoint.authority) HTTP/1.1",
             "Host: \(endpoint.authority)",
@@ -102,7 +165,7 @@ final class TCPFlowProxy: @unchecked Sendable {
                 self.finish()
                 return
             }
-            self.readConnectResponse(buffer: Data())
+            self.readConnectResponse(buffer: Data(), initialFlowData: initialFlowData)
         })
     }
 
@@ -124,7 +187,7 @@ final class TCPFlowProxy: @unchecked Sendable {
         return sanitized.isEmpty ? nil : sanitized
     }
 
-    private func readConnectResponse(buffer: Data) {
+    private func readConnectResponse(buffer: Data, initialFlowData: Data?) {
         connection?.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] content, _, isComplete, error in
             guard let self else {
                 return
@@ -147,10 +210,10 @@ final class TCPFlowProxy: @unchecked Sendable {
                 if bodyStart < nextBuffer.endIndex {
                     let remaining = Data(nextBuffer[bodyStart...])
                     self.writeProxyDataToFlow(remaining) {
-                        self.startPumps()
+                        self.sendInitialFlowDataThenStartPumps(initialFlowData)
                     }
                 } else {
-                    self.startPumps()
+                    self.sendInitialFlowDataThenStartPumps(initialFlowData)
                 }
                 return
             }
@@ -159,13 +222,23 @@ final class TCPFlowProxy: @unchecked Sendable {
                 self.finish()
                 return
             }
-            self.readConnectResponse(buffer: nextBuffer)
+            self.readConnectResponse(buffer: nextBuffer, initialFlowData: initialFlowData)
         }
     }
 
     private func startPumps() {
         pumpFlowToProxy()
         pumpProxyToFlow()
+    }
+
+    private func sendInitialFlowDataThenStartPumps(_ initialFlowData: Data?) {
+        if let initialFlowData, !initialFlowData.isEmpty {
+            sendConnectionData(initialFlowData) { [weak self] in
+                self?.startPumps()
+            }
+        } else {
+            startPumps()
+        }
     }
 
     private func pumpFlowToProxy() {
@@ -183,17 +256,23 @@ final class TCPFlowProxy: @unchecked Sendable {
                 })
                 return
             }
-            self.connection?.send(content: data, completion: .contentProcessed { [weak self] error in
-                guard let self else {
-                    return
-                }
-                guard error == nil else {
-                    self.finish()
-                    return
-                }
+            self.sendConnectionData(data) {
                 self.pumpFlowToProxy()
-            })
+            }
         }
+    }
+
+    private func sendConnectionData(_ data: Data, completion: @escaping @Sendable () -> Void) {
+        connection?.send(content: data, completion: .contentProcessed { [weak self] error in
+            guard let self else {
+                return
+            }
+            guard error == nil else {
+                self.finish()
+                return
+            }
+            completion()
+        })
     }
 
     private func pumpProxyToFlow() {

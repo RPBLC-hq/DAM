@@ -51,7 +51,7 @@ impl RequestStore {
         let id = format!("req-{}", self.next_id.fetch_add(1, Ordering::SeqCst) + 1);
         let request = PendingRequest {
             id,
-            actor: body.actor.unwrap_or_else(|| "anthropic".to_string()),
+            actor: body.actor.unwrap_or_else(|| "app".to_string()),
             value_label: body
                 .value_label
                 .unwrap_or_else(|| "mobile phone".to_string()),

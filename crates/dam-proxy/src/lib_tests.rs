@@ -94,6 +94,46 @@ fn set_test_target_inbound_policy(
         });
 }
 
+fn set_test_target_outbound_action(
+    config: &mut dam_config::DamConfig,
+    action: dam_net::SensitiveDataAction,
+) {
+    let target = config.proxy.targets[0].clone();
+    if !config.traffic.profile.apps.iter().any(|app| {
+        app.target_name.as_deref() == Some(target.name.as_str())
+            && app.provider.as_deref() == Some(target.provider.as_str())
+    }) {
+        set_test_target_inbound_policy(config, true, false);
+    }
+    let app = config
+        .traffic
+        .profile
+        .apps
+        .iter_mut()
+        .find(|app| {
+            app.target_name.as_deref() == Some(target.name.as_str())
+                && app.provider.as_deref() == Some(target.provider.as_str())
+        })
+        .expect("test target route should exist");
+    app.outbound.filter.default_action = action;
+}
+
+fn inbound_plan(resolve_references: bool, protect_sensitive_data: bool) -> InboundTransformPlan {
+    InboundTransformPlan {
+        resolve_references,
+        protect_sensitive_data,
+    }
+}
+
+fn websocket_protection(enabled: bool, inbound_plan: InboundTransformPlan) -> WebSocketProtection {
+    WebSocketProtection {
+        target_name: "test-openai".to_string(),
+        enabled,
+        inbound_plan,
+        consent_scopes: Arc::new(Vec::new()),
+    }
+}
+
 async fn spawn_app(app: Router) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -104,8 +144,9 @@ async fn spawn_app(app: Router) -> String {
 }
 
 #[tokio::test]
-async fn websocket_response_text_frames_are_tokenized_before_client() {
+async fn websocket_response_text_frames_are_redacted_without_wallet_write_before_client() {
     let config = proxy_config("https://chatgpt.com".to_string());
+    let vault_path = config.vault.sqlite_path.clone();
     let log_path = config.log.sqlite_path.clone();
     let state = build_state(config, None).unwrap();
     let mut upstream = Vec::new();
@@ -130,8 +171,7 @@ async fn websocket_response_text_frames_are_tokenized_before_client() {
         &mut upstream.as_slice(),
         &mut client,
         Arc::new(RwLock::new(Vec::new())),
-        true,
-        Arc::new(Vec::new()),
+        websocket_protection(true, inbound_plan(false, true)),
     )
     .await
     .unwrap();
@@ -142,7 +182,12 @@ async fn websocket_response_text_frames_are_tokenized_before_client() {
         .unwrap();
     let body = String::from_utf8(frame.payload).unwrap();
     assert!(!body.contains("banana@example.com"));
-    assert!(body.contains("[email:"));
+    assert!(body.contains("[email]"));
+    assert!(!body.contains("[email:"));
+    assert_eq!(
+        dam_vault::Vault::open(vault_path).unwrap().count().unwrap(),
+        0
+    );
     let logs = dam_log::LogStore::open(log_path).unwrap().list().unwrap();
     assert!(logs.iter().any(|entry| {
         entry.action.as_deref() == Some("inbound_protection")
@@ -150,10 +195,15 @@ async fn websocket_response_text_frames_are_tokenized_before_client() {
                 .message
                 .contains("WebSocket response text frame protected")
     }));
+    assert!(!logs.iter().any(|entry| {
+        entry.event_type == "vault_write"
+            || entry.event_type == "vault_write_failed"
+            || entry.action.as_deref() == Some("tokenized")
+    }));
 }
 
 #[tokio::test]
-async fn websocket_response_uses_related_domains_from_request_context() {
+async fn websocket_response_does_not_tokenize_related_domains_from_request_context() {
     let state = build_state(proxy_config("https://chatgpt.com".to_string()), None).unwrap();
     let mut upstream = Vec::new();
     websocket::write_unmasked_frame(
@@ -177,8 +227,7 @@ async fn websocket_response_uses_related_domains_from_request_context() {
         &mut upstream.as_slice(),
         &mut client,
         Arc::new(RwLock::new(vec!["wolol3o22.com".to_string()])),
-        true,
-        Arc::new(Vec::new()),
+        websocket_protection(true, inbound_plan(false, true)),
     )
     .await
     .unwrap();
@@ -188,8 +237,8 @@ async fn websocket_response_uses_related_domains_from_request_context() {
         .unwrap()
         .unwrap();
     let body = String::from_utf8(frame.payload).unwrap();
-    assert!(!body.contains("wolol3o22.com"));
-    assert!(body.contains("[domain:"));
+    assert!(body.contains("wolol3o22.com"));
+    assert!(!body.contains("[domain:"));
 }
 
 #[tokio::test]
@@ -217,8 +266,7 @@ async fn websocket_response_respects_connection_protection_snapshot() {
         &mut upstream.as_slice(),
         &mut client,
         Arc::new(RwLock::new(Vec::new())),
-        false,
-        Arc::new(Vec::new()),
+        websocket_protection(false, inbound_plan(false, false)),
     )
     .await
     .unwrap();
@@ -254,8 +302,7 @@ async fn websocket_response_fragmented_text_fails_closed_when_protected() {
         &mut upstream.as_slice(),
         &mut client,
         Arc::new(RwLock::new(Vec::new())),
-        true,
-        Arc::new(Vec::new()),
+        websocket_protection(true, inbound_plan(false, true)),
     )
     .await
     .unwrap();
@@ -277,8 +324,7 @@ async fn websocket_response_compressed_frame_fails_closed_when_protected() {
         &mut upstream.as_slice(),
         &mut client,
         Arc::new(RwLock::new(Vec::new())),
-        true,
-        Arc::new(Vec::new()),
+        websocket_protection(true, inbound_plan(false, true)),
     )
     .await
     .unwrap();
@@ -311,8 +357,7 @@ async fn websocket_response_policy_block_fails_closed() {
         &mut upstream.as_slice(),
         &mut client,
         Arc::new(RwLock::new(Vec::new())),
-        true,
-        Arc::new(Vec::new()),
+        websocket_protection(true, inbound_plan(false, true)),
     )
     .await
     .unwrap();
@@ -1088,6 +1133,7 @@ async fn transparent_connect_tls_http1_requests_are_protected() {
     let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
     let mut config = proxy_config(upstream);
     config.proxy.targets[0].name = "openai".to_string();
+    let vault_path = config.vault.sqlite_path.clone();
 
     let dir = tempfile::tempdir().unwrap();
     let artifact = dam_trust::generate_local_ca_artifact_at(dir.path(), 1).unwrap();
@@ -1152,11 +1198,14 @@ async fn transparent_connect_tls_http1_requests_are_protected() {
     let response = read_intercepted_test_response(&mut tls).await;
 
     assert!(response.starts_with("HTTP/1.1 200"));
-    assert!(!response.contains("alice@example.com"));
-    assert!(response.contains("[email:"));
+    assert!(response.contains("alice@example.com"));
+    assert!(!response.contains("[email:"));
     let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
     assert!(!upstream_body.contains("alice@example.com"));
     assert!(upstream_body.contains("[email:"));
+    let vault = dam_vault::Vault::open(vault_path).unwrap();
+    assert_eq!(vault.count().unwrap(), 1);
+    assert_eq!(vault.wallet_count().unwrap(), 0);
     let _ = shutdown_tx.send(());
 }
 
@@ -1176,7 +1225,7 @@ async fn transparent_chatgpt_backend_http_requests_use_route_target() {
     let mut config = proxy_config_with_provider(fallback_upstream, "anthropic");
     config.proxy.targets[0].name = "anthropic".to_string();
     config.proxy.targets.push(dam_config::ProxyTargetConfig {
-        name: "chatgpt-codex".to_string(),
+        name: "chatgpt-web".to_string(),
         provider: "openai-compatible".to_string(),
         upstream: chatgpt_upstream,
         auth: dam_net::UpstreamAuthConfig::default(),
@@ -1185,6 +1234,7 @@ async fn transparent_chatgpt_backend_http_requests_use_route_target() {
         api_key: None,
     });
     let log_path = config.log.sqlite_path.clone();
+    let vault_path = config.vault.sqlite_path.clone();
 
     let dir = tempfile::tempdir().unwrap();
     let artifact = dam_trust::generate_local_ca_artifact_at(dir.path(), 1).unwrap();
@@ -1250,16 +1300,19 @@ async fn transparent_chatgpt_backend_http_requests_use_route_target() {
     let response = read_intercepted_test_response(&mut tls).await;
 
     assert!(response.starts_with("HTTP/1.1 200"));
-    assert!(!response.contains("codex@example.com"));
-    assert!(response.contains("[email:"));
+    assert!(response.contains("codex@example.com"));
+    assert!(!response.contains("[email:"));
     assert!(fallback_seen.lock().unwrap().is_none());
     let upstream_body = chatgpt_seen.lock().unwrap().clone().unwrap();
     assert!(!upstream_body.contains("codex@example.com"));
     assert!(upstream_body.contains("[email:"));
+    let vault = dam_vault::Vault::open(vault_path).unwrap();
+    assert_eq!(vault.count().unwrap(), 1);
+    assert_eq!(vault.wallet_count().unwrap(), 0);
     let logs = dam_log::LogStore::open(log_path).unwrap().list().unwrap();
     assert!(logs.iter().any(|entry| {
         entry.action.as_deref() == Some("route_decision")
-            && entry.message.contains("target=chatgpt-codex")
+            && entry.message.contains("target=chatgpt-web")
     }));
     let _ = shutdown_tx.send(());
 }
@@ -1403,11 +1456,57 @@ async fn redacts_outbound_request_and_resolves_inbound_response() {
     let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
     assert!(!upstream_body.contains("alice@example.com"));
     assert!(upstream_body.contains("[email:"));
+    let vault = dam_vault::Vault::open(vault_path).unwrap();
+    assert_eq!(vault.count().unwrap(), 1);
+    assert_eq!(vault.wallet_count().unwrap(), 0);
+    assert!(dam_log::LogStore::open(log_path).unwrap().count().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn traffic_route_redacts_outbound_without_wallet_write_when_profile_says_redact() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let mut config = proxy_config(upstream.clone());
+    config.proxy.targets[0].name = "test-openai".to_string();
+    set_test_target_outbound_action(&mut config, dam_net::SensitiveDataAction::Redact);
+    let vault_path = config.vault.sqlite_path.clone();
+    let log_path = config.log.sqlite_path.clone();
+    let mut interception = transparent_config(tempfile::tempdir().unwrap().keep());
+    interception.routes = dam_net::traffic_routes_from_profile(&config.traffic.effective_profile());
+    let state = build_state(config, Some(interception)).unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(header::HOST, HeaderValue::from_static("127.0.0.1"));
+    headers.insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_static("Bearer local"),
+    );
+
+    let response = proxy_http_request(
+        state,
+        Method::POST,
+        "/v1/chat/completions".parse().unwrap(),
+        headers,
+        Bytes::from_static(br#"{"input":"email alice@example.com"}"#),
+        "profile-redact-test".to_string(),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains("alice@example.com"));
+    assert!(upstream_body.contains("[email]"));
+    assert!(!upstream_body.contains("[email:"));
     assert_eq!(
         dam_vault::Vault::open(vault_path).unwrap().count().unwrap(),
-        1
+        0
     );
-    assert!(dam_log::LogStore::open(log_path).unwrap().count().unwrap() > 0);
+    let logs = dam_log::LogStore::open(log_path).unwrap().list().unwrap();
+    assert!(logs.iter().any(|entry| {
+        entry.event_type == "redaction" && entry.action.as_deref() == Some("redacted")
+    }));
+    assert!(!logs.iter().any(|entry| {
+        entry.event_type == "vault_write" || entry.action.as_deref() == Some("tokenized")
+    }));
 }
 
 #[tokio::test]
@@ -2006,11 +2105,12 @@ async fn passes_raw_sensitive_inbound_response_without_explicit_inbound_protecti
 }
 
 #[tokio::test]
-async fn tokenizes_raw_sensitive_inbound_response_when_route_opts_in() {
+async fn redacts_raw_sensitive_inbound_response_without_wallet_write_when_route_opts_in() {
     let upstream_seen = Arc::new(Mutex::new(None::<String>));
     let upstream = spawn_raw_sensitive_response_upstream(upstream_seen.clone()).await;
     let mut config = proxy_config(upstream);
     set_test_target_inbound_policy(&mut config, true, true);
+    let vault_path = config.vault.sqlite_path.clone();
     let log_path = config.log.sqlite_path.clone();
     let proxy = spawn_app(build_app(config).unwrap()).await;
 
@@ -2024,11 +2124,16 @@ async fn tokenizes_raw_sensitive_inbound_response_when_route_opts_in() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.text().await.unwrap();
     assert!(!body.contains("leak@example.com"));
-    assert!(body.contains("[email:"));
+    assert!(body.contains("[email]"));
+    assert!(!body.contains("[email:"));
 
     assert_eq!(
         upstream_seen.lock().unwrap().as_deref(),
         Some(r#"{"messages":[{"content":"hello"}]}"#)
+    );
+    assert_eq!(
+        dam_vault::Vault::open(vault_path).unwrap().count().unwrap(),
+        0
     );
 
     let logs = dam_log::LogStore::open(log_path).unwrap().list().unwrap();
@@ -2036,12 +2141,17 @@ async fn tokenizes_raw_sensitive_inbound_response_when_route_opts_in() {
         entry.event_type == "proxy_forward" && entry.action.as_deref() == Some("inbound_protection")
     }));
     assert!(logs.iter().any(|entry| {
-        entry.event_type == "redaction" && entry.action.as_deref() == Some("tokenized")
+        entry.event_type == "redaction" && entry.action.as_deref() == Some("redacted")
+    }));
+    assert!(!logs.iter().any(|entry| {
+        entry.event_type == "vault_write"
+            || entry.event_type == "vault_write_failed"
+            || entry.action.as_deref() == Some("tokenized")
     }));
 }
 
 #[tokio::test]
-async fn tokenizes_raw_email_domain_in_inbound_response_from_request_context() {
+async fn leaves_raw_email_domain_in_inbound_response_from_request_context() {
     let upstream_seen = Arc::new(Mutex::new(None::<String>));
     let upstream = spawn_raw_domain_response_upstream(upstream_seen.clone()).await;
     let mut config = proxy_config(upstream);
@@ -2058,18 +2168,18 @@ async fn tokenizes_raw_email_domain_in_inbound_response_from_request_context() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.text().await.unwrap();
-    assert!(!body.contains("leak.example"));
-    assert!(body.contains("[domain:"));
+    assert!(body.contains("leak.example"));
+    assert!(!body.contains("[domain:"));
 
     let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
     assert!(!upstream_body.contains("person@leak.example"));
     assert!(upstream_body.contains("[email:"));
 
     let logs = dam_log::LogStore::open(log_path).unwrap().list().unwrap();
-    assert!(logs.iter().any(|entry| {
+    assert!(!logs.iter().any(|entry| {
         entry.event_type == "proxy_forward" && entry.action.as_deref() == Some("inbound_protection")
     }));
-    assert!(logs.iter().any(|entry| {
+    assert!(!logs.iter().any(|entry| {
         entry.kind.as_deref() == Some("domain")
             && entry.event_type == "redaction"
             && entry.action.as_deref() == Some("tokenized")
@@ -2077,11 +2187,12 @@ async fn tokenizes_raw_email_domain_in_inbound_response_from_request_context() {
 }
 
 #[tokio::test]
-async fn tokenizes_raw_email_domain_in_anthropic_stream_from_request_context() {
+async fn leaves_raw_email_domain_in_anthropic_stream_from_request_context() {
     let upstream_seen = Arc::new(Mutex::new(None::<String>));
     let upstream = spawn_anthropic_sse_raw_domain_upstream(upstream_seen.clone()).await;
     let mut config = anthropic_proxy_config(upstream);
     config.proxy.targets[0].name = "anthropic".to_string();
+    let vault_path = config.vault.sqlite_path.clone();
     let log_path = config.log.sqlite_path.clone();
     let proxy = spawn_app(build_app(config).unwrap()).await;
 
@@ -2101,21 +2212,24 @@ async fn tokenizes_raw_email_domain_in_anthropic_stream_from_request_context() {
         Some("text/event-stream")
     );
     let body = response.text().await.unwrap();
-    assert!(!body.contains("splonk.io"));
-    assert!(body.contains("[domain:"));
+    assert!(body.contains("splonk.io"));
+    assert!(!body.contains("[domain:"));
 
     let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
     assert!(!upstream_body.contains("banana@splonk.io"));
     assert!(upstream_body.contains("[email:"));
+    let vault = dam_vault::Vault::open(vault_path).unwrap();
+    assert_eq!(vault.count().unwrap(), 1);
+    assert_eq!(vault.wallet_count().unwrap(), 0);
 
     let logs = dam_log::LogStore::open(log_path).unwrap().list().unwrap();
     assert!(logs.iter().any(|entry| {
-        entry.event_type == "proxy_forward" && entry.action.as_deref() == Some("resolve_disabled")
+        entry.event_type == "resolve" && entry.action.as_deref() == Some("resolve_attempt")
     }));
-    assert!(logs.iter().any(|entry| {
+    assert!(!logs.iter().any(|entry| {
         entry.event_type == "proxy_forward" && entry.action.as_deref() == Some("inbound_protection")
     }));
-    assert!(logs.iter().any(|entry| {
+    assert!(!logs.iter().any(|entry| {
         entry.kind.as_deref() == Some("domain")
             && entry.event_type == "redaction"
             && entry.action.as_deref() == Some("tokenized")

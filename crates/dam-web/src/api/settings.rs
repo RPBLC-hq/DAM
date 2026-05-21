@@ -101,6 +101,13 @@ fn settings_view(state: &AppState) -> Result<SettingsView, WebError> {
 
 fn app_settings(state: &AppState) -> Result<Vec<AppSetting>, WebError> {
     let state_dir = dam_state_dir()?;
+    app_settings_for_state_dir(state, &state_dir)
+}
+
+fn app_settings_for_state_dir(
+    state: &AppState,
+    state_dir: &FsPath,
+) -> Result<Vec<AppSetting>, WebError> {
     let integration_state_dir = state_dir.join("integrations");
     dam_integrations::ensure_bundled_profile_files(&integration_state_dir)
         .map_err(settings_error)?;

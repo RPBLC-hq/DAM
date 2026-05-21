@@ -11,6 +11,8 @@ It receives text and returns sensitive spans. It does not redact, write to vault
 - SSN with basic area validation.
 - Credit card numbers with Luhn validation.
 
+Domain-only values are not detected or redacted. Email addresses are still detected as whole values, but their domains are not emitted as separate `domain` detections.
+
 Known current limitation: formats like `+1 (415) 555-2671` and zero-width-character obfuscation are not detected yet.
 
 ## Output

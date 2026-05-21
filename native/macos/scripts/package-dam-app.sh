@@ -423,6 +423,7 @@ xcrun swiftc \
   "$NATIVE/Sources/DAMTransparentProxyProvider/FlowEndpoint.swift" \
   "$NATIVE/Sources/DAMTransparentProxyProvider/ProcessInfoCache.swift" \
   "$NATIVE/Sources/DAMTransparentProxyProvider/TCPFlowProxy.swift" \
+  "$NATIVE/Sources/DAMTransparentProxyProvider/TLSClientHello.swift" \
   "$SWIFT_BUILD/DAMNetworkExtensionSupport.build/HelperOptions.swift.o" \
   "$SWIFT_BUILD/DAMNetworkExtensionSupport.build/RuntimeConfiguration.swift.o" \
   -framework Network \

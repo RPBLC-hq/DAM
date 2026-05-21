@@ -21,7 +21,6 @@ fn capture_scope_expands_enabled_profiles_to_hosts_apps_and_targets() {
     let dir = tempfile::tempdir().unwrap();
     let integration_dir = dir.path().join("integrations");
     dam_integrations::ensure_bundled_profile_files(&integration_dir).unwrap();
-    dam_integrations::set_integration_enabled("codex", true, &integration_dir).unwrap();
 
     let scope = capture_scope_for_state(&dam_config::DamConfig::default(), dir.path()).unwrap();
 
@@ -31,16 +30,24 @@ fn capture_scope_expands_enabled_profiles_to_hosts_apps_and_targets() {
             "anthropic-api".to_string(),
             "claude-web".to_string(),
             "anthropic-console".to_string(),
+            "claude-mcp-proxy".to_string(),
+            "claude-platform".to_string(),
             "openai-api".to_string(),
-            "chatgpt-codex".to_string(),
+            "openai-platform".to_string(),
+            "chatgpt-web".to_string(),
+            "chatgpt-legacy-web".to_string(),
         ])
     );
     assert!(scope.hosts.contains(&"api.anthropic.com".to_string()));
     assert!(scope.hosts.contains(&"claude.ai".to_string()));
     assert!(scope.hosts.contains(&"console.anthropic.com".to_string()));
+    assert!(scope.hosts.contains(&"mcp-proxy.anthropic.com".to_string()));
+    assert!(scope.hosts.contains(&"platform.claude.com".to_string()));
     assert!(scope.hosts.contains(&"api.openai.com".to_string()));
+    assert!(scope.hosts.contains(&"platform.openai.com".to_string()));
     assert!(scope.hosts.contains(&"chatgpt.com".to_string()));
     assert!(scope.hosts.contains(&"ab.chatgpt.com".to_string()));
+    assert!(scope.hosts.contains(&"chat.openai.com".to_string()));
     assert!(
         scope
             .proxy_targets
@@ -63,13 +70,37 @@ fn capture_scope_expands_enabled_profiles_to_hosts_apps_and_targets() {
         scope
             .proxy_targets
             .iter()
+            .any(|target| target.name == "claude-mcp-proxy")
+    );
+    assert!(
+        scope
+            .proxy_targets
+            .iter()
+            .any(|target| target.name == "claude-platform")
+    );
+    assert!(
+        scope
+            .proxy_targets
+            .iter()
             .any(|target| target.name == "openai")
     );
     assert!(
         scope
             .proxy_targets
             .iter()
-            .any(|target| target.name == "chatgpt-codex")
+            .any(|target| target.name == "openai-platform")
+    );
+    assert!(
+        scope
+            .proxy_targets
+            .iter()
+            .any(|target| target.name == "chatgpt-web")
+    );
+    assert!(
+        scope
+            .proxy_targets
+            .iter()
+            .any(|target| target.name == "chatgpt-legacy-web")
     );
 }
 
@@ -79,12 +110,48 @@ fn capture_scope_preserves_explicit_empty_enabled_profile_state() {
     let integration_dir = dir.path().join("integrations");
     dam_integrations::ensure_bundled_profile_files(&integration_dir).unwrap();
     dam_integrations::set_integration_enabled("claude", false, &integration_dir).unwrap();
+    dam_integrations::set_integration_enabled("chatgpt", false, &integration_dir).unwrap();
 
     let scope = capture_scope_for_state(&dam_config::DamConfig::default(), dir.path()).unwrap();
 
     assert_eq!(scope.traffic_app_ids, Some(Vec::new()));
     assert!(scope.hosts.is_empty());
     assert!(scope.proxy_targets.is_empty());
+}
+
+#[test]
+fn settings_apps_include_valid_custom_profile_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+    let integration_dir = state_dir.join("integrations");
+    let profiles_dir = dam_integrations::profile_definitions_dir(&integration_dir);
+    std::fs::create_dir_all(&profiles_dir).unwrap();
+    std::fs::write(
+        profiles_dir.join("example-mail.json"),
+        r#"{
+          "id": "example-mail",
+          "name": "Example Mail",
+          "summary": "Route Example Mail traffic through DAM.",
+          "provider": "generic-http",
+          "traffic_app_ids": ["example-mail"],
+          "connect_args": ["--network-mode", "tun", "--trust-mode", "local_ca"],
+          "settings": [],
+          "commands": [],
+          "notes": [],
+          "automation": "connect_preset"
+        }"#,
+    )
+    .unwrap();
+    let state = test_state(dir.path());
+
+    let apps = app_settings_for_state_dir(&state, &state_dir).unwrap();
+    let custom = apps
+        .iter()
+        .find(|app| app.id == "example-mail")
+        .expect("custom profile should appear in Settings apps");
+
+    assert_eq!(custom.name, "Example Mail");
+    assert!(custom.enabled);
 }
 
 #[test]
@@ -174,6 +241,25 @@ fn daemon_scope_match_detects_stale_empty_routes_for_enabled_profile() {
 
     assert!(!daemon_matches_scope(&stale, &scope));
     assert!(daemon_matches_scope(&fresh, &scope));
+}
+
+fn test_state(dir: &std::path::Path) -> crate::AppState {
+    let vault = std::sync::Arc::new(dam_vault::Vault::open(dir.join("vault.db")).unwrap());
+    let logs = std::sync::Arc::new(dam_log::LogStore::open(dir.join("log.db")).unwrap());
+    crate::AppState {
+        surface: crate::Surface::Web,
+        tray_post_token: None,
+        vault,
+        consent_store: None,
+        logs,
+        config: std::sync::Arc::new(dam_config::DamConfig::default()),
+        config_path: None,
+        db_path: std::sync::Arc::new(dir.join("vault.db")),
+        log_path: std::sync::Arc::new(dir.join("log.db")),
+        client: reqwest::Client::new(),
+        requests: std::sync::Arc::new(crate::request_store::RequestStore::default()),
+        events: std::sync::Arc::new(crate::events_bus::EventBus::new()),
+    }
 }
 
 fn daemon_state(

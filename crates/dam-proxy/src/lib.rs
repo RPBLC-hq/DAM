@@ -13,7 +13,7 @@ use http_body_util::BodyExt;
 use hyper::upgrade::Upgraded;
 use hyper_util::rt::TokioIo;
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::HashMap,
     fs,
     future::Future,
     net::SocketAddr,
@@ -99,6 +99,7 @@ pub enum ProxyError {
 pub struct ProxyState {
     routes: dam_router::RouteTable,
     resolve_inbound: bool,
+    route_outbound_policies: HashMap<String, dam_policy::StaticPolicy>,
     route_resolve_inbound: HashMap<String, bool>,
     route_protect_inbound: HashMap<String, bool>,
     vault: Arc<dyn ProxyVault>,
@@ -147,6 +148,20 @@ impl ProxyState {
 
 struct FailingVault {
     message: String,
+}
+
+struct InboundRedactPolicy<'a> {
+    inner: &'a dyn dam_policy::PolicyEngine,
+}
+
+impl dam_policy::PolicyEngine for InboundRedactPolicy<'_> {
+    fn decide(&self, detection: &dam_core::Detection) -> dam_core::PolicyDecision {
+        let mut decision = self.inner.decide(detection);
+        if decision.action == dam_core::PolicyAction::Tokenize {
+            decision.action = dam_core::PolicyAction::Redact;
+        }
+        decision
+    }
 }
 
 impl VaultWriter for FailingVault {
@@ -221,6 +236,7 @@ fn build_state(
     Ok(Arc::new(ProxyState {
         routes,
         resolve_inbound: config.proxy.resolve_inbound,
+        route_outbound_policies: route_outbound_policies(&config.traffic.effective_profile()),
         route_resolve_inbound: route_resolve_inbound(&config.traffic.effective_profile()),
         route_protect_inbound: route_protect_inbound(&config.traffic.effective_profile()),
         vault: open_vault(&config)?,
@@ -985,7 +1001,7 @@ async fn proxy_http_request(
     let protected = match dam_pipeline::protect_text(
         body_text,
         &operation_id,
-        &state.policy,
+        state.outbound_policy_for_route(route),
         state.vault.as_ref(),
         dam_pipeline::ProtectTextContext {
             reference_vault: Some(state.vault.as_ref()),
@@ -1081,23 +1097,8 @@ async fn proxy_http_request(
     .await
 }
 
-fn related_domains_from_detections(detections: &[dam_core::Detection]) -> Vec<String> {
-    let mut domains = BTreeSet::new();
-    for detection in detections
-        .iter()
-        .filter(|detection| detection.kind == dam_core::SensitiveType::Email)
-    {
-        let email =
-            dam_core::canonical_sensitive_value(dam_core::SensitiveType::Email, &detection.value);
-        let Some((_, domain)) = email.rsplit_once('@') else {
-            continue;
-        };
-        let domain = dam_core::canonical_sensitive_value(dam_core::SensitiveType::Domain, domain);
-        if domain.contains('.') {
-            domains.insert(domain);
-        }
-    }
-    domains.into_iter().collect()
+fn related_domains_from_detections(_detections: &[dam_core::Detection]) -> Vec<String> {
+    Vec::new()
 }
 
 async fn handle_upgraded_connect(
@@ -1394,15 +1395,17 @@ where
         },
     );
 
-    proxy_websocket_frames(
-        state,
-        operation_id,
-        client_tls,
-        upstream_tls,
-        protection_enabled,
+    let protection = WebSocketProtection {
+        target_name: route.target().name.clone(),
+        enabled: protection_enabled,
+        inbound_plan: InboundTransformPlan {
+            resolve_references: protection_enabled && state.resolve_inbound_for_route(route),
+            protect_sensitive_data: protection_enabled && state.protect_inbound_for_route(route),
+        },
         consent_scopes,
-    )
-    .await
+    };
+
+    proxy_websocket_frames(state, operation_id, client_tls, upstream_tls, protection).await
 }
 
 async fn proxy_websocket_frames<C, U>(
@@ -1410,8 +1413,7 @@ async fn proxy_websocket_frames<C, U>(
     operation_id: &str,
     client_tls: C,
     upstream_tls: U,
-    protection_enabled: bool,
-    consent_scopes: Arc<Vec<String>>,
+    protection: WebSocketProtection,
 ) -> Result<(), String>
 where
     C: AsyncRead + AsyncWrite + Unpin,
@@ -1427,8 +1429,7 @@ where
             &mut client_reader,
             &mut upstream_writer,
             related_domains.clone(),
-            protection_enabled,
-            Arc::clone(&consent_scopes),
+            protection.clone(),
         );
         let upstream_to_client = proxy_websocket_upstream_frames(
             state.clone(),
@@ -1436,8 +1437,7 @@ where
             &mut upstream_reader,
             &mut client_writer,
             related_domains,
-            protection_enabled,
-            Arc::clone(&consent_scopes),
+            protection,
         );
 
         tokio::select! {
@@ -1459,14 +1459,21 @@ enum WebSocketClientFrameOutcome {
     PolicyBlocked,
 }
 
+#[derive(Clone)]
+struct WebSocketProtection {
+    target_name: String,
+    enabled: bool,
+    inbound_plan: InboundTransformPlan,
+    consent_scopes: Arc<Vec<String>>,
+}
+
 async fn proxy_websocket_client_frames<R, W>(
     state: Arc<ProxyState>,
     operation_id: String,
     reader: &mut R,
     writer: &mut W,
     related_domains: Arc<RwLock<Vec<String>>>,
-    protection_enabled: bool,
-    consent_scopes: Arc<Vec<String>>,
+    protection: WebSocketProtection,
 ) -> Result<WebSocketClientFrameOutcome, String>
 where
     R: AsyncRead + Unpin,
@@ -1475,7 +1482,7 @@ where
     loop {
         let Some(mut frame) = (match websocket::read_frame(reader).await {
             Ok(frame) => frame,
-            Err(error) if protection_enabled && websocket_frame_error_is_unsupported(&error) => {
+            Err(error) if protection.enabled && websocket_frame_error_is_unsupported(&error) => {
                 record_proxy_event(
                     &state,
                     &operation_id,
@@ -1490,18 +1497,18 @@ where
         }) else {
             return Ok(WebSocketClientFrameOutcome::Completed);
         };
-        if frame.is_unfragmented_text() && protection_enabled {
+        if frame.is_unfragmented_text() && protection.enabled {
             let text = std::str::from_utf8(&frame.payload)
                 .map_err(|_| "WebSocket text frame is not utf-8".to_string())?;
             let protected = dam_pipeline::protect_text(
                 text,
                 &operation_id,
-                &state.policy,
+                state.outbound_policy_for_target(&protection.target_name),
                 state.vault.as_ref(),
                 dam_pipeline::ProtectTextContext {
                     reference_vault: Some(state.vault.as_ref()),
                     consent_store: state.consent_store.as_deref(),
-                    consent_scopes: consent_scopes.as_slice(),
+                    consent_scopes: protection.consent_scopes.as_slice(),
                     event_sink: state.log_sink.as_deref(),
                     ..dam_pipeline::ProtectTextContext::default()
                 },
@@ -1532,7 +1539,7 @@ where
                 "protected",
                 "WebSocket request text frame protected",
             );
-        } else if protection_enabled && websocket_frame_requires_body_protection(&frame) {
+        } else if protection.enabled && websocket_frame_requires_body_protection(&frame) {
             record_proxy_event(
                 &state,
                 &operation_id,
@@ -1557,8 +1564,7 @@ async fn proxy_websocket_upstream_frames<R, W>(
     reader: &mut R,
     writer: &mut W,
     related_domains: Arc<RwLock<Vec<String>>>,
-    protection_enabled: bool,
-    consent_scopes: Arc<Vec<String>>,
+    protection: WebSocketProtection,
 ) -> Result<WebSocketClientFrameOutcome, String>
 where
     R: AsyncRead + Unpin,
@@ -1567,7 +1573,7 @@ where
     loop {
         let Some(mut frame) = (match websocket::read_frame(reader).await {
             Ok(frame) => frame,
-            Err(error) if protection_enabled && websocket_frame_error_is_unsupported(&error) => {
+            Err(error) if protection.enabled && websocket_frame_error_is_unsupported(&error) => {
                 record_proxy_event(
                     &state,
                     &operation_id,
@@ -1582,21 +1588,68 @@ where
         }) else {
             return Ok(WebSocketClientFrameOutcome::Completed);
         };
-        if frame.is_unfragmented_text() && protection_enabled {
+        if frame.is_unfragmented_text()
+            && protection.enabled
+            && (protection.inbound_plan.resolve_references
+                || protection.inbound_plan.protect_sensitive_data)
+        {
             let text = std::str::from_utf8(&frame.payload)
                 .map_err(|_| "WebSocket response text frame is not utf-8".to_string())?;
+            if protection.inbound_plan.resolve_references {
+                let result = dam_pipeline::resolve_text(
+                    text,
+                    &operation_id,
+                    state.vault.as_ref(),
+                    state.log_sink.as_deref(),
+                );
+                record_proxy_event(
+                    &state,
+                    &operation_id,
+                    LogLevel::Info,
+                    LogEventType::Resolve,
+                    "resolve_attempt",
+                    format!(
+                        "WebSocket inbound resolution references={} resolved={} missing={} read_failures={} response_bytes={}",
+                        result.plan.references.len(),
+                        result.plan.resolved_count(),
+                        result.plan.missing_count(),
+                        result.plan.read_failure_count(),
+                        frame.payload.len()
+                    ),
+                );
+                if let Some(output) = result.output {
+                    frame.payload = output.into_bytes();
+                    let is_close = frame.opcode == websocket::OPCODE_CLOSE;
+                    websocket::write_unmasked_frame(writer, &frame).await?;
+                    if is_close {
+                        return Ok(WebSocketClientFrameOutcome::Completed);
+                    }
+                    continue;
+                }
+            }
+            if !protection.inbound_plan.protect_sensitive_data {
+                let is_close = frame.opcode == websocket::OPCODE_CLOSE;
+                websocket::write_unmasked_frame(writer, &frame).await?;
+                if is_close {
+                    return Ok(WebSocketClientFrameOutcome::Completed);
+                }
+                continue;
+            }
             let domains = related_domains.read().map_err(|_| {
                 "WebSocket related-domain state is unavailable after a prior failure".to_string()
             })?;
+            let inbound_policy = InboundRedactPolicy {
+                inner: &state.policy,
+            };
             let protected = dam_pipeline::protect_text(
                 text,
                 &operation_id,
-                &state.policy,
+                &inbound_policy,
                 state.vault.as_ref(),
                 dam_pipeline::ProtectTextContext {
                     reference_vault: Some(state.vault.as_ref()),
                     consent_store: state.consent_store.as_deref(),
-                    consent_scopes: consent_scopes.as_slice(),
+                    consent_scopes: protection.consent_scopes.as_slice(),
                     event_sink: state.log_sink.as_deref(),
                     related_domains: domains.as_slice(),
                 },
@@ -1637,7 +1690,7 @@ where
                     ),
                 );
             }
-        } else if protection_enabled && websocket_frame_requires_body_protection(&frame) {
+        } else if protection.enabled && websocket_frame_requires_body_protection(&frame) {
             record_proxy_event(
                 &state,
                 &operation_id,
@@ -1985,6 +2038,20 @@ fn consent_scopes_for_target(target: &dam_config::ProxyTargetConfig) -> Vec<Stri
 }
 
 impl ProxyState {
+    fn outbound_policy_for_route(
+        &self,
+        route: dam_router::RouteDecision<'_>,
+    ) -> &dyn dam_policy::PolicyEngine {
+        self.outbound_policy_for_target(&route.target().name)
+    }
+
+    fn outbound_policy_for_target(&self, target_name: &str) -> &dyn dam_policy::PolicyEngine {
+        self.route_outbound_policies
+            .get(target_name)
+            .map(|policy| policy as &dyn dam_policy::PolicyEngine)
+            .unwrap_or(&self.policy)
+    }
+
     fn resolve_inbound_for_route(&self, route: dam_router::RouteDecision<'_>) -> bool {
         self.resolve_inbound
             && self
@@ -1999,6 +2066,50 @@ impl ProxyState {
             .get(&route.target().name)
             .copied()
             .unwrap_or(false)
+    }
+}
+
+fn route_outbound_policies(
+    profile: &dam_net::TrafficProfile,
+) -> HashMap<String, dam_policy::StaticPolicy> {
+    let mut policies = HashMap::new();
+    for app in &profile.apps {
+        if !app.enabled || app.action != dam_net::TrafficAction::Inspect {
+            continue;
+        }
+        let target_name = app
+            .target_name
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(&app.id);
+        policies.insert(
+            target_name.clone(),
+            policy_from_traffic_filter(&app.outbound.filter),
+        );
+    }
+    policies
+}
+
+fn policy_from_traffic_filter(filter: &dam_net::TrafficFilterPolicy) -> dam_policy::StaticPolicy {
+    let mut policy =
+        dam_policy::StaticPolicy::new(policy_action_from_traffic_filter(filter.default_action));
+    for (kind, action) in &filter.types {
+        let Some(kind) = dam_core::SensitiveType::from_tag(kind) else {
+            continue;
+        };
+        policy = policy.with_kind_action(kind, policy_action_from_traffic_filter(*action));
+    }
+    policy
+}
+
+fn policy_action_from_traffic_filter(
+    action: dam_net::SensitiveDataAction,
+) -> dam_core::PolicyAction {
+    match action {
+        dam_net::SensitiveDataAction::Allow => dam_core::PolicyAction::Allow,
+        dam_net::SensitiveDataAction::Tokenize => dam_core::PolicyAction::Tokenize,
+        dam_net::SensitiveDataAction::Redact => dam_core::PolicyAction::Redact,
+        dam_net::SensitiveDataAction::Block => dam_core::PolicyAction::Block,
     }
 }
 
@@ -2741,10 +2852,13 @@ fn protect_inbound_response_body(
         return None;
     }
 
+    let inbound_policy = InboundRedactPolicy {
+        inner: &state.policy,
+    };
     let protected = match dam_pipeline::protect_text(
         body_text,
         operation_id,
-        &state.policy,
+        &inbound_policy,
         state.vault.as_ref(),
         dam_pipeline::ProtectTextContext {
             reference_vault: Some(state.vault.as_ref()),

@@ -1,16 +1,34 @@
 use super::*;
 
 fn claude_traffic_app_ids() -> Vec<String> {
-    ["anthropic-api", "claude-web", "anthropic-console"]
-        .into_iter()
-        .map(str::to_string)
-        .collect()
+    [
+        "anthropic-api",
+        "claude-web",
+        "anthropic-console",
+        "claude-mcp-proxy",
+        "claude-platform",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
+fn chatgpt_traffic_app_ids() -> Vec<String> {
+    [
+        "openai-api",
+        "openai-platform",
+        "chatgpt-web",
+        "chatgpt-legacy-web",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 #[test]
-fn lists_stable_profile_ids() {
-    assert_eq!(profile_ids(), ["claude", "codex"]);
-    assert_eq!(default_enabled_profile_ids(), ["claude"]);
+fn lists_dynamic_profile_ids_and_enables_all_by_default() {
+    assert_eq!(profile_ids(), ["claude", "chatgpt"]);
+    assert_eq!(default_enabled_profile_ids(), ["claude", "chatgpt"]);
 }
 
 #[test]
@@ -35,8 +53,8 @@ fn claude_code_profile_uses_proxy_env_not_anthropic_base_url() {
 }
 
 #[test]
-fn codex_profile_merges_api_and_subscription_traffic() {
-    let profile = profile("codex", DEFAULT_PROXY_URL).unwrap();
+fn chatgpt_profile_merges_api_platform_and_subscription_traffic() {
+    let profile = profile("chatgpt", DEFAULT_PROXY_URL).unwrap();
     let command = &profile.commands[1].command;
 
     assert_eq!(profile.provider, "openai-compatible");
@@ -47,7 +65,7 @@ fn codex_profile_merges_api_and_subscription_traffic() {
     assert!(profile.connect_args.contains(&"local_ca".to_string()));
     assert_eq!(profile.settings[0].key, HTTPS_PROXY_ENV);
     assert_eq!(profile.settings[1].key, HTTP_PROXY_ENV);
-    assert_eq!(profile.traffic_app_ids, vec!["openai-api", "chatgpt-codex"]);
+    assert_eq!(profile.traffic_app_ids, chatgpt_traffic_app_ids());
     assert!(command.contains(&format!("{HTTPS_PROXY_ENV}={DEFAULT_PROXY_URL}")));
     assert!(command.contains(&format!("{HTTP_PROXY_ENV}={DEFAULT_PROXY_URL}")));
     assert!(!command.iter().any(|arg| arg.contains("dam_openai")));
@@ -60,7 +78,7 @@ fn removed_profiles_are_not_visible_catalog_entries() {
         .map(|profile| profile.id)
         .collect::<Vec<_>>();
 
-    assert_eq!(visible_ids, vec!["claude", "codex"]);
+    assert_eq!(visible_ids, vec!["claude", "chatgpt"]);
     assert!(profile("xai-compatible", DEFAULT_PROXY_URL).is_none());
 }
 
@@ -76,24 +94,27 @@ fn retired_profile_aliases_resolve_to_current_profiles() {
     );
     assert_eq!(
         profile("openai-compatible", DEFAULT_PROXY_URL).unwrap().id,
-        "codex"
+        "chatgpt"
     );
+    assert_eq!(profile("codex", DEFAULT_PROXY_URL).unwrap().id, "chatgpt");
 }
 
 #[test]
-fn codex_default_path_lives_under_integration_state() {
+fn chatgpt_default_path_lives_under_integration_state() {
     let dir = tempfile::tempdir().unwrap();
     let integration_dir = dir.path().join("integrations");
-    let path = default_apply_path("codex", &integration_dir, None, None).unwrap();
+    let path = default_apply_path("chatgpt", &integration_dir).unwrap();
+    let alias_path = default_apply_path("codex", &integration_dir).unwrap();
 
-    assert_eq!(path, integration_dir.join("profiles").join("codex.json"));
+    assert_eq!(path, integration_dir.join("profiles").join("chatgpt.json"));
+    assert_eq!(alias_path, path);
 }
 
 #[test]
 fn claude_default_path_lives_under_profile_folder() {
     let dir = tempfile::tempdir().unwrap();
     let integration_dir = dir.path().join("integrations");
-    let path = default_apply_path("claude", &integration_dir, None, None).unwrap();
+    let path = default_apply_path("claude", &integration_dir).unwrap();
 
     assert_eq!(path, integration_dir.join("profiles").join("claude.json"));
 }
@@ -106,7 +127,7 @@ fn bundled_profile_files_are_seeded_as_json() {
     let written = ensure_bundled_profile_files(&state_dir).unwrap();
 
     assert_eq!(written.len(), 2);
-    for profile_id in ["claude", "codex"] {
+    for profile_id in ["claude", "chatgpt"] {
         let path = profile_definition_path(&state_dir, profile_id);
         let raw = fs::read_to_string(path).unwrap();
         let profile: IntegrationProfile = serde_json::from_str(&raw).unwrap();
@@ -143,7 +164,7 @@ fn ensure_bundled_profile_files_refreshes_stale_known_profiles() {
     let profile: IntegrationProfile = serde_json::from_str(&raw).unwrap();
 
     assert!(written.contains(&path));
-    assert!(written.contains(&profile_definition_path(&state_dir, "codex")));
+    assert!(written.contains(&profile_definition_path(&state_dir, "chatgpt")));
     assert!(!profile.connect_args.contains(&"--anthropic".to_string()));
     assert!(profile.connect_args.contains(&"--network-mode".to_string()));
     assert!(!profile.settings.is_empty());
@@ -176,9 +197,45 @@ fn profiles_from_state_does_not_seed_profile_files() {
             .iter()
             .map(|profile| profile.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["claude", "codex"]
+        vec!["claude", "chatgpt"]
     );
     assert!(!state_dir.exists());
+}
+
+#[test]
+fn profiles_from_state_loads_valid_custom_profile_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("integrations");
+    let profiles_dir = profile_definitions_dir(&state_dir);
+    fs::create_dir_all(&profiles_dir).unwrap();
+    fs::write(
+        profiles_dir.join("example-mail.json"),
+        r#"{
+          "id": "example-mail",
+          "name": "Example Mail",
+          "summary": "Route Example Mail traffic through DAM.",
+          "provider": "generic-http",
+          "traffic_app_ids": ["example-mail"],
+          "connect_args": ["--network-mode", "tun", "--trust-mode", "local_ca"],
+          "settings": [],
+          "commands": [],
+          "notes": [],
+          "automation": "connect_preset"
+        }"#,
+    )
+    .unwrap();
+
+    let profiles = profiles_from_state(DEFAULT_PROXY_URL, &state_dir).unwrap();
+
+    assert!(profiles.iter().any(|profile| profile.id == "example-mail"));
+    assert_eq!(
+        runtime_enabled_profile_ids(&state_dir).unwrap(),
+        Some(vec![
+            "claude".to_string(),
+            "chatgpt".to_string(),
+            "example-mail".to_string()
+        ])
+    );
 }
 
 #[test]
@@ -204,10 +261,10 @@ fn profiles_from_state_uses_current_bundled_profile_for_stale_catalog_files() {
     )
     .unwrap();
     fs::write(
-        profiles_dir.join("codex.json"),
+        profiles_dir.join("chatgpt.json"),
         r#"{
-          "id": "codex",
-          "name": "Codex",
+          "id": "chatgpt",
+          "name": "ChatGPT",
           "summary": "Stale profile",
           "provider": "openai-compatible",
           "traffic_app_ids": ["openai-api"],
@@ -225,15 +282,15 @@ fn profiles_from_state_uses_current_bundled_profile_for_stale_catalog_files() {
         .iter()
         .find(|profile| profile.id == "claude")
         .unwrap();
-    let codex = profiles
+    let chatgpt = profiles
         .iter()
-        .find(|profile| profile.id == "codex")
+        .find(|profile| profile.id == "chatgpt")
         .unwrap();
 
     assert!(!claude.connect_args.contains(&"--anthropic".to_string()));
     assert_eq!(claude.traffic_app_ids, claude_traffic_app_ids());
-    assert!(!codex.connect_args.contains(&"--openai".to_string()));
-    assert_eq!(codex.traffic_app_ids, vec!["openai-api", "chatgpt-codex"]);
+    assert!(!chatgpt.connect_args.contains(&"--openai".to_string()));
+    assert_eq!(chatgpt.traffic_app_ids, chatgpt_traffic_app_ids());
 }
 
 #[test]
@@ -266,7 +323,7 @@ fn profiles_from_state_ignores_retired_stored_profile_files() {
             .iter()
             .map(|profile| profile.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["claude", "codex"]
+        vec!["claude", "chatgpt"]
     );
 }
 
@@ -274,7 +331,7 @@ fn profiles_from_state_ignores_retired_stored_profile_files() {
 fn ensure_bundled_profile_files_migrates_legacy_rollback_records() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("integrations");
-    let target_path = dir.path().join("codex.json");
+    let target_path = dir.path().join("chatgpt.json");
     let legacy_dir = legacy_profile_state_dir(&state_dir, "codex");
     let legacy_backup_dir = legacy_dir.join("backups").join("123");
     let legacy_backup_path = legacy_backup_dir.join("target.backup");
@@ -296,17 +353,19 @@ fn ensure_bundled_profile_files_migrates_legacy_rollback_records() {
     .unwrap();
 
     ensure_bundled_profile_files(&state_dir).unwrap();
-    let migrated_record_path = profile_state_dir(&state_dir, "codex").join("latest.json");
+    let migrated_record_path = profile_state_dir(&state_dir, "chatgpt").join("latest.json");
     let migrated_raw = fs::read_to_string(&migrated_record_path).unwrap();
     let migrated_record: IntegrationApplyRecord = serde_json::from_str(&migrated_raw).unwrap();
     let migrated_backup_path = migrated_record.files[0].backup_path.as_ref().unwrap();
 
+    assert_eq!(migrated_record.profile_id, "chatgpt");
     assert!(migrated_record_path.exists());
-    assert!(migrated_backup_path.starts_with(profile_state_dir(&state_dir, "codex")));
+    assert!(migrated_backup_path.starts_with(profile_state_dir(&state_dir, "chatgpt")));
     assert!(migrated_backup_path.exists());
     assert!(!legacy_dir.exists());
 
     let rollback = rollback_profile("codex", &state_dir).unwrap();
+    assert_eq!(rollback.profile_id, "chatgpt");
     assert_eq!(rollback.changes[0].action, FileAction::Restore);
     assert_eq!(
         fs::read_to_string(&target_path).unwrap(),
@@ -371,12 +430,12 @@ fn prepare_apply_in_state_refreshes_known_catalog_profile_content() {
     let state_dir = dir.path().join("integrations");
     let profiles_dir = profile_definitions_dir(&state_dir);
     fs::create_dir_all(&profiles_dir).unwrap();
-    let target_path = profile_definition_path(&state_dir, "codex");
+    let target_path = profile_definition_path(&state_dir, "chatgpt");
     fs::write(
         &target_path,
         r#"{
-          "id": "stale-codex",
-          "name": "Stale Codex",
+          "id": "stale-chatgpt",
+          "name": "Stale ChatGPT",
           "summary": "Stale profile",
           "provider": "openai-compatible",
           "traffic_app_ids": ["openai-api"],
@@ -392,10 +451,10 @@ fn prepare_apply_in_state_refreshes_known_catalog_profile_content() {
     let prepared =
         prepare_apply_in_state("codex", DEFAULT_PROXY_URL, target_path, &state_dir).unwrap();
 
-    assert_eq!(prepared.profile_id, "codex");
-    assert_eq!(prepared.profile_name, "Codex");
-    assert!(prepared.desired_content.contains("\"id\": \"codex\""));
-    assert!(!prepared.desired_content.contains("stale-codex"));
+    assert_eq!(prepared.profile_id, "chatgpt");
+    assert_eq!(prepared.profile_name, "ChatGPT");
+    assert!(prepared.desired_content.contains("\"id\": \"chatgpt\""));
+    assert!(!prepared.desired_content.contains("stale-chatgpt"));
     assert!(!prepared.desired_content.contains("--openai"));
 }
 
@@ -463,11 +522,11 @@ fn enabled_integrations_roundtrip_and_fallback_to_active_profile() {
             .iter()
             .map(|profile| profile.profile_id.as_str())
             .collect::<Vec<_>>(),
-        vec!["claude", "codex"]
+        vec!["claude", "chatgpt"]
     );
     assert_eq!(
         enabled_profile_ids(&state_dir).unwrap(),
-        vec!["claude".to_string(), "codex".to_string()]
+        vec!["claude".to_string(), "chatgpt".to_string()]
     );
 
     let enabled = set_integration_enabled("claude", true, &state_dir).unwrap();
@@ -476,7 +535,7 @@ fn enabled_integrations_roundtrip_and_fallback_to_active_profile() {
             .iter()
             .map(|profile| profile.profile_id.as_str())
             .collect::<Vec<_>>(),
-        vec!["codex", "claude"]
+        vec!["chatgpt", "claude"]
     );
 
     let enabled = set_integration_enabled("codex", false, &state_dir).unwrap();
@@ -488,13 +547,13 @@ fn enabled_integrations_roundtrip_and_fallback_to_active_profile() {
 }
 
 #[test]
-fn runtime_enabled_integrations_default_to_claude_code_only() {
+fn runtime_enabled_integrations_default_to_all_profiles() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("integrations");
 
     assert_eq!(
         runtime_enabled_profile_ids(&state_dir).unwrap(),
-        Some(vec!["claude".to_string()])
+        Some(vec!["claude".to_string(), "chatgpt".to_string()])
     );
 
     set_active_profile("claude", &state_dir).unwrap();
@@ -509,13 +568,17 @@ fn runtime_enabled_integrations_default_to_claude_code_only() {
         Some(Vec::new())
     );
     assert_eq!(
-        traffic_app_ids_for_profile_ids(&["claude".to_string(), "codex".to_string()]).unwrap(),
+        traffic_app_ids_for_profile_ids(&["claude".to_string(), "chatgpt".to_string()]).unwrap(),
         vec![
             "anthropic-api".to_string(),
             "claude-web".to_string(),
             "anthropic-console".to_string(),
+            "claude-mcp-proxy".to_string(),
+            "claude-platform".to_string(),
             "openai-api".to_string(),
-            "chatgpt-codex".to_string()
+            "openai-platform".to_string(),
+            "chatgpt-web".to_string(),
+            "chatgpt-legacy-web".to_string()
         ]
     );
 }
@@ -552,7 +615,7 @@ fn retired_enabled_profile_ids_are_migrated_for_runtime_state() {
 
     assert_eq!(
         runtime_enabled_profile_ids(&state_dir).unwrap(),
-        Some(vec!["codex".to_string(), "claude".to_string()])
+        Some(vec!["chatgpt".to_string(), "claude".to_string()])
     );
 }
 
@@ -608,26 +671,26 @@ fn enabled_integrations_reject_unknown_profile() {
 }
 
 #[test]
-fn codex_apply_writes_profile_json_and_rollback_restores_backup() {
+fn chatgpt_apply_writes_profile_json_and_rollback_restores_backup() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
-    let profile_path = dir.path().join("codex.json");
+    let profile_path = dir.path().join("chatgpt.json");
     let original = "{\"id\":\"old-profile\"}\n";
     fs::write(&profile_path, original).unwrap();
 
-    let prepared = prepare_apply("codex", "http://127.0.0.1:9000", profile_path.clone()).unwrap();
+    let prepared = prepare_apply("chatgpt", "http://127.0.0.1:9000", profile_path.clone()).unwrap();
     let result = run_apply(prepared, false, &state_dir).unwrap();
 
     assert!(!result.dry_run);
     assert_eq!(result.changes[0].action, FileAction::Update);
     let applied = fs::read_to_string(&profile_path).unwrap();
     let profile: IntegrationProfile = serde_json::from_str(&applied).unwrap();
-    assert_eq!(profile.id, "codex");
-    assert_eq!(profile.traffic_app_ids, vec!["openai-api", "chatgpt-codex"]);
+    assert_eq!(profile.id, "chatgpt");
+    assert_eq!(profile.traffic_app_ids, chatgpt_traffic_app_ids());
     assert_eq!(profile.settings[0].value, "http://127.0.0.1:9000");
     assert!(!applied.contains("dam_openai"));
 
-    let rollback = rollback_profile("codex", &state_dir).unwrap();
+    let rollback = rollback_profile("chatgpt", &state_dir).unwrap();
 
     assert_eq!(rollback.changes[0].action, FileAction::Restore);
     assert_eq!(fs::read_to_string(&profile_path).unwrap(), original);
@@ -662,18 +725,18 @@ fn claude_code_apply_writes_profile_json_and_rollback_restores_backup() {
 fn profile_apply_creates_json_file_and_rollback_deletes_it() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
-    let profile_path = dir.path().join("codex.json");
+    let profile_path = dir.path().join("chatgpt.json");
 
-    let prepared = prepare_apply("codex", "http://127.0.0.1:9000", profile_path.clone()).unwrap();
+    let prepared = prepare_apply("chatgpt", "http://127.0.0.1:9000", profile_path.clone()).unwrap();
     let result = run_apply(prepared, false, &state_dir).unwrap();
 
     assert_eq!(result.changes[0].action, FileAction::Create);
     let applied = fs::read_to_string(&profile_path).unwrap();
     let profile: IntegrationProfile = serde_json::from_str(&applied).unwrap();
-    assert_eq!(profile.id, "codex");
+    assert_eq!(profile.id, "chatgpt");
     assert_eq!(profile.settings[0].value, "http://127.0.0.1:9000");
 
-    let rollback = rollback_profile("codex", &state_dir).unwrap();
+    let rollback = rollback_profile("chatgpt", &state_dir).unwrap();
 
     assert_eq!(rollback.changes[0].action, FileAction::Delete);
     assert!(!profile_path.exists());
@@ -683,10 +746,10 @@ fn profile_apply_creates_json_file_and_rollback_deletes_it() {
 fn inspect_apply_reports_missing_applied_and_modified_states() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
-    let profile_path = dir.path().join("codex.json");
+    let profile_path = dir.path().join("chatgpt.json");
 
     let missing = inspect_apply(
-        "codex",
+        "chatgpt",
         "http://127.0.0.1:9000",
         profile_path.clone(),
         &state_dir,
@@ -696,11 +759,11 @@ fn inspect_apply_reports_missing_applied_and_modified_states() {
     assert_eq!(missing.planned_action, FileAction::Create);
     assert!(!missing.rollback_available);
 
-    let prepared = prepare_apply("codex", "http://127.0.0.1:9000", profile_path.clone()).unwrap();
+    let prepared = prepare_apply("chatgpt", "http://127.0.0.1:9000", profile_path.clone()).unwrap();
     run_apply(prepared, false, &state_dir).unwrap();
 
     let applied = inspect_apply(
-        "codex",
+        "chatgpt",
         "http://127.0.0.1:9000",
         profile_path.clone(),
         &state_dir,
@@ -713,7 +776,7 @@ fn inspect_apply_reports_missing_applied_and_modified_states() {
     fs::write(&profile_path, "{\"id\":\"changed\"}\n").unwrap();
 
     let modified =
-        inspect_apply("codex", "http://127.0.0.1:9000", profile_path, &state_dir).unwrap();
+        inspect_apply("chatgpt", "http://127.0.0.1:9000", profile_path, &state_dir).unwrap();
     assert_eq!(modified.status, IntegrationApplyStatus::Modified);
     assert_eq!(modified.planned_action, FileAction::Update);
     assert!(modified.rollback_available);
@@ -723,13 +786,13 @@ fn inspect_apply_reports_missing_applied_and_modified_states() {
 fn run_apply_refuses_modified_target_with_existing_rollback_record() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
-    let profile_path = dir.path().join("codex.json");
+    let profile_path = dir.path().join("chatgpt.json");
 
-    let prepared = prepare_apply("codex", "http://127.0.0.1:9000", profile_path.clone()).unwrap();
+    let prepared = prepare_apply("chatgpt", "http://127.0.0.1:9000", profile_path.clone()).unwrap();
     run_apply(prepared, false, &state_dir).unwrap();
     fs::write(&profile_path, "{\"id\":\"changed\"}\n").unwrap();
 
-    let prepared = prepare_apply("codex", "http://127.0.0.1:9000", profile_path).unwrap();
+    let prepared = prepare_apply("chatgpt", "http://127.0.0.1:9000", profile_path).unwrap();
     let error = run_apply(prepared, false, &state_dir).unwrap_err();
 
     assert!(error.contains("already has a rollback record"));
@@ -739,14 +802,14 @@ fn run_apply_refuses_modified_target_with_existing_rollback_record() {
 fn run_apply_does_not_rebackup_already_applied_target() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
-    let profile_path = dir.path().join("codex.json");
+    let profile_path = dir.path().join("chatgpt.json");
 
-    let prepared = prepare_apply("codex", "http://127.0.0.1:9000", profile_path.clone()).unwrap();
+    let prepared = prepare_apply("chatgpt", "http://127.0.0.1:9000", profile_path.clone()).unwrap();
     run_apply(prepared, false, &state_dir).unwrap();
-    let backups_dir = profile_state_dir(&state_dir, "codex").join("backups");
+    let backups_dir = profile_state_dir(&state_dir, "chatgpt").join("backups");
     let backup_count = fs::read_dir(&backups_dir).unwrap().count();
 
-    let prepared = prepare_apply("codex", "http://127.0.0.1:9000", profile_path).unwrap();
+    let prepared = prepare_apply("chatgpt", "http://127.0.0.1:9000", profile_path).unwrap();
     let result = run_apply(prepared, false, &state_dir).unwrap();
 
     assert_eq!(result.changes[0].action, FileAction::Unchanged);
@@ -757,12 +820,13 @@ fn run_apply_does_not_rebackup_already_applied_target() {
 fn inspect_apply_reports_unreadable_rollback_record() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
-    let profile_path = dir.path().join("codex.json");
-    let record_path = profile_state_dir(&state_dir, "codex").join("latest.json");
+    let profile_path = dir.path().join("chatgpt.json");
+    let record_path = profile_state_dir(&state_dir, "chatgpt").join("latest.json");
     fs::create_dir_all(record_path.parent().unwrap()).unwrap();
     fs::write(&record_path, "not json").unwrap();
 
-    let report = inspect_apply("codex", "http://127.0.0.1:9000", profile_path, &state_dir).unwrap();
+    let report =
+        inspect_apply("chatgpt", "http://127.0.0.1:9000", profile_path, &state_dir).unwrap();
 
     assert_eq!(report.status, IntegrationApplyStatus::NeedsApply);
     assert!(!report.rollback_available);

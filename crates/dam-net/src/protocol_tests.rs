@@ -1,10 +1,10 @@
 use super::*;
 
 #[test]
-fn codex_chatgpt_uses_websocket_adapter() {
+fn chatgpt_web_uses_websocket_adapter() {
     let route = crate::default_traffic_routes()
         .into_iter()
-        .find(|route| route.target_name == "chatgpt-codex")
+        .find(|route| route.target_name == "chatgpt-web")
         .unwrap();
 
     let status = adapter_status_for_traffic_route(route);

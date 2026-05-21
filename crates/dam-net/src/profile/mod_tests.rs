@@ -6,13 +6,18 @@ fn llm_mvp_profile_is_just_traffic_profile_data() {
     let profile = llm_mvp_profile();
 
     assert_eq!(profile.default_action, TrafficAction::Bypass);
-    assert_eq!(profile.apps.len(), 5);
+    assert_eq!(profile.apps.len(), 9);
     assert_eq!(profile.apps[0].id, "openai-api");
     assert_eq!(profile.apps[0].action, TrafficAction::Inspect);
     assert_eq!(
         profile.apps[0].provider.as_deref(),
         Some("openai-compatible")
     );
+    assert_eq!(
+        profile.apps[0].outbound.filter.default_action,
+        SensitiveDataAction::Tokenize
+    );
+    assert!(profile.apps[0].inbound.resolve_references);
 }
 
 #[test]
@@ -77,14 +82,30 @@ fn explicit_empty_runtime_app_list_disables_profile_apps() {
 fn route_registry_is_derived_from_inspect_apps() {
     let routes = traffic_routes_from_profile(&llm_mvp_profile());
 
-    assert_eq!(routes.len(), 6);
+    assert_eq!(routes.len(), 10);
     assert!(routes.iter().any(|route| route.host == "chatgpt.com"));
     assert!(routes.iter().any(|route| route.host == "ab.chatgpt.com"));
+    assert!(routes.iter().any(|route| route.host == "chat.openai.com"));
     assert!(routes.iter().any(|route| route.host == "claude.ai"));
     assert!(
         routes
             .iter()
             .any(|route| route.host == "console.anthropic.com")
+    );
+    assert!(
+        routes
+            .iter()
+            .any(|route| route.host == "mcp-proxy.anthropic.com")
+    );
+    assert!(
+        routes
+            .iter()
+            .any(|route| route.host == "platform.claude.com")
+    );
+    assert!(
+        routes
+            .iter()
+            .any(|route| route.host == "platform.openai.com")
     );
 }
 

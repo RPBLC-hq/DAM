@@ -1,5 +1,5 @@
 use super::*;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -61,7 +61,7 @@ fn wallet_item_dedupes_profile_grants_for_multiple_targets() {
                 created_at: now - 20,
                 expires_at: now + 60,
                 revoked_at: None,
-                created_by: "Codex".to_string(),
+                created_by: "ChatGPT".to_string(),
                 reason: None,
             },
             dam_consent::ConsentEntry {
@@ -69,11 +69,11 @@ fn wallet_item_dedupes_profile_grants_for_multiple_targets() {
                 kind: dam_core::SensitiveType::Email,
                 value_fingerprint: "fingerprint".to_string(),
                 vault_key: Some(key.to_string()),
-                scope: dam_consent::target_scope("chatgpt-codex"),
+                scope: dam_consent::target_scope("chatgpt-web"),
                 created_at: now - 10,
                 expires_at: now + 60,
                 revoked_at: None,
-                created_by: "Codex".to_string(),
+                created_by: "ChatGPT".to_string(),
                 reason: None,
             },
         ],
@@ -82,7 +82,7 @@ fn wallet_item_dedupes_profile_grants_for_multiple_targets() {
 
     assert_eq!(item.state, ItemState::Allowed);
     assert_eq!(item.shared_with.len(), 1);
-    assert_eq!(item.shared_with[0].name, "Codex");
+    assert_eq!(item.shared_with[0].name, "ChatGPT");
 }
 
 #[test]
@@ -119,14 +119,14 @@ fn wallet_item_does_not_list_revoked_grants_as_shared() {
 fn traffic_app_profile_scopes_expand_to_all_targets() {
     let scopes = target_scopes_for_traffic_app_ids(
         &dam_net::llm_mvp_profile(),
-        &["openai-api".to_string(), "chatgpt-codex".to_string()],
+        &["openai-api".to_string(), "chatgpt-web".to_string()],
     );
 
     assert_eq!(
         scopes,
         vec![
             dam_consent::target_scope("openai"),
-            dam_consent::target_scope("chatgpt-codex"),
+            dam_consent::target_scope("chatgpt-web"),
         ]
     );
 }
@@ -203,6 +203,34 @@ async fn add_wallet_value_writes_to_vault_and_returns_detail() {
         .trim_start_matches('[')
         .trim_end_matches(']');
     assert_eq!(vault.get(key).unwrap().as_deref(), Some("ada@example.test"));
+    assert_eq!(
+        vault.get_wallet(key).unwrap().as_deref(),
+        Some("ada@example.test")
+    );
+}
+
+#[tokio::test]
+async fn wallet_list_ignores_token_vault_entries_until_user_adds_them() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let reference = vault
+        .write(&VaultRecord {
+            reference: Reference::generate(dam_core::SensitiveType::Email),
+            kind: dam_core::SensitiveType::Email,
+            value: "token-only@example.test".to_string(),
+        })
+        .unwrap();
+    let state = test_state(vault.clone(), None);
+
+    let response = list(State(state), Query(ListQuery::default()))
+        .await
+        .unwrap();
+
+    assert_eq!(response.data.total, 0);
+    assert_eq!(
+        vault.get(&reference.key()).unwrap().as_deref(),
+        Some("token-only@example.test")
+    );
+    assert_eq!(vault.get_wallet(&reference.key()).unwrap(), None);
 }
 
 #[tokio::test]
@@ -215,6 +243,9 @@ async fn allow_wallet_value_with_global_scope_records_stable_party() {
             kind: dam_core::SensitiveType::Email,
             value: "ada@example.test".to_string(),
         })
+        .unwrap();
+    vault
+        .put_wallet(&reference.key(), "ada@example.test")
         .unwrap();
     let state = test_state(vault.clone(), Some(consent_store.clone()));
 
@@ -239,7 +270,7 @@ async fn allow_wallet_value_with_global_scope_records_stable_party() {
 }
 
 #[tokio::test]
-async fn remove_wallet_value_deletes_vault_row_and_revokes_access() {
+async fn remove_wallet_value_deletes_wallet_row_and_revokes_access() {
     let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
     let consent_store = Arc::new(dam_consent::ConsentStore::open_in_memory().unwrap());
     let reference = vault
@@ -250,6 +281,7 @@ async fn remove_wallet_value_deletes_vault_row_and_revokes_access() {
         })
         .unwrap();
     let key = reference.key();
+    vault.put_wallet(&key, "ada@example.test").unwrap();
     consent_store
         .grant_for_reference(
             &key,
@@ -266,7 +298,11 @@ async fn remove_wallet_value_deletes_vault_row_and_revokes_access() {
         .unwrap();
 
     assert_eq!(response.data.id, reference.id);
-    assert!(vault.get(&key).unwrap().is_none());
+    assert_eq!(
+        vault.get(&key).unwrap().as_deref(),
+        Some("ada@example.test")
+    );
+    assert!(vault.get_wallet(&key).unwrap().is_none());
     assert!(
         consent_store
             .list()

@@ -257,7 +257,7 @@ fn setup_plan_does_not_block_on_profile_apply() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
     let integration_state_dir = state_dir.join("integrations");
-    dam_integrations::set_active_profile("codex", &integration_state_dir).unwrap();
+    dam_integrations::set_active_profile("chatgpt", &integration_state_dir).unwrap();
     let config = proxy_config("https://api.openai.com", "openai-compatible");
 
     let plan = setup_plan(
@@ -584,7 +584,7 @@ fn setup_plan_installs_network_extension_and_trust_for_empty_app_scope() {
     let state_dir = dir.path().join("state");
     let integration_state_dir = state_dir.join("integrations");
     dam_integrations::set_integration_enabled("claude", false, &integration_state_dir).unwrap();
-    dam_integrations::set_integration_enabled("codex", false, &integration_state_dir).unwrap();
+    dam_integrations::set_integration_enabled("chatgpt", false, &integration_state_dir).unwrap();
     let config = proxy_config("https://api.openai.com", "openai-compatible");
 
     let plan = setup_plan(
@@ -622,7 +622,7 @@ fn setup_plan_treats_empty_scope_network_extension_config_as_ready() {
     let state_dir = dir.path().join("state");
     let integration_state_dir = state_dir.join("integrations");
     dam_integrations::set_integration_enabled("claude", false, &integration_state_dir).unwrap();
-    dam_integrations::set_integration_enabled("codex", false, &integration_state_dir).unwrap();
+    dam_integrations::set_integration_enabled("chatgpt", false, &integration_state_dir).unwrap();
     let record_dir = state_dir.join("network/macos-network-extension");
     std::fs::create_dir_all(&record_dir).unwrap();
     std::fs::write(

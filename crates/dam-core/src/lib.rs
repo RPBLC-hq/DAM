@@ -223,6 +223,7 @@ pub struct LogEvent {
     pub level: LogLevel,
     pub event_type: LogEventType,
     pub kind: Option<SensitiveType>,
+    pub value: Option<String>,
     pub reference: Option<Reference>,
     pub action: Option<String>,
     pub message: String,
@@ -241,6 +242,7 @@ impl LogEvent {
             level,
             event_type,
             kind: None,
+            value: None,
             reference: None,
             action: None,
             message: message.into(),
@@ -249,6 +251,11 @@ impl LogEvent {
 
     pub fn with_kind(mut self, kind: SensitiveType) -> Self {
         self.kind = Some(kind);
+        self
+    }
+
+    pub fn with_value(mut self, value: impl Into<String>) -> Self {
+        self.value = Some(value.into());
         self
     }
 
@@ -833,6 +840,7 @@ pub fn build_filter_log_events_from_decisions(
                 ),
             )
             .with_kind(detection.kind)
+            .with_value(canonical_sensitive_value(detection.kind, &detection.value))
             .with_action("detected"),
         );
 
@@ -844,12 +852,20 @@ pub fn build_filter_log_events_from_decisions(
                 "policy decision applied",
             )
             .with_kind(detection.kind)
+            .with_value(canonical_sensitive_value(detection.kind, &detection.value))
             .with_action(decision.action.tag()),
         );
     }
 
     for replacement in &plan.replacements {
-        let kind = kind_for_replacement(replacement, decisions);
+        let detection = detection_for_replacement(replacement, decisions);
+        let kind = replacement
+            .reference
+            .as_ref()
+            .map(|reference| reference.kind)
+            .or_else(|| detection.map(|detection| detection.kind));
+        let value =
+            detection.map(|detection| canonical_sensitive_value(detection.kind, &detection.value));
         match replacement.mode {
             ReplacementMode::Tokenized => {
                 let reference = replacement
@@ -882,6 +898,9 @@ pub fn build_filter_log_events_from_decisions(
                 if let Some(kind) = kind {
                     redaction_event = redaction_event.with_kind(kind);
                 }
+                if let Some(value) = value.clone() {
+                    redaction_event = redaction_event.with_value(value);
+                }
                 events.push(redaction_event);
             }
             ReplacementMode::Redacted => {
@@ -895,6 +914,9 @@ pub fn build_filter_log_events_from_decisions(
                 if let Some(kind) = kind {
                     redaction_event = redaction_event.with_kind(kind);
                 }
+                if let Some(value) = value.clone() {
+                    redaction_event = redaction_event.with_value(value);
+                }
                 events.push(redaction_event);
             }
             ReplacementMode::RedactOnlyFallback => {
@@ -907,6 +929,9 @@ pub fn build_filter_log_events_from_decisions(
                 .with_action("fallback_redacted");
                 if let Some(kind) = kind {
                     redaction_event = redaction_event.with_kind(kind);
+                }
+                if let Some(value) = value.clone() {
+                    redaction_event = redaction_event.with_value(value);
                 }
                 events.push(redaction_event);
             }
@@ -929,20 +954,14 @@ pub fn build_filter_log_events_from_decisions(
     events
 }
 
-fn kind_for_replacement(
+fn detection_for_replacement<'a>(
     replacement: &Replacement,
-    decisions: &[PolicyDecision],
-) -> Option<SensitiveType> {
-    replacement
-        .reference
-        .as_ref()
-        .map(|reference| reference.kind)
-        .or_else(|| {
-            decisions
-                .iter()
-                .find(|decision| decision.detection.span == replacement.span)
-                .map(|decision| decision.detection.kind)
-        })
+    decisions: &'a [PolicyDecision],
+) -> Option<&'a Detection> {
+    decisions
+        .iter()
+        .find(|decision| decision.detection.span == replacement.span)
+        .map(|decision| &decision.detection)
 }
 
 fn preview(value: &str) -> String {

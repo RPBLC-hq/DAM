@@ -17,6 +17,7 @@ const DAM_WEB_BIN_ENV: &str = "DAM_WEB_BIN";
 const LOGIN_ITEM_MARKER_RELPATH: &str = "startup/login-item.txt";
 const LOGIN_ITEM_SKIP_MARKER_RELPATH: &str = "startup/login-item-skipped.txt";
 const LAUNCH_AGENT_PLIST_RELPATH: &str = "Library/LaunchAgents/com.rpblc.dam-tray.plist";
+const DEFAULT_CONSENT_PATH: &str = "consent.db";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Cli {
@@ -430,6 +431,7 @@ async fn run() -> Result<i32, String> {
 }
 
 async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
+    normalize_connect_state_paths(&mut args.proxy)?;
     let mut config = dam_daemon::proxy_config(&args.proxy)?;
     let mut applied_profiles = Vec::new();
     let mut restarted = false;
@@ -438,6 +440,7 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
         dam_daemon::DaemonStatus::Connected(state) => {
             if !daemon_proxy_targets_match(&state, &config.proxy.targets)
                 || !daemon_transparent_routes_match(&state, &config)
+                || !daemon_runtime_paths_match(&state, &args.proxy)
             {
                 ensure_connect_transparent_prerequisites(&args.proxy, &config, None)?;
                 if !args.json {
@@ -600,6 +603,37 @@ fn connect_apply_view(outcome: &ConnectApplyOutcome) -> ConnectApplyView {
     }
 }
 
+fn normalize_connect_state_paths(proxy: &mut dam_daemon::ProxyOptions) -> Result<(), String> {
+    let paths = dam_daemon::state_paths().map_err(|error| error.to_string())?;
+    std::fs::create_dir_all(&paths.state_dir).map_err(|error| {
+        format!(
+            "failed to create DAM state directory {}: {error}",
+            paths.state_dir.display()
+        )
+    })?;
+    proxy.vault_path = state_runtime_path(&paths.state_dir, &proxy.vault_path);
+    proxy.log_path = proxy
+        .log_path
+        .as_ref()
+        .map(|path| state_runtime_path(&paths.state_dir, path));
+    proxy.consent_path = Some(state_runtime_path(
+        &paths.state_dir,
+        proxy
+            .consent_path
+            .as_deref()
+            .unwrap_or_else(|| Path::new(DEFAULT_CONSENT_PATH)),
+    ));
+    Ok(())
+}
+
+fn state_runtime_path(state_dir: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        state_dir.join(path)
+    }
+}
+
 fn proxy_options_for_existing_daemon(
     state: &dam_daemon::DaemonState,
     requested: &dam_daemon::ProxyOptions,
@@ -626,11 +660,40 @@ fn proxy_options_for_existing_daemon(
             proxy.upstream = upstream.clone();
         }
     }
-    proxy.vault_path = state.vault_path.clone();
-    proxy.log_path = state.log_path.clone();
-    proxy.consent_path = state.consent_path.clone();
+    proxy.vault_path = existing_daemon_path_or_requested(&state.vault_path, &requested.vault_path);
+    proxy.log_path = existing_daemon_optional_path_or_requested(
+        state.log_path.as_deref(),
+        requested.log_path.as_deref(),
+    );
+    proxy.consent_path = existing_daemon_optional_path_or_requested(
+        state.consent_path.as_deref(),
+        requested.consent_path.as_deref(),
+    );
     proxy.resolve_inbound = Some(state.resolve_inbound);
     proxy
+}
+
+fn existing_daemon_optional_path_or_requested(
+    current: Option<&Path>,
+    requested: Option<&Path>,
+) -> Option<PathBuf> {
+    match (current, requested) {
+        (Some(current), Some(requested)) => {
+            Some(existing_daemon_path_or_requested(current, requested))
+        }
+        (Some(current), None) if current.is_absolute() => Some(current.to_path_buf()),
+        (None, Some(requested)) => Some(requested.to_path_buf()),
+        (Some(current), None) => Some(current.to_path_buf()),
+        (None, None) => None,
+    }
+}
+
+fn existing_daemon_path_or_requested(current: &Path, requested: &Path) -> PathBuf {
+    if current.is_absolute() {
+        current.to_path_buf()
+    } else {
+        requested.to_path_buf()
+    }
 }
 
 fn proxy_targets_for_existing_daemon(
@@ -692,6 +755,23 @@ fn paths_match(left: &Path, right: &Path) -> bool {
     let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
     let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
     left == right
+}
+
+fn daemon_runtime_paths_match(
+    state: &dam_daemon::DaemonState,
+    proxy: &dam_daemon::ProxyOptions,
+) -> bool {
+    paths_match(&state.vault_path, &proxy.vault_path)
+        && optional_paths_match(state.log_path.as_deref(), proxy.log_path.as_deref())
+        && optional_paths_match(state.consent_path.as_deref(), proxy.consent_path.as_deref())
+}
+
+fn optional_paths_match(left: Option<&Path>, right: Option<&Path>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => paths_match(left, right),
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 fn daemon_proxy_targets_match(
@@ -3821,12 +3901,7 @@ fn default_integration_target_path(
     profile_id: &str,
     state_dir: &std::path::Path,
 ) -> Result<PathBuf, String> {
-    dam_integrations::default_apply_path(
-        profile_id,
-        state_dir,
-        std::env::var_os("CODEX_HOME").map(PathBuf::from),
-        std::env::var_os("HOME").map(PathBuf::from),
-    )
+    dam_integrations::default_apply_path(profile_id, state_dir)
 }
 
 fn apply_connect_profile(profile_id: &str, proxy_url: &str) -> Result<ConnectApplyOutcome, String> {
@@ -4166,8 +4241,11 @@ fn usage() -> &'static str {
     "Usage: dam <command>\n\nCommands:\n  connect       Start or resume the background DAM proxy daemon\n  web           Start the local DAM web UI\n  doctor        Run machine-readable local readiness diagnostics\n  status        Show background DAM protection status\n  setup         Inspect or recover the idempotent local setup plan\n  logs          Show concise local DAM operation logs\n  profile       Select and inspect the active harness profile\n  trust         Manage local trust artifacts and approved local trust changes\n  network       Manage local network routing plans and approved changes\n  startup       Inspect or record local startup setup choices\n  disconnect    Pause DAM protection, or stop the daemon with --stop\n  integrations  List and inspect known harness integration profiles\n\nRun `dam connect --help`, `dam web --help`, `dam doctor --help`, `dam setup --help`, `dam logs --help`, `dam profile --help`, `dam trust --help`, `dam network --help`, `dam startup --help`, or `dam integrations --help` for command options."
 }
 
-fn usage_connect() -> &'static str {
-    "Usage: dam connect [--profile PROFILE] [--apply] [--json] [DAM_OPTIONS]\n\nStarts a background DAM proxy daemon for proxy/interception routing. Enabled app profiles select daemon targets automatically. --apply additionally ensures selected DAM profile files before connecting.\n\nDAM options:\n  --profile <id>          Use integration profile daemon defaults\n  --apply                 Ensure selected or enabled DAM profile files before connecting\n  --json                  Print a stable machine-readable connect result\n  --config <path>         Load DAM config file before daemon overrides\n  --listen <addr>         Local proxy listen address (default: 127.0.0.1:7828)\n  --network-mode <mode>   Control-plane network mode: explicit_proxy, system_proxy, or tun\n  --trust-mode <mode>     Control-plane trust mode: disabled or local_ca\n  --target-name <name>    Low-level proxy target name\n  --provider <provider>   Low-level target label\n  --upstream <url>        Low-level target upstream URL\n  --target <json>         Internal repeated target JSON\n  --db <path>             Vault SQLite path (default: vault.db)\n  --log <path>            Log SQLite path (default: log.db)\n  --consent-db <path>     Consent SQLite path (default: consent.db)\n  --no-log                Disable DAM log writes\n  --no-resolve-inbound    Leave DAM references unresolved in inbound responses\n  --resolve-inbound       Restore DAM references in inbound responses (default)\n\nKnown profiles: claude, codex"
+fn usage_connect() -> String {
+    format!(
+        "Usage: dam connect [--profile PROFILE] [--apply] [--json] [DAM_OPTIONS]\n\nStarts a background DAM proxy daemon for proxy/interception routing. Enabled app profiles select daemon targets automatically. --apply additionally ensures selected DAM profile files before connecting.\n\nDAM options:\n  --profile <id>          Use integration profile daemon defaults\n  --apply                 Ensure selected or enabled DAM profile files before connecting\n  --json                  Print a stable machine-readable connect result\n  --config <path>         Load DAM config file before daemon overrides\n  --listen <addr>         Local proxy listen address (default: 127.0.0.1:7828)\n  --network-mode <mode>   Control-plane network mode: explicit_proxy, system_proxy, or tun\n  --trust-mode <mode>     Control-plane trust mode: disabled or local_ca\n  --target-name <name>    Low-level proxy target name\n  --provider <provider>   Low-level target label\n  --upstream <url>        Low-level target upstream URL\n  --target <json>         Internal repeated target JSON\n  --db <path>             Vault SQLite path (default: vault.db)\n  --log <path>            Log SQLite path (default: log.db)\n  --consent-db <path>     Consent SQLite path (default: consent.db)\n  --no-log                Disable DAM log writes\n  --no-resolve-inbound    Leave DAM references unresolved in inbound responses\n  --resolve-inbound       Restore DAM references in inbound responses (default)\n\nKnown profiles: {}",
+        dam_integrations::profile_ids().join(", ")
+    )
 }
 
 fn usage_status() -> &'static str {

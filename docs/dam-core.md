@@ -14,7 +14,7 @@ It owns shared types and coordination rules. Other modules may implement contrac
 - Policy action contract: `PolicyAction`.
 - Replacement planning from `PolicyDecision` values.
 - Kind-specific value canonicalization before replacement planning/storage.
-- Non-sensitive operational log event creation.
+- Operational and Activity log event creation.
 - Resolve planning for `[kind:id]` references.
 - Proxy log event types for forward, bypass, and failure states.
 
@@ -82,11 +82,12 @@ Redact-only placeholders such as `[email]`, unknown kinds, and malformed IDs are
 
 Known references become replacements with the stored value. Missing references and read failures stay unchanged unless a caller chooses strict failure behavior.
 
-## Privacy Rules
+## Log Value Rules
 
-- Log events must not contain raw detected values.
+- Detection, policy-decision, and redaction events may carry the canonical detected value so Activity can show what was detected without reading Wallet.
+- Activity values are local log facts only: they do not create Wallet rows, imply consent, or affect provider pass-through decisions.
 - References may be logged after successful vault writes.
-- Current `--report` output may show short local previews for manual verification; persisted logs do not.
+- Backend error text must not echo sensitive values.
 
 ## Log Event Types
 

@@ -4,10 +4,16 @@ const OPENAI_API_UPSTREAM: &str = "https://api.openai.com";
 const ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
 
 fn claude_traffic_app_ids() -> Vec<String> {
-    ["anthropic-api", "claude-web", "anthropic-console"]
-        .into_iter()
-        .map(str::to_string)
-        .collect()
+    [
+        "anthropic-api",
+        "claude-web",
+        "anthropic-console",
+        "claude-mcp-proxy",
+        "claude-platform",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 #[test]
@@ -236,7 +242,12 @@ fn parses_connect_with_integration_profile_defaults() {
     assert_eq!(args.proxy.upstream, OPENAI_API_UPSTREAM);
     assert_eq!(
         args.proxy.traffic_app_ids,
-        Some(vec!["openai-api".to_string(), "chatgpt-codex".to_string()])
+        Some(vec![
+            "openai-api".to_string(),
+            "openai-platform".to_string(),
+            "chatgpt-web".to_string(),
+            "chatgpt-legacy-web".to_string()
+        ])
     );
     assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
     assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
@@ -266,6 +277,40 @@ fn parses_connect_profile_apply() {
     assert_eq!(args.proxy.traffic_app_ids, Some(claude_traffic_app_ids()));
     assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
     assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
+}
+
+#[test]
+fn state_runtime_path_roots_relative_paths_in_state_dir() {
+    let state_dir = Path::new("/Users/example/.dam");
+
+    assert_eq!(
+        state_runtime_path(state_dir, Path::new("log.db")),
+        PathBuf::from("/Users/example/.dam/log.db")
+    );
+    assert_eq!(
+        state_runtime_path(state_dir, Path::new("/tmp/log.db")),
+        PathBuf::from("/tmp/log.db")
+    );
+}
+
+#[test]
+fn daemon_runtime_paths_detect_split_state() {
+    let mut state = test_daemon_state(
+        dam_net::CaptureMode::Tun,
+        dam_trust::TrustMode::LocalCa,
+        true,
+    );
+    state.vault_path = PathBuf::from("vault.db");
+    state.log_path = Some(PathBuf::from("log.db"));
+    state.consent_path = Some(PathBuf::from("consent.db"));
+    let proxy = dam_daemon::ProxyOptions {
+        vault_path: PathBuf::from("/Users/example/.dam/vault.db"),
+        log_path: Some(PathBuf::from("/Users/example/.dam/log.db")),
+        consent_path: Some(PathBuf::from("/Users/example/.dam/consent.db")),
+        ..dam_daemon::ProxyOptions::default()
+    };
+
+    assert!(!daemon_runtime_paths_match(&state, &proxy));
 }
 
 #[test]
@@ -420,7 +465,7 @@ fn parses_connect_apply_with_multiple_enabled_profiles() {
             "--listen".to_string(),
             "127.0.0.1:9000".to_string(),
         ],
-        vec!["codex".to_string(), "claude".to_string()],
+        vec!["chatgpt".to_string(), "claude".to_string()],
     )
     .unwrap();
 
@@ -429,20 +474,24 @@ fn parses_connect_apply_with_multiple_enabled_profiles() {
     };
     assert_eq!(
         args.apply_profile_ids,
-        vec!["codex".to_string(), "claude".to_string()]
+        vec!["chatgpt".to_string(), "claude".to_string()]
     );
     assert_eq!(
         args.proxy.traffic_app_ids,
         Some(vec![
             "openai-api".to_string(),
-            "chatgpt-codex".to_string(),
+            "openai-platform".to_string(),
+            "chatgpt-web".to_string(),
+            "chatgpt-legacy-web".to_string(),
             "anthropic-api".to_string(),
             "claude-web".to_string(),
-            "anthropic-console".to_string()
+            "anthropic-console".to_string(),
+            "claude-mcp-proxy".to_string(),
+            "claude-platform".to_string()
         ])
     );
     let targets = args.proxy.targets.unwrap();
-    assert_eq!(targets.len(), 5);
+    assert_eq!(targets.len(), 9);
     assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
     assert!(
         targets
@@ -450,7 +499,27 @@ fn parses_connect_apply_with_multiple_enabled_profiles() {
             .any(|target| target.provider == "openai-compatible")
     );
     assert!(targets.iter().any(|target| target.provider == "anthropic"));
-    assert!(targets.iter().any(|target| target.name == "chatgpt-codex"));
+    assert!(targets.iter().any(|target| target.name == "chatgpt-web"));
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.name == "chatgpt-legacy-web")
+    );
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.name == "openai-platform")
+    );
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.name == "claude-platform")
+    );
+    assert!(
+        targets
+            .iter()
+            .any(|target| target.name == "claude-mcp-proxy")
+    );
 }
 
 #[test]
@@ -644,7 +713,7 @@ fn connect_preflight_blocks_missing_network_extension_for_empty_app_scope() {
     let state_dir = dir.path().join("state");
     dam_integrations::set_integration_enabled("claude", false, &state_dir.join("integrations"))
         .unwrap();
-    dam_integrations::set_integration_enabled("codex", false, &state_dir.join("integrations"))
+    dam_integrations::set_integration_enabled("chatgpt", false, &state_dir.join("integrations"))
         .unwrap();
     let options = dam_daemon::ProxyOptions {
         network_mode: dam_net::CaptureMode::Tun,
@@ -729,7 +798,7 @@ fn parses_integrations_show_with_proxy_url() {
     let cli = parse_cli([
         "integrations".to_string(),
         "show".to_string(),
-        "codex".to_string(),
+        "chatgpt".to_string(),
         "--proxy-url".to_string(),
         "http://127.0.0.1:9000".to_string(),
     ])
@@ -738,7 +807,7 @@ fn parses_integrations_show_with_proxy_url() {
     assert_eq!(
         cli.command,
         CommandKind::Integrations(IntegrationArgs::Show {
-            profile_id: "codex".to_string(),
+            profile_id: "chatgpt".to_string(),
             json: false,
             proxy_url: Some("http://127.0.0.1:9000".to_string()),
         })
@@ -750,21 +819,21 @@ fn parses_integrations_apply_with_dry_run_and_target_path() {
     let cli = parse_cli([
         "integrations".to_string(),
         "apply".to_string(),
-        "codex".to_string(),
+        "chatgpt".to_string(),
         "--dry-run".to_string(),
         "--target-path".to_string(),
-        "/tmp/codex.toml".to_string(),
+        "/tmp/chatgpt.json".to_string(),
     ])
     .unwrap();
 
     assert_eq!(
         cli.command,
         CommandKind::Integrations(IntegrationArgs::Apply {
-            profile_id: "codex".to_string(),
+            profile_id: "chatgpt".to_string(),
             dry_run: true,
             json: false,
             proxy_url: None,
-            target_path: Some(PathBuf::from("/tmp/codex.toml")),
+            target_path: Some(PathBuf::from("/tmp/chatgpt.json")),
         })
     );
 }
@@ -774,14 +843,14 @@ fn integrations_apply_defaults_to_dry_run_and_requires_write_for_mutation() {
     let preview = parse_cli([
         "integrations".to_string(),
         "apply".to_string(),
-        "codex".to_string(),
+        "chatgpt".to_string(),
     ])
     .unwrap();
 
     assert_eq!(
         preview.command,
         CommandKind::Integrations(IntegrationArgs::Apply {
-            profile_id: "codex".to_string(),
+            profile_id: "chatgpt".to_string(),
             dry_run: true,
             json: false,
             proxy_url: None,
@@ -792,7 +861,7 @@ fn integrations_apply_defaults_to_dry_run_and_requires_write_for_mutation() {
     let write = parse_cli([
         "integrations".to_string(),
         "apply".to_string(),
-        "codex".to_string(),
+        "chatgpt".to_string(),
         "--write".to_string(),
     ])
     .unwrap();
@@ -800,7 +869,7 @@ fn integrations_apply_defaults_to_dry_run_and_requires_write_for_mutation() {
     assert_eq!(
         write.command,
         CommandKind::Integrations(IntegrationArgs::Apply {
-            profile_id: "codex".to_string(),
+            profile_id: "chatgpt".to_string(),
             dry_run: false,
             json: false,
             proxy_url: None,
@@ -814,7 +883,7 @@ fn integrations_apply_rejects_dry_run_with_write() {
     let error = parse_cli([
         "integrations".to_string(),
         "apply".to_string(),
-        "codex".to_string(),
+        "chatgpt".to_string(),
         "--dry-run".to_string(),
         "--write".to_string(),
     ])
@@ -828,7 +897,7 @@ fn parses_integrations_rollback_json() {
     let cli = parse_cli([
         "integrations".to_string(),
         "rollback".to_string(),
-        "codex".to_string(),
+        "chatgpt".to_string(),
         "--json".to_string(),
     ])
     .unwrap();
@@ -836,7 +905,7 @@ fn parses_integrations_rollback_json() {
     assert_eq!(
         cli.command,
         CommandKind::Integrations(IntegrationArgs::Rollback {
-            profile_id: "codex".to_string(),
+            profile_id: "chatgpt".to_string(),
             json: true,
         })
     );
@@ -844,7 +913,7 @@ fn parses_integrations_rollback_json() {
 
 #[test]
 fn integration_profile_render_quotes_spaced_command_args() {
-    let profile = dam_integrations::profile("codex", "http://127.0.0.1:7828").unwrap();
+    let profile = dam_integrations::profile("chatgpt", "http://127.0.0.1:7828").unwrap();
     let rendered = render_integration_profile(&profile, "http://127.0.0.1:7828");
 
     assert!(rendered.contains("HTTPS_PROXY=http://127.0.0.1:7828"));
@@ -896,6 +965,7 @@ fn log_summary_collapses_proxy_diagnostics() {
             level: "info".to_string(),
             event_type: "proxy_forward".to_string(),
             kind: None,
+            value: None,
             reference: None,
             action: Some("provider_response".to_string()),
             message: "provider response status=200 content_type=text/event-stream content_encoding=none streaming=true".to_string(),
@@ -907,6 +977,7 @@ fn log_summary_collapses_proxy_diagnostics() {
             level: "info".to_string(),
             event_type: "proxy_forward".to_string(),
             kind: None,
+            value: None,
             reference: None,
             action: Some("request_protection".to_string()),
             message: "request protection detections=1 replacements=1 tokenized=1 blocked=0".to_string(),
@@ -918,6 +989,7 @@ fn log_summary_collapses_proxy_diagnostics() {
             level: "info".to_string(),
             event_type: "proxy_forward".to_string(),
             kind: None,
+            value: None,
             reference: None,
             action: Some("route_decision".to_string()),
             message: "route target=anthropic provider=anthropic protection_enabled=true resolve_inbound=true request_bytes=100".to_string(),

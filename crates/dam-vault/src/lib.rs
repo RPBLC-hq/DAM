@@ -51,6 +51,13 @@ impl Vault {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS wallet_entries (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
             ",
         )?;
 
@@ -60,17 +67,27 @@ impl Vault {
     }
 
     pub fn put(&self, key: &str, value: &str) -> VaultResult<()> {
+        self.put_entry("vault_entries", key, value)
+    }
+
+    pub fn put_wallet(&self, key: &str, value: &str) -> VaultResult<()> {
+        self.put_entry("wallet_entries", key, value)
+    }
+
+    fn put_entry(&self, table: &str, key: &str, value: &str) -> VaultResult<()> {
         let now = now_unix_secs()?;
         let conn = self.conn.lock().expect("vault sqlite mutex poisoned");
 
         conn.execute(
-            "
-            INSERT INTO vault_entries (key, value, created_at, updated_at)
+            &format!(
+                "
+            INSERT INTO {table} (key, value, created_at, updated_at)
             VALUES (?1, ?2, ?3, ?3)
             ON CONFLICT(key) DO UPDATE SET
                 value = excluded.value,
                 updated_at = excluded.updated_at
-            ",
+            "
+            ),
             params![key, value, now],
         )?;
 
@@ -78,11 +95,19 @@ impl Vault {
     }
 
     pub fn get(&self, key: &str) -> VaultResult<Option<String>> {
+        self.get_entry("vault_entries", key)
+    }
+
+    pub fn get_wallet(&self, key: &str) -> VaultResult<Option<String>> {
+        self.get_entry("wallet_entries", key)
+    }
+
+    fn get_entry(&self, table: &str, key: &str) -> VaultResult<Option<String>> {
         let conn = self.conn.lock().expect("vault sqlite mutex poisoned");
 
         let value = conn
             .query_row(
-                "SELECT value FROM vault_entries WHERE key = ?1",
+                &format!("SELECT value FROM {table} WHERE key = ?1"),
                 params![key],
                 |row| row.get(0),
             )
@@ -92,20 +117,36 @@ impl Vault {
     }
 
     pub fn delete(&self, key: &str) -> VaultResult<bool> {
+        self.delete_entry("vault_entries", key)
+    }
+
+    pub fn delete_wallet(&self, key: &str) -> VaultResult<bool> {
+        self.delete_entry("wallet_entries", key)
+    }
+
+    fn delete_entry(&self, table: &str, key: &str) -> VaultResult<bool> {
         let conn = self.conn.lock().expect("vault sqlite mutex poisoned");
-        let deleted = conn.execute("DELETE FROM vault_entries WHERE key = ?1", params![key])?;
+        let deleted = conn.execute(&format!("DELETE FROM {table} WHERE key = ?1"), params![key])?;
         Ok(deleted > 0)
     }
 
     pub fn list(&self) -> VaultResult<Vec<VaultEntry>> {
+        self.list_entries("vault_entries")
+    }
+
+    pub fn list_wallet(&self) -> VaultResult<Vec<VaultEntry>> {
+        self.list_entries("wallet_entries")
+    }
+
+    fn list_entries(&self, table: &str) -> VaultResult<Vec<VaultEntry>> {
         let conn = self.conn.lock().expect("vault sqlite mutex poisoned");
-        let mut stmt = conn.prepare(
+        let mut stmt = conn.prepare(&format!(
             "
             SELECT key, value, created_at, updated_at
-            FROM vault_entries
+            FROM {table}
             ORDER BY key ASC
-            ",
-        )?;
+            "
+        ))?;
 
         let entries = stmt
             .query_map([], |row| {
@@ -122,9 +163,18 @@ impl Vault {
     }
 
     pub fn count(&self) -> VaultResult<u64> {
+        self.count_entries("vault_entries")
+    }
+
+    pub fn wallet_count(&self) -> VaultResult<u64> {
+        self.count_entries("wallet_entries")
+    }
+
+    fn count_entries(&self, table: &str) -> VaultResult<u64> {
         let conn = self.conn.lock().expect("vault sqlite mutex poisoned");
-        let count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM vault_entries", [], |row| row.get(0))?;
+        let count: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+            row.get(0)
+        })?;
         Ok(count as u64)
     }
 }

@@ -30,7 +30,7 @@ input text with [kind:id] or \[kind:id\] references
   -> restored text when at least one reference resolves
 ```
 
-Before detection, callers may provide both a consent store and `VaultReader`. In that mode the pipeline expands previously tokenized `[kind:id]` references only when the reference resolves and the stored canonical value has active consent for the caller's consent scopes. Missing, unreadable, expired, revoked, or wrong-scope references remain tokenized and continue through the normal protection path. Callers that do not pass scopes use the global consent scope only. Proxy callers pass the matched route target scope, for example `target:anthropic` or `target:chatgpt-codex`. Callers may also pass related domains derived from outbound email detections; those domains are detected as `domain` values even when the current text no longer contains the full email address. Email detection treats sentence punctuation after a normal domain as a boundary, so a prompt like `alice@example.com. What...` stores `alice@example.com` and keeps the derived-domain context usable.
+Before detection, callers may provide both a consent store and `VaultReader`. In that mode the pipeline expands previously tokenized `[kind:id]` references only when the reference resolves and the stored canonical value has active consent for the caller's consent scopes. Missing, unreadable, expired, revoked, or wrong-scope references remain tokenized and continue through the normal protection path. Callers that do not pass scopes use the global consent scope only. Proxy callers pass the matched route target scope, for example `target:anthropic` or `target:chatgpt-web`. Domain-only values are not detected or redacted; email detection treats sentence punctuation after a normal domain as a boundary, so a prompt like `alice@example.com. What...` stores `alice@example.com` without separately storing `example.com`.
 
 `dam-pipeline` records non-sensitive filter, consent, vault, redaction, read, and resolve events through the `EventSink` contract when a sink is provided.
 
@@ -52,7 +52,7 @@ HTTP upstream forwarding lives in `dam-http-adapter`, configured auth behavior l
 ## Current Consumers
 
 - `dam-proxy` uses `dam-pipeline` for outbound request body protection and default inbound reference resolution. Streaming/SSE bodies are passed to this pipeline by protocol adapters after either raw tail-buffering or provider-aware text-delta reassembly, depending on the response shape.
-- When a route explicitly enables raw inbound protection, `dam-proxy` reuses the outbound protection pipeline on inbound HTTP response text after reference resolution has no output, so raw provider-returned sensitive values are tokenized before local agent history records them. Resolved DAM references are still restored for the local client when inbound reference resolution is enabled.
+- When a route explicitly enables raw inbound protection, `dam-proxy` reuses the detection/redaction pipeline on inbound HTTP response text after reference resolution has no output, so raw provider-returned sensitive values are redacted before local agent history records them. These inbound detections are not written to Wallet. Resolved DAM references are still restored for the local client when inbound reference resolution is enabled.
 
 `dam-filter` still owns its CLI-specific pipeline wiring because it also owns report emission, exit codes, and file/stdin handling.
 

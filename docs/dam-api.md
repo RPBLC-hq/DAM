@@ -26,11 +26,12 @@ Allowed:
 
 Not allowed:
 
-- detected raw values;
 - resolved raw values;
 - vault value previews in JSON reports;
 - backend vault error text;
 - secret material.
+
+Detected values may be carried by local Activity log events; standardized report payloads still avoid exposing them unless the report field is explicitly Activity-facing.
 
 Text reports in some local CLIs may still include short value previews for manual debugging. The standardized JSON reports should not.
 

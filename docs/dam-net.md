@@ -37,7 +37,7 @@ Current implementation status:
 
 On Linux and Windows, macOS-specific mutation commands return stable unsupported/planned JSON with an explicit-proxy fallback command. They must not report success or mutate state for a backend that is not implemented on the current platform.
 
-Protocol adapters are reported separately from capture. HTTP is implemented for the first bidirectional protected LLM traffic, and the Codex ChatGPT-login WebSocket MVP protects unfragmented client and server text frames on protected connections. gRPC, email, media/audio, and other chat protocols are profile-level adapter kinds with planned runtime support.
+Protocol adapters are reported separately from capture. HTTP is implemented for the first bidirectional protected traffic, and the ChatGPT WebSocket MVP protects unfragmented client and server text frames on protected connections. gRPC, email, media/audio, and other chat protocols are profile-level adapter kinds with planned runtime support.
 
 ## Full-Traffic Mediation
 
@@ -50,7 +50,7 @@ active profile match + paused  -> pass through without redaction
 active profile match + not ready -> fail according to the configured failure behavior
 ```
 
-PAC routing is not true packet-level full-device capture. `tun`/Network Extension is the primary full-device path: it can classify TCP flows by destination and hand active profile matches to the protected proxy runtime. Unsupported protocols or encrypted bodies still require protocol-specific adapters before DAM can inspect payloads.
+PAC routing is not true packet-level full-device capture. `tun`/Network Extension is the primary full-device path: it can classify TCP flows by destination and hand active profile matches to the protected proxy runtime. On macOS, configured-host UDP/443 flows are captured only to force TCP/TLS fallback while DAM is protected; HTTP/3/QUIC payload inspection still requires a future adapter. Unsupported protocols or encrypted bodies still require protocol-specific adapters before DAM can inspect payloads.
 
 Failure behavior is a platform-neutral policy:
 
@@ -74,13 +74,17 @@ The bundled MVP profile lives at `crates/dam-net/profiles/llm-mvp.json`. Its act
 
 ```text
 openai-api       -> api.openai.com / HTTP
+openai-platform  -> platform.openai.com / HTTP
 anthropic-api    -> api.anthropic.com / HTTP
 claude-web       -> claude.ai / HTTP
 anthropic-console -> console.anthropic.com / HTTP
-chatgpt-codex    -> chatgpt.com, ab.chatgpt.com / WebSocket
+claude-mcp-proxy -> mcp-proxy.anthropic.com / HTTP
+claude-platform  -> platform.claude.com / HTTP
+chatgpt-web      -> chatgpt.com, ab.chatgpt.com / WebSocket
+chatgpt-legacy-web -> chat.openai.com / WebSocket
 ```
 
-Inbound HTTP response mutation is explicit per traffic app. `inbound.resolve_references` controls local restoration of existing DAM references, and `inbound.protect_sensitive_data` controls whether raw inbound response text is redetected/tokenized when no reference resolves. The bundled OpenAI API, Anthropic API, Claude Web, and Anthropic Console apps opt into raw inbound protection; the ChatGPT Codex app does not opt into HTTP inbound protection because its `chatgpt.com` bootstrap and web backend responses are not safe to rewrite generically. WebSocket text-frame protection is handled by the WebSocket adapter's per-connection protection snapshot.
+Outbound replacement is explicit per traffic app through `outbound.filter.default_action`; the bundled LLM profile defaults to `tokenize`, so detection creates reversible token-vault references without automatically creating Wallet rows. Inbound HTTP response mutation is also explicit per app. `inbound.resolve_references` controls local restoration of existing DAM references, and `inbound.protect_sensitive_data` controls whether raw inbound response text is redetected/redacted when no reference resolves. The bundled API, Claude web/platform, OpenAI platform, and Anthropic Console apps opt into raw inbound protection; the ChatGPT web apps only resolve references on HTTP responses because bootstrap and web backend responses are not safe to rewrite generically. WebSocket text-frame protection is handled by the WebSocket adapter's per-connection protection snapshot.
 
 `default_traffic_routes()` is now a compatibility view derived from the bundled traffic profile. New mediated services, including private OpenAI-compatible and Anthropic-compatible endpoints, must be added as traffic profile JSON app entries. User-authored profile create/import/export is parked; when it returns, new services should still be validated JSON profile data rather than provider-specific Rust code.
 
