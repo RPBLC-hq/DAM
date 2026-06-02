@@ -7,6 +7,7 @@ The adapter:
 - builds upstream URLs from a configured base URL plus the incoming request path/query;
 - strips hop-by-hop request/response headers and stale body integrity headers when bodies are transformed;
 - sends `Accept-Encoding: identity` so response transforms can safely inspect UTF-8 JSON, JSON-lines, SSE, and raw text bodies;
+- bounds upstream connection setup and idle response reads without imposing a short whole-request deadline, so long-running provider tasks can complete while stalled connections still fail;
 - optionally injects a configured target API key into a configured header/scheme;
 - runs response body transform hooks for non-streaming JSON/JSON-lines and `text/event-stream` responses.
 

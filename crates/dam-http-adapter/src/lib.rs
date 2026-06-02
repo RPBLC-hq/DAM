@@ -9,7 +9,8 @@ use futures_util::TryStreamExt;
 use reqwest::Url;
 use std::time::Duration;
 
-const UPSTREAM_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const UPSTREAM_READ_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, thiserror::Error)]
 pub enum HttpAdapterError {
@@ -29,6 +30,21 @@ pub enum HttpAdapterError {
 #[derive(Clone)]
 pub struct HttpAdapter {
     client: reqwest::Client,
+}
+
+#[derive(Clone, Copy)]
+struct HttpAdapterTimeouts {
+    connect_timeout: Duration,
+    read_timeout: Duration,
+}
+
+impl Default for HttpAdapterTimeouts {
+    fn default() -> Self {
+        Self {
+            connect_timeout: UPSTREAM_CONNECT_TIMEOUT,
+            read_timeout: UPSTREAM_READ_TIMEOUT,
+        }
+    }
 }
 
 pub struct ForwardRequest<'a> {
@@ -51,9 +67,14 @@ pub struct AuthInjection<'a> {
 
 impl HttpAdapter {
     pub fn new() -> Result<Self, HttpAdapterError> {
+        Self::with_timeouts(HttpAdapterTimeouts::default())
+    }
+
+    fn with_timeouts(timeouts: HttpAdapterTimeouts) -> Result<Self, HttpAdapterError> {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(UPSTREAM_REQUEST_TIMEOUT)
+            .connect_timeout(timeouts.connect_timeout)
+            .read_timeout(timeouts.read_timeout)
             .build()
             .map_err(|error| HttpAdapterError::Client(error.to_string()))?;
 

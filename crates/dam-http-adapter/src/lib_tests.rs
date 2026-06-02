@@ -10,6 +10,7 @@ use axum::{
 use futures_util::stream;
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
+use tokio::time::sleep;
 
 type CapturedHeaders = Arc<Mutex<Vec<(String, String)>>>;
 
@@ -99,6 +100,20 @@ async fn spawn_sse_upstream(seen_body: Arc<Mutex<Option<String>>>) -> String {
     .await
 }
 
+async fn spawn_delayed_response_upstream(delay: Duration) -> String {
+    async fn delayed(State(delay): State<Duration>) -> Response {
+        sleep(delay).await;
+        (StatusCode::OK, "delayed response").into_response()
+    }
+
+    spawn_app(
+        Router::new()
+            .route("/v1/responses", post(delayed))
+            .with_state(delay),
+    )
+    .await
+}
+
 async fn response_body(response: Response<Body>) -> String {
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
     String::from_utf8(bytes.to_vec()).unwrap()
@@ -121,6 +136,35 @@ fn response_integrity_headers_are_not_forwarded_after_body_transform() {
     assert!(should_skip_response_header("Content-Digest", &[]));
     assert!(should_skip_response_header("Repr-Digest", &[]));
     assert!(should_skip_response_header("Signature-Input", &[]));
+}
+
+#[tokio::test]
+async fn connect_timeout_is_not_a_total_request_deadline() {
+    let upstream = spawn_delayed_response_upstream(Duration::from_millis(150)).await;
+    let provider = HttpAdapter::with_timeouts(HttpAdapterTimeouts {
+        connect_timeout: Duration::from_millis(50),
+        read_timeout: Duration::from_secs(1),
+    })
+    .unwrap();
+
+    let response = provider
+        .forward(
+            ForwardRequest {
+                upstream: &upstream,
+                method: Method::POST,
+                uri: Uri::from_static("/v1/responses"),
+                headers: HeaderMap::new(),
+                body: Bytes::from_static(b"{}"),
+                target_api_key: None,
+                target_api_key_injection: None,
+                transform_streaming_response: false,
+            },
+            |body| body,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response_body(response).await, "delayed response");
 }
 
 #[tokio::test]
