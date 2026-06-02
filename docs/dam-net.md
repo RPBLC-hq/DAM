@@ -37,7 +37,7 @@ Current implementation status:
 
 On Linux and Windows, macOS-specific mutation commands return stable unsupported/planned JSON with an explicit-proxy fallback command. They must not report success or mutate state for a backend that is not implemented on the current platform.
 
-Protocol adapters are reported separately from capture. HTTP is implemented for the first bidirectional protected traffic, and the ChatGPT WebSocket MVP protects unfragmented client and server text frames on protected connections. gRPC, email, media/audio, and other chat protocols are profile-level adapter kinds with planned runtime support.
+Protocol adapters are reported separately from capture. HTTP is implemented for the first bidirectional protected traffic, including decoded JSON string-value protection for outbound JSON request bodies. The ChatGPT WebSocket MVP protects unfragmented client and server text frames on protected connections. Client-to-server WebSocket protection decodes JSON text frames before rewriting string values and keeps a bounded per-connection text buffer so adjacent JSON text-delta or raw text frames that split a sensitive value are tokenized before upstream. Server-to-client WebSocket reference restoration keeps a matching bounded buffer so adjacent JSON text-delta frames can complete and resolve one DAM reference without buffering the whole WebSocket stream. gRPC, email, media/audio, and other chat protocols are profile-level adapter kinds with planned runtime support.
 
 ## Full-Traffic Mediation
 

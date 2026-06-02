@@ -6,6 +6,8 @@ use std::sync::{Arc, Mutex};
 type CapturedHeaders = Arc<Mutex<Vec<(String, String)>>>;
 type CapturedBody = Arc<Mutex<Option<String>>>;
 type CapturedHeadersAndBody = (CapturedHeaders, CapturedBody);
+const PROBE_EMAIL: &str = "scrabb@jnjjj.com";
+const PROBE_EMAIL_MIDDLE_SPACED: &str = "scrabb@j njjj.com";
 
 fn proxy_config(upstream: String) -> dam_config::DamConfig {
     proxy_config_with_provider(upstream, "openai-compatible")
@@ -242,6 +244,369 @@ async fn websocket_response_does_not_tokenize_related_domains_from_request_conte
 }
 
 #[tokio::test]
+async fn websocket_outbound_probe_tokenizes_email_split_across_text_delta_frames() {
+    let config = proxy_config("https://chatgpt.com".to_string());
+    let state = build_state(config, None).unwrap();
+    let related_domains = Arc::new(RwLock::new(Vec::new()));
+    let mut client = Vec::new();
+    websocket::write_masked_frame(
+        &mut client,
+        &websocket::WebSocketFrame {
+            fin: true,
+            opcode: websocket::OPCODE_TEXT,
+            payload: br#"{"type":"input.delta","delta":"scrabb@j"}"#.to_vec(),
+        },
+    )
+    .await
+    .unwrap();
+    websocket::write_masked_frame(
+        &mut client,
+        &websocket::WebSocketFrame {
+            fin: true,
+            opcode: websocket::OPCODE_TEXT,
+            payload: br#"{"type":"input.delta","delta":"njjj.com echo this message"}"#.to_vec(),
+        },
+    )
+    .await
+    .unwrap();
+    websocket::write_masked_frame(&mut client, &websocket::WebSocketFrame::close(1000, ""))
+        .await
+        .unwrap();
+    let mut upstream = Vec::new();
+
+    let outcome = proxy_websocket_client_frames(
+        state.clone(),
+        "websocket-outbound-probe-test".to_string(),
+        &mut client.as_slice(),
+        &mut upstream,
+        related_domains.clone(),
+        websocket_protection(true, inbound_plan(true, false)),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome, WebSocketClientFrameOutcome::Completed);
+    let mut forwarded_frames = upstream.as_slice();
+    let first_frame = websocket::read_frame(&mut forwarded_frames)
+        .await
+        .unwrap()
+        .unwrap();
+    let second_frame = websocket::read_frame(&mut forwarded_frames)
+        .await
+        .unwrap()
+        .unwrap();
+    let first_delta = websocket_text_delta_from_frame(&first_frame)
+        .unwrap()
+        .unwrap()
+        .text;
+    let second_delta = websocket_text_delta_from_frame(&second_frame)
+        .unwrap()
+        .unwrap()
+        .text;
+    let forwarded_text = format!("{first_delta}{second_delta}");
+    assert!(!forwarded_text.contains(PROBE_EMAIL));
+    assert!(forwarded_text.contains("[email:"));
+
+    let provider_value = first_reference_or_probe_email(&forwarded_text);
+    let provider_response = serde_json::json!({
+        "verbatim": provider_value,
+        "middle_spaced": insert_middle_space(&provider_value)
+    })
+    .to_string();
+    let mut provider = Vec::new();
+    websocket::write_unmasked_frame(
+        &mut provider,
+        &websocket::WebSocketFrame {
+            fin: true,
+            opcode: websocket::OPCODE_TEXT,
+            payload: provider_response.into_bytes(),
+        },
+    )
+    .await
+    .unwrap();
+    websocket::write_unmasked_frame(&mut provider, &websocket::WebSocketFrame::close(1000, ""))
+        .await
+        .unwrap();
+    let mut visible = Vec::new();
+
+    proxy_websocket_upstream_frames(
+        state,
+        "websocket-outbound-probe-response-test".to_string(),
+        &mut provider.as_slice(),
+        &mut visible,
+        related_domains,
+        websocket_protection(true, inbound_plan(true, false)),
+    )
+    .await
+    .unwrap();
+
+    let frame = websocket::read_frame(&mut visible.as_slice())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_probe_response_proves_upstream_was_tokenized(&String::from_utf8(frame.payload).unwrap());
+}
+
+#[tokio::test]
+async fn websocket_outbound_probe_tokenizes_email_split_across_raw_text_frames() {
+    let config = proxy_config("https://chatgpt.com".to_string());
+    let state = build_state(config, None).unwrap();
+    let mut client = Vec::new();
+    websocket::write_masked_frame(
+        &mut client,
+        &websocket::WebSocketFrame {
+            fin: true,
+            opcode: websocket::OPCODE_TEXT,
+            payload: b"scrabb@j".to_vec(),
+        },
+    )
+    .await
+    .unwrap();
+    websocket::write_masked_frame(
+        &mut client,
+        &websocket::WebSocketFrame {
+            fin: true,
+            opcode: websocket::OPCODE_TEXT,
+            payload: b"njjj.com echo this message".to_vec(),
+        },
+    )
+    .await
+    .unwrap();
+    websocket::write_masked_frame(&mut client, &websocket::WebSocketFrame::close(1000, ""))
+        .await
+        .unwrap();
+    let mut upstream = Vec::new();
+
+    proxy_websocket_client_frames(
+        state,
+        "websocket-outbound-raw-probe-test".to_string(),
+        &mut client.as_slice(),
+        &mut upstream,
+        Arc::new(RwLock::new(Vec::new())),
+        websocket_protection(true, inbound_plan(true, false)),
+    )
+    .await
+    .unwrap();
+
+    let mut forwarded_frames = upstream.as_slice();
+    let first_frame = websocket::read_frame(&mut forwarded_frames)
+        .await
+        .unwrap()
+        .unwrap();
+    let second_frame = websocket::read_frame(&mut forwarded_frames)
+        .await
+        .unwrap()
+        .unwrap();
+    let forwarded_text = format!(
+        "{}{}",
+        String::from_utf8(first_frame.payload).unwrap(),
+        String::from_utf8(second_frame.payload).unwrap()
+    );
+    assert!(!forwarded_text.contains(PROBE_EMAIL));
+    assert!(forwarded_text.contains("[email:"));
+}
+
+#[tokio::test]
+async fn websocket_outbound_json_decodes_escaped_newline_before_tokenizing() {
+    let config = proxy_config("https://chatgpt.com".to_string());
+    let state = build_state(config, None).unwrap();
+    let payload = serde_json::json!({
+        "type": "conversation.item.create",
+        "item": {
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": format!("line\n{PROBE_EMAIL} echo this message")
+                }
+            ]
+        }
+    })
+    .to_string();
+    let mut client = Vec::new();
+    websocket::write_masked_frame(
+        &mut client,
+        &websocket::WebSocketFrame {
+            fin: true,
+            opcode: websocket::OPCODE_TEXT,
+            payload: payload.into_bytes(),
+        },
+    )
+    .await
+    .unwrap();
+    websocket::write_masked_frame(&mut client, &websocket::WebSocketFrame::close(1000, ""))
+        .await
+        .unwrap();
+    let mut upstream = Vec::new();
+
+    let outcome = proxy_websocket_client_frames(
+        state,
+        "websocket-json-escaped-newline-probe-test".to_string(),
+        &mut client.as_slice(),
+        &mut upstream,
+        Arc::new(RwLock::new(Vec::new())),
+        websocket_protection(true, inbound_plan(true, false)),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome, WebSocketClientFrameOutcome::Completed);
+    let mut forwarded_frames = upstream.as_slice();
+    let frame = websocket::read_frame(&mut forwarded_frames)
+        .await
+        .unwrap()
+        .unwrap();
+    let forwarded_body = String::from_utf8(frame.payload).unwrap();
+    let forwarded_json: serde_json::Value = serde_json::from_str(&forwarded_body).unwrap();
+    let forwarded_text = forwarded_json
+        .pointer("/item/content/0/text")
+        .and_then(serde_json::Value::as_str)
+        .unwrap();
+
+    assert!(!forwarded_text.contains(PROBE_EMAIL));
+    assert!(forwarded_text.contains("[email:"));
+    assert!(forwarded_text.starts_with("line\n[email:"));
+    assert!(!forwarded_body.contains(r"\[email:"));
+    assert!(!forwarded_body.contains("nscrabb@jnjjj.com"));
+}
+
+#[tokio::test]
+async fn websocket_response_resolves_references_split_across_text_delta_frames() {
+    let config = proxy_config("https://chatgpt.com".to_string());
+    let vault_path = config.vault.sqlite_path.clone();
+    let log_path = config.log.sqlite_path.clone();
+    let reference = dam_core::Reference::generate(dam_core::SensitiveType::Email);
+    dam_vault::Vault::open(&vault_path)
+        .unwrap()
+        .put(&reference.key(), "scrabb@jnjjj.com")
+        .unwrap();
+    let state = build_state(config, None).unwrap();
+    let display = reference.display();
+    let split_at = display.len() - 8;
+    let first = &display[..split_at];
+    let second = format!("{} echo this message", &display[split_at..]);
+    let mut upstream = Vec::new();
+    websocket::write_unmasked_frame(
+        &mut upstream,
+        &websocket::WebSocketFrame {
+            fin: true,
+            opcode: websocket::OPCODE_TEXT,
+            payload: format!(r#"{{"type":"response.output_text.delta","delta":"{first}"}}"#)
+                .into_bytes(),
+        },
+    )
+    .await
+    .unwrap();
+    websocket::write_unmasked_frame(
+        &mut upstream,
+        &websocket::WebSocketFrame {
+            fin: true,
+            opcode: websocket::OPCODE_TEXT,
+            payload: format!(r#"{{"type":"response.output_text.delta","delta":"{second}"}}"#)
+                .into_bytes(),
+        },
+    )
+    .await
+    .unwrap();
+    websocket::write_unmasked_frame(&mut upstream, &websocket::WebSocketFrame::close(1000, ""))
+        .await
+        .unwrap();
+    let mut client = Vec::new();
+
+    proxy_websocket_upstream_frames(
+        state,
+        "websocket-split-resolve-test".to_string(),
+        &mut upstream.as_slice(),
+        &mut client,
+        Arc::new(RwLock::new(Vec::new())),
+        websocket_protection(true, inbound_plan(true, false)),
+    )
+    .await
+    .unwrap();
+
+    let mut client_frames = client.as_slice();
+    let first_frame = websocket::read_frame(&mut client_frames)
+        .await
+        .unwrap()
+        .unwrap();
+    let second_frame = websocket::read_frame(&mut client_frames)
+        .await
+        .unwrap()
+        .unwrap();
+    let first_json: serde_json::Value = serde_json::from_slice(&first_frame.payload).unwrap();
+    let second_json: serde_json::Value = serde_json::from_slice(&second_frame.payload).unwrap();
+    let visible_text = format!(
+        "{}{}",
+        first_json
+            .get("delta")
+            .and_then(serde_json::Value::as_str)
+            .unwrap(),
+        second_json
+            .get("delta")
+            .and_then(serde_json::Value::as_str)
+            .unwrap()
+    );
+    assert_eq!(visible_text, "scrabb@jnjjj.com echo this message");
+    assert!(!String::from_utf8_lossy(&client).contains(&display));
+
+    let logs = dam_log::LogStore::open(log_path).unwrap().list().unwrap();
+    assert!(logs.iter().any(|entry| {
+        entry.event_type == "resolve"
+            && entry.action.as_deref() == Some("resolve_attempt")
+            && entry.message.contains("references=1 resolved=1")
+    }));
+    assert!(logs.iter().any(|entry| {
+        entry.event_type == "vault_read" && entry.action.as_deref() == Some("vault_read_succeeded")
+    }));
+}
+
+#[tokio::test]
+async fn websocket_response_does_not_redact_after_reference_resolution() {
+    let config = proxy_config("https://chatgpt.com".to_string());
+    let vault_path = config.vault.sqlite_path.clone();
+    let reference = dam_core::Reference::generate(dam_core::SensitiveType::Email);
+    dam_vault::Vault::open(&vault_path)
+        .unwrap()
+        .put(&reference.key(), "scrabb@jnjjj.com")
+        .unwrap();
+    let state = build_state(config, None).unwrap();
+    let mut upstream = Vec::new();
+    websocket::write_unmasked_frame(
+        &mut upstream,
+        &websocket::WebSocketFrame {
+            fin: true,
+            opcode: websocket::OPCODE_TEXT,
+            payload: format!(r#"{{"content":"{}"}}"#, reference.display()).into_bytes(),
+        },
+    )
+    .await
+    .unwrap();
+    websocket::write_unmasked_frame(&mut upstream, &websocket::WebSocketFrame::close(1000, ""))
+        .await
+        .unwrap();
+    let mut client = Vec::new();
+
+    proxy_websocket_upstream_frames(
+        state,
+        "websocket-resolve-before-protect-test".to_string(),
+        &mut upstream.as_slice(),
+        &mut client,
+        Arc::new(RwLock::new(Vec::new())),
+        websocket_protection(true, inbound_plan(true, true)),
+    )
+    .await
+    .unwrap();
+
+    let frame = websocket::read_frame(&mut client.as_slice())
+        .await
+        .unwrap()
+        .unwrap();
+    let body = String::from_utf8(frame.payload).unwrap();
+    assert!(body.contains("scrabb@jnjjj.com"));
+    assert!(!body.contains("[email]"));
+    assert!(!body.contains("[email:"));
+}
+
+#[tokio::test]
 async fn websocket_response_respects_connection_protection_snapshot() {
     let state = build_state(proxy_config("https://chatgpt.com".to_string()), None).unwrap();
     let mut upstream = Vec::new();
@@ -425,6 +790,54 @@ async fn spawn_capture_echo_upstream(seen_body: Arc<Mutex<Option<String>>>) -> S
             .with_state(seen_body),
     )
     .await
+}
+
+async fn spawn_value_probe_upstream(
+    seen_body: Arc<Mutex<Option<String>>>,
+    path: &'static str,
+) -> String {
+    async fn probe(State(seen_body): State<Arc<Mutex<Option<String>>>>, body: Bytes) -> Response {
+        let body_text = String::from_utf8(body.to_vec()).expect("upstream body should be utf-8");
+        *seen_body.lock().unwrap() = Some(body_text.clone());
+        let value = first_reference_or_probe_email(&body_text);
+        let response = serde_json::json!({
+            "verbatim": value,
+            "middle_spaced": insert_middle_space(&value)
+        });
+
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(response.to_string()))
+            .unwrap()
+    }
+
+    spawn_app(Router::new().route(path, post(probe)).with_state(seen_body)).await
+}
+
+fn first_reference_or_probe_email(input: &str) -> String {
+    dam_core::find_references(input)
+        .into_iter()
+        .next()
+        .map(|match_| match_.reference.display())
+        .or_else(|| input.contains(PROBE_EMAIL).then(|| PROBE_EMAIL.to_string()))
+        .unwrap_or_else(|| "missing-value".to_string())
+}
+
+fn insert_middle_space(value: &str) -> String {
+    let midpoint = value.len() / 2;
+    format!("{} {}", &value[..midpoint], &value[midpoint..])
+}
+
+fn assert_probe_response_proves_upstream_was_tokenized(response_body: &str) {
+    let response: serde_json::Value = serde_json::from_str(response_body).unwrap();
+    assert_eq!(response["verbatim"].as_str(), Some(PROBE_EMAIL));
+    let middle_spaced = response["middle_spaced"].as_str().unwrap();
+    assert_ne!(middle_spaced, PROBE_EMAIL_MIDDLE_SPACED);
+    assert!(
+        middle_spaced.contains("[email"),
+        "middle-spaced provider echo should be derived from the token, got {middle_spaced}"
+    );
 }
 
 async fn spawn_raw_sensitive_response_upstream(seen_body: Arc<Mutex<Option<String>>>) -> String {
@@ -1122,6 +1535,67 @@ async fn transparent_connect_uses_configured_route_registry() {
 }
 
 #[tokio::test]
+async fn proxy_value_probe_confirms_http_upstream_receives_token_not_raw_value() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_value_probe_upstream(upstream_seen.clone(), "/v1/chat/completions").await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body = format!(r#"{{"messages":[{{"content":"{PROBE_EMAIL} echo this message"}}]}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_EMAIL));
+    assert!(upstream_body.contains("[email:"));
+    assert_probe_response_proves_upstream_was_tokenized(&response_body);
+}
+
+#[tokio::test]
+async fn proxy_json_request_decodes_escaped_newline_before_tokenizing() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_value_probe_upstream(upstream_seen.clone(), "/v1/chat/completions").await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+    let body = serde_json::json!({
+        "messages": [
+            {
+                "content": format!("line\n{PROBE_EMAIL} echo this message")
+            }
+        ]
+    })
+    .to_string();
+
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    let upstream_json: serde_json::Value = serde_json::from_str(&upstream_body).unwrap();
+    let upstream_text = upstream_json
+        .pointer("/messages/0/content")
+        .and_then(serde_json::Value::as_str)
+        .unwrap();
+    assert!(!upstream_text.contains(PROBE_EMAIL));
+    assert!(upstream_text.contains("[email:"));
+    assert!(upstream_text.starts_with("line\n[email:"));
+    assert!(!upstream_body.contains(r"\[email:"));
+    assert!(!upstream_body.contains("nscrabb@jnjjj.com"));
+    assert_probe_response_proves_upstream_was_tokenized(&response_body);
+}
+
+#[tokio::test]
 async fn transparent_connect_tls_http1_requests_are_protected() {
     use tokio_rustls::TlsConnector;
     use tokio_rustls::rustls::{
@@ -1206,6 +1680,89 @@ async fn transparent_connect_tls_http1_requests_are_protected() {
     let vault = dam_vault::Vault::open(vault_path).unwrap();
     assert_eq!(vault.count().unwrap(), 1);
     assert_eq!(vault.wallet_count().unwrap(), 0);
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn proxy_value_probe_confirms_https_interception_forwards_token_not_raw_value() {
+    use tokio_rustls::TlsConnector;
+    use tokio_rustls::rustls::{
+        ClientConfig, RootCertStore,
+        pki_types::{CertificateDer, ServerName},
+    };
+
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_value_probe_upstream(upstream_seen.clone(), "/v1/chat/completions").await;
+    let mut config = proxy_config(upstream);
+    config.proxy.targets[0].name = "openai".to_string();
+
+    let dir = tempfile::tempdir().unwrap();
+    let artifact = dam_trust::generate_local_ca_artifact_at(dir.path(), 1).unwrap();
+    let mut record = artifact.record.clone();
+    record.installed_at_unix = Some(2);
+    let trust = dam_trust::TrustState {
+        mode: dam_trust::TrustMode::LocalCa,
+        local_ca: Some(record),
+        ..dam_trust::TrustState::default()
+    };
+    let interception = TransparentInterceptionConfig {
+        state_dir: dir.path().to_path_buf(),
+        network_mode: dam_net::CaptureMode::SystemProxy,
+        system_proxy_active: true,
+        tun_active: false,
+        routes: dam_net::default_traffic_routes(),
+        trust,
+        user_consented: true,
+        protection_control_path: None,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        serve_transparent_with_shutdown(listener, config, interception, async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+        .unwrap();
+    });
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    tokio::io::AsyncWriteExt::write_all(
+        &mut stream,
+        b"CONNECT api.openai.com:443 HTTP/1.1\r\nHost: api.openai.com:443\r\n\r\n",
+    )
+    .await
+    .unwrap();
+    let connect_response = read_until_headers(&mut stream).await;
+    assert!(String::from_utf8_lossy(&connect_response).starts_with("HTTP/1.1 200"));
+
+    let mut roots = RootCertStore::empty();
+    let ca_der = dam_trust::issue_local_ca_leaf_certificate(dir.path(), "api.openai.com")
+        .unwrap()
+        .ca_certificate_der;
+    roots.add(CertificateDer::from(ca_der)).unwrap();
+    let client_config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(client_config));
+    let server_name = ServerName::try_from("api.openai.com".to_string()).unwrap();
+    let mut tls = connector.connect(server_name, stream).await.unwrap();
+
+    let body = format!(r#"{{"input":"{PROBE_EMAIL} echo this message"}}"#);
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: api.openai.com\r\nAuthorization: Bearer local\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    tokio::io::AsyncWriteExt::write_all(&mut tls, request.as_bytes())
+        .await
+        .unwrap();
+    let response = read_intercepted_test_response(&mut tls).await;
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_EMAIL));
+    assert!(upstream_body.contains("[email:"));
+    let response_body = response.split("\r\n\r\n").nth(1).unwrap_or_default();
+    assert_probe_response_proves_upstream_was_tokenized(response_body);
     let _ = shutdown_tx.send(());
 }
 

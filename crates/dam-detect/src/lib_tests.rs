@@ -37,6 +37,13 @@ fn detects_email_with_spaces_around_domain_dot() {
 }
 
 #[test]
+fn does_not_detect_package_version_strings_as_email() {
+    let detections = detect("packages dam@0.1.0 and dam-web-ui@0.1.0");
+
+    assert!(detections.is_empty());
+}
+
+#[test]
 fn detects_email_without_absorbing_following_sentence() {
     let detections = detect("email alice@example.com. What domain?");
 

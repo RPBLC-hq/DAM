@@ -40,6 +40,9 @@ use providers::ProviderAdapters;
 
 const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 const MAX_INTERCEPTED_HEADER_BYTES: usize = 64 * 1024;
+const WEBSOCKET_INBOUND_RESOLVE_MAX_PENDING_BYTES: usize = 4 * 1024;
+const WEBSOCKET_INBOUND_RESOLVE_MAX_PENDING_FRAMES: usize = 64;
+const WEBSOCKET_REFERENCE_LOOKBACK_BYTES: usize = 40;
 const PASSTHROUGH_RESUME_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -998,19 +1001,12 @@ async fn proxy_http_request(
         }
     };
 
-    let protected = match dam_pipeline::protect_text(
+    let protected = match protect_outbound_body_text(
         body_text,
+        &state,
         &operation_id,
         state.outbound_policy_for_route(route),
-        state.vault.as_ref(),
-        dam_pipeline::ProtectTextContext {
-            reference_vault: Some(state.vault.as_ref()),
-            consent_store: state.consent_store.as_deref(),
-            consent_scopes: consent_scopes.as_slice(),
-            event_sink: state.log_sink.as_deref(),
-            ..dam_pipeline::ProtectTextContext::default()
-        },
-        state.replacement_options,
+        consent_scopes.as_slice(),
     ) {
         Ok(result) => result,
         Err(_) => {
@@ -1030,14 +1026,14 @@ async fn proxy_http_request(
         "request_protection",
         format!(
             "request protection detections={} replacements={} tokenized={} blocked={}",
-            protected.detections.len(),
-            protected.plan.replacements.len(),
-            protected.plan.tokenized_count(),
-            protected.plan.blocked_count()
+            protected.summary.detections.len(),
+            protected.summary.replacement_count,
+            protected.summary.tokenized_count,
+            protected.summary.blocked_count
         ),
     );
 
-    if protected.is_blocked() {
+    if protected.output.is_none() {
         record_proxy_event(
             &state,
             &operation_id,
@@ -1063,7 +1059,9 @@ async fn proxy_http_request(
             "request protection did not produce output",
         );
     };
-    let related_domains = Arc::new(related_domains_from_detections(&protected.detections));
+    let related_domains = Arc::new(related_domains_from_detections(
+        &protected.summary.detections,
+    ));
     let body_changed = protected_body.as_str() != body_text;
     let mut protected_headers = headers;
     if body_changed {
@@ -1467,6 +1465,70 @@ struct WebSocketProtection {
     consent_scopes: Arc<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WebSocketInboundResolveMode {
+    JsonTextDelta,
+    RawText,
+}
+
+#[derive(Debug, Default)]
+struct WebSocketInboundResolveBuffer {
+    mode: Option<WebSocketInboundResolveMode>,
+    pending: Vec<websocket::WebSocketFrame>,
+}
+
+#[derive(Debug, Default)]
+struct WebSocketOutboundProtectBuffer {
+    mode: Option<WebSocketInboundResolveMode>,
+    pending: Vec<websocket::WebSocketFrame>,
+}
+
+#[derive(Debug)]
+struct WebSocketInboundFrame {
+    frame: websocket::WebSocketFrame,
+    skip_inbound_protection: bool,
+}
+
+#[derive(Debug)]
+enum WebSocketOutboundFrameProtection {
+    Ready(Vec<websocket::WebSocketFrame>),
+    PolicyBlocked,
+}
+
+#[derive(Debug, Default)]
+struct OutboundProtectionSummary {
+    detections: Vec<dam_core::Detection>,
+    replacement_count: usize,
+    tokenized_count: usize,
+    blocked_count: usize,
+}
+
+#[derive(Debug)]
+struct OutboundProtectionResult {
+    output: Option<String>,
+    summary: OutboundProtectionSummary,
+}
+
+#[derive(Debug, Clone)]
+enum WebSocketTextDeltaPath {
+    DeltaText,
+    ChoiceDeltaContent(usize),
+    ResponseDelta,
+    TopLevelCompletion,
+    TopLevelText,
+    TopLevelContent,
+    ContentText(usize),
+    MessageContent,
+    MessageContentText(usize),
+}
+
+#[derive(Debug, Clone)]
+struct WebSocketTextDelta {
+    value: serde_json::Value,
+    path: WebSocketTextDeltaPath,
+    text: String,
+}
+
 async fn proxy_websocket_client_frames<R, W>(
     state: Arc<ProxyState>,
     operation_id: String,
@@ -1479,8 +1541,9 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    let mut outbound_buffer = WebSocketOutboundProtectBuffer::default();
     loop {
-        let Some(mut frame) = (match websocket::read_frame(reader).await {
+        let Some(frame) = (match websocket::read_frame(reader).await {
             Ok(frame) => frame,
             Err(error) if protection.enabled && websocket_frame_error_is_unsupported(&error) => {
                 record_proxy_event(
@@ -1495,51 +1558,50 @@ where
             }
             Err(error) => return Err(error),
         }) else {
+            match outbound_buffer.finish(&state, &operation_id, &related_domains, &protection)? {
+                WebSocketOutboundFrameProtection::Ready(frames) => {
+                    for frame in frames {
+                        websocket::write_masked_frame(writer, &frame).await?;
+                    }
+                }
+                WebSocketOutboundFrameProtection::PolicyBlocked => {
+                    return Ok(WebSocketClientFrameOutcome::PolicyBlocked);
+                }
+            }
             return Ok(WebSocketClientFrameOutcome::Completed);
         };
         if frame.is_unfragmented_text() && protection.enabled {
-            let text = std::str::from_utf8(&frame.payload)
-                .map_err(|_| "WebSocket text frame is not utf-8".to_string())?;
-            let protected = dam_pipeline::protect_text(
-                text,
-                &operation_id,
-                state.outbound_policy_for_target(&protection.target_name),
-                state.vault.as_ref(),
-                dam_pipeline::ProtectTextContext {
-                    reference_vault: Some(state.vault.as_ref()),
-                    consent_store: state.consent_store.as_deref(),
-                    consent_scopes: protection.consent_scopes.as_slice(),
-                    event_sink: state.log_sink.as_deref(),
-                    ..dam_pipeline::ProtectTextContext::default()
-                },
-                state.replacement_options,
-            )
-            .map_err(|_| "WebSocket request frame protection failed".to_string())?;
-            if protected.is_blocked() {
-                record_proxy_event(
-                    &state,
-                    &operation_id,
-                    LogLevel::Warn,
-                    LogEventType::ProxyFailure,
-                    "blocked",
-                    "WebSocket request frame blocked by policy",
-                );
-                return Ok(WebSocketClientFrameOutcome::PolicyBlocked);
-            }
-            remember_related_domains(&related_domains, &protected.detections)?;
-            let Some(output) = protected.output else {
-                return Err("WebSocket request frame protection did not produce output".to_string());
-            };
-            frame.payload = output.into_bytes();
-            record_proxy_event(
+            match outbound_buffer.push(
+                frame,
                 &state,
                 &operation_id,
-                LogLevel::Info,
-                LogEventType::ProxyForward,
-                "protected",
-                "WebSocket request text frame protected",
-            );
-        } else if protection.enabled && websocket_frame_requires_body_protection(&frame) {
+                &related_domains,
+                &protection,
+            )? {
+                WebSocketOutboundFrameProtection::Ready(frames) => {
+                    for frame in frames {
+                        websocket::write_masked_frame(writer, &frame).await?;
+                    }
+                }
+                WebSocketOutboundFrameProtection::PolicyBlocked => {
+                    return Ok(WebSocketClientFrameOutcome::PolicyBlocked);
+                }
+            }
+            continue;
+        }
+
+        match outbound_buffer.finish(&state, &operation_id, &related_domains, &protection)? {
+            WebSocketOutboundFrameProtection::Ready(frames) => {
+                for frame in frames {
+                    websocket::write_masked_frame(writer, &frame).await?;
+                }
+            }
+            WebSocketOutboundFrameProtection::PolicyBlocked => {
+                return Ok(WebSocketClientFrameOutcome::PolicyBlocked);
+            }
+        }
+
+        if protection.enabled && websocket_frame_requires_body_protection(&frame) {
             record_proxy_event(
                 &state,
                 &operation_id,
@@ -1558,6 +1620,904 @@ where
     }
 }
 
+impl WebSocketOutboundProtectBuffer {
+    fn push(
+        &mut self,
+        frame: websocket::WebSocketFrame,
+        state: &ProxyState,
+        operation_id: &str,
+        related_domains: &Arc<RwLock<Vec<String>>>,
+        protection: &WebSocketProtection,
+    ) -> Result<WebSocketOutboundFrameProtection, String> {
+        let mode = websocket_inbound_resolve_mode(&frame)?;
+        if self.pending.is_empty() {
+            let text = websocket_frame_text_for_mode(&frame, mode)?;
+            if has_possible_incomplete_sensitive_suffix(&text) {
+                self.mode = Some(mode);
+                self.pending.push(frame);
+                return Ok(WebSocketOutboundFrameProtection::Ready(Vec::new()));
+            }
+
+            return protect_single_websocket_client_frame(
+                frame,
+                state,
+                operation_id,
+                related_domains,
+                protection,
+            );
+        }
+
+        if self.mode != Some(mode) {
+            let mut ready = match self.finish(state, operation_id, related_domains, protection)? {
+                WebSocketOutboundFrameProtection::Ready(frames) => frames,
+                WebSocketOutboundFrameProtection::PolicyBlocked => {
+                    return Ok(WebSocketOutboundFrameProtection::PolicyBlocked);
+                }
+            };
+            match self.push(frame, state, operation_id, related_domains, protection)? {
+                WebSocketOutboundFrameProtection::Ready(frames) => {
+                    ready.extend(frames);
+                    return Ok(WebSocketOutboundFrameProtection::Ready(ready));
+                }
+                WebSocketOutboundFrameProtection::PolicyBlocked => {
+                    return Ok(WebSocketOutboundFrameProtection::PolicyBlocked);
+                }
+            }
+        }
+
+        self.pending.push(frame);
+        self.emit_ready(state, operation_id, related_domains, protection)
+    }
+
+    fn finish(
+        &mut self,
+        state: &ProxyState,
+        operation_id: &str,
+        related_domains: &Arc<RwLock<Vec<String>>>,
+        protection: &WebSocketProtection,
+    ) -> Result<WebSocketOutboundFrameProtection, String> {
+        let Some(mode) = self.mode.take() else {
+            return Ok(WebSocketOutboundFrameProtection::Ready(Vec::new()));
+        };
+        let frames = std::mem::take(&mut self.pending);
+        protect_websocket_client_frames(
+            frames,
+            mode,
+            state,
+            operation_id,
+            related_domains,
+            protection,
+        )
+    }
+
+    fn emit_ready(
+        &mut self,
+        state: &ProxyState,
+        operation_id: &str,
+        related_domains: &Arc<RwLock<Vec<String>>>,
+        protection: &WebSocketProtection,
+    ) -> Result<WebSocketOutboundFrameProtection, String> {
+        let Some(mode) = self.mode else {
+            return Ok(WebSocketOutboundFrameProtection::Ready(Vec::new()));
+        };
+        let combined = combined_websocket_frame_text(&self.pending, mode)?;
+        let pending_bytes = self
+            .pending
+            .iter()
+            .map(|frame| frame.payload.len())
+            .sum::<usize>();
+        if has_possible_incomplete_sensitive_suffix(&combined)
+            && self.pending.len() <= WEBSOCKET_INBOUND_RESOLVE_MAX_PENDING_FRAMES
+            && pending_bytes <= WEBSOCKET_INBOUND_RESOLVE_MAX_PENDING_BYTES
+        {
+            return Ok(WebSocketOutboundFrameProtection::Ready(Vec::new()));
+        }
+
+        self.finish(state, operation_id, related_domains, protection)
+    }
+}
+
+fn protect_single_websocket_client_frame(
+    mut frame: websocket::WebSocketFrame,
+    state: &ProxyState,
+    operation_id: &str,
+    related_domains: &Arc<RwLock<Vec<String>>>,
+    protection: &WebSocketProtection,
+) -> Result<WebSocketOutboundFrameProtection, String> {
+    let text = std::str::from_utf8(&frame.payload)
+        .map_err(|_| "WebSocket text frame is not utf-8".to_string())?;
+    let protection_result =
+        protect_websocket_client_text(text, state, operation_id, related_domains, protection)?;
+    match protection_result {
+        Some(output) => {
+            frame.payload = output.into_bytes();
+            Ok(WebSocketOutboundFrameProtection::Ready(vec![frame]))
+        }
+        None => Ok(WebSocketOutboundFrameProtection::PolicyBlocked),
+    }
+}
+
+fn protect_websocket_client_frames(
+    frames: Vec<websocket::WebSocketFrame>,
+    mode: WebSocketInboundResolveMode,
+    state: &ProxyState,
+    operation_id: &str,
+    related_domains: &Arc<RwLock<Vec<String>>>,
+    protection: &WebSocketProtection,
+) -> Result<WebSocketOutboundFrameProtection, String> {
+    match mode {
+        WebSocketInboundResolveMode::JsonTextDelta => protect_websocket_client_json_text_frames(
+            frames,
+            state,
+            operation_id,
+            related_domains,
+            protection,
+        ),
+        WebSocketInboundResolveMode::RawText => protect_websocket_client_raw_text_frames(
+            frames,
+            state,
+            operation_id,
+            related_domains,
+            protection,
+        ),
+    }
+}
+
+fn protect_websocket_client_json_text_frames(
+    mut frames: Vec<websocket::WebSocketFrame>,
+    state: &ProxyState,
+    operation_id: &str,
+    related_domains: &Arc<RwLock<Vec<String>>>,
+    protection: &WebSocketProtection,
+) -> Result<WebSocketOutboundFrameProtection, String> {
+    let mut deltas = Vec::with_capacity(frames.len());
+    let mut combined = String::new();
+    for frame in &frames {
+        let Some(delta) = websocket_text_delta_from_frame(frame)? else {
+            return protect_websocket_client_raw_text_frames(
+                frames,
+                state,
+                operation_id,
+                related_domains,
+                protection,
+            );
+        };
+        combined.push_str(&delta.text);
+        deltas.push(delta);
+    }
+
+    let protection_result =
+        protect_websocket_client_text(&combined, state, operation_id, related_domains, protection)?;
+    let Some(output) = protection_result else {
+        return Ok(WebSocketOutboundFrameProtection::PolicyBlocked);
+    };
+
+    for (index, frame) in frames.iter_mut().enumerate() {
+        let replacement = if index == 0 { output.as_str() } else { "" };
+        let Some(delta) = deltas.get_mut(index) else {
+            return Err("WebSocket request text-delta frame is missing".to_string());
+        };
+        if !set_websocket_text_delta(&mut delta.value, &delta.path, replacement) {
+            return Err("WebSocket request text-delta frame could not be rewritten".to_string());
+        }
+        frame.payload = serde_json::to_vec(&delta.value)
+            .map_err(|error| format!("failed to serialize WebSocket text-delta JSON: {error}"))?;
+    }
+
+    Ok(WebSocketOutboundFrameProtection::Ready(frames))
+}
+
+fn protect_websocket_client_raw_text_frames(
+    mut frames: Vec<websocket::WebSocketFrame>,
+    state: &ProxyState,
+    operation_id: &str,
+    related_domains: &Arc<RwLock<Vec<String>>>,
+    protection: &WebSocketProtection,
+) -> Result<WebSocketOutboundFrameProtection, String> {
+    let combined = combined_websocket_frame_text(&frames, WebSocketInboundResolveMode::RawText)?;
+    let protection_result =
+        protect_websocket_client_text(&combined, state, operation_id, related_domains, protection)?;
+    let Some(output) = protection_result else {
+        return Ok(WebSocketOutboundFrameProtection::PolicyBlocked);
+    };
+
+    if let Some(first) = frames.first_mut() {
+        first.payload = output.into_bytes();
+    }
+    for frame in frames.iter_mut().skip(1) {
+        frame.payload.clear();
+    }
+
+    Ok(WebSocketOutboundFrameProtection::Ready(frames))
+}
+
+impl OutboundProtectionSummary {
+    fn extend(&mut self, other: OutboundProtectionSummary) {
+        self.detections.extend(other.detections);
+        self.replacement_count += other.replacement_count;
+        self.tokenized_count += other.tokenized_count;
+        self.blocked_count += other.blocked_count;
+    }
+}
+
+fn protect_outbound_body_text(
+    text: &str,
+    state: &ProxyState,
+    operation_id: &str,
+    policy: &dyn dam_policy::PolicyEngine,
+    consent_scopes: &[String],
+) -> Result<OutboundProtectionResult, String> {
+    if let Some(protected) =
+        protect_outbound_json_string_values(text, state, operation_id, policy, consent_scopes)?
+    {
+        return Ok(protected);
+    }
+
+    protect_outbound_plain_text(text, state, operation_id, policy, consent_scopes)
+}
+
+fn protect_outbound_json_string_values(
+    text: &str,
+    state: &ProxyState,
+    operation_id: &str,
+    policy: &dyn dam_policy::PolicyEngine,
+    consent_scopes: &[String],
+) -> Result<Option<OutboundProtectionResult>, String> {
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Ok(None);
+    };
+
+    let mut summary = OutboundProtectionSummary::default();
+    let mut blocked = false;
+    let changed = protect_json_string_values(
+        &mut value,
+        state,
+        operation_id,
+        policy,
+        consent_scopes,
+        &mut summary,
+        &mut blocked,
+    )?;
+    if blocked {
+        return Ok(Some(OutboundProtectionResult {
+            output: None,
+            summary,
+        }));
+    }
+
+    let output = if changed {
+        serde_json::to_string(&value)
+            .map_err(|error| format!("failed to serialize protected JSON body: {error}"))?
+    } else {
+        text.to_string()
+    };
+    Ok(Some(OutboundProtectionResult {
+        output: Some(output),
+        summary,
+    }))
+}
+
+fn protect_json_string_values(
+    value: &mut serde_json::Value,
+    state: &ProxyState,
+    operation_id: &str,
+    policy: &dyn dam_policy::PolicyEngine,
+    consent_scopes: &[String],
+    summary: &mut OutboundProtectionSummary,
+    blocked: &mut bool,
+) -> Result<bool, String> {
+    if *blocked {
+        return Ok(false);
+    }
+
+    match value {
+        serde_json::Value::String(text) => {
+            let original = text.clone();
+            let protected = protect_outbound_plain_text(
+                &original,
+                state,
+                operation_id,
+                policy,
+                consent_scopes,
+            )?;
+            summary.extend(protected.summary);
+            let Some(output) = protected.output else {
+                *blocked = true;
+                return Ok(false);
+            };
+            if output == original {
+                return Ok(false);
+            }
+
+            *text = output;
+            Ok(true)
+        }
+        serde_json::Value::Array(values) => {
+            let mut changed = false;
+            for value in values {
+                changed |= protect_json_string_values(
+                    value,
+                    state,
+                    operation_id,
+                    policy,
+                    consent_scopes,
+                    summary,
+                    blocked,
+                )?;
+                if *blocked {
+                    break;
+                }
+            }
+            Ok(changed)
+        }
+        serde_json::Value::Object(values) => {
+            let mut changed = false;
+            for value in values.values_mut() {
+                changed |= protect_json_string_values(
+                    value,
+                    state,
+                    operation_id,
+                    policy,
+                    consent_scopes,
+                    summary,
+                    blocked,
+                )?;
+                if *blocked {
+                    break;
+                }
+            }
+            Ok(changed)
+        }
+        _ => Ok(false),
+    }
+}
+
+fn protect_outbound_plain_text(
+    text: &str,
+    state: &ProxyState,
+    operation_id: &str,
+    policy: &dyn dam_policy::PolicyEngine,
+    consent_scopes: &[String],
+) -> Result<OutboundProtectionResult, String> {
+    let protected = dam_pipeline::protect_text(
+        text,
+        operation_id,
+        policy,
+        state.vault.as_ref(),
+        dam_pipeline::ProtectTextContext {
+            reference_vault: Some(state.vault.as_ref()),
+            consent_store: state.consent_store.as_deref(),
+            consent_scopes,
+            event_sink: state.log_sink.as_deref(),
+            ..dam_pipeline::ProtectTextContext::default()
+        },
+        state.replacement_options,
+    )
+    .map_err(|_| "outbound text protection failed".to_string())?;
+    let blocked = protected.is_blocked();
+    let summary = OutboundProtectionSummary {
+        detections: protected.detections,
+        replacement_count: protected.plan.replacements.len(),
+        tokenized_count: protected.plan.tokenized_count(),
+        blocked_count: protected.plan.blocked_count(),
+    };
+    if blocked {
+        return Ok(OutboundProtectionResult {
+            output: None,
+            summary,
+        });
+    }
+
+    let output = protected
+        .output
+        .ok_or_else(|| "outbound text protection did not produce output".to_string())?;
+    Ok(OutboundProtectionResult {
+        output: Some(output),
+        summary,
+    })
+}
+
+fn protect_websocket_client_text(
+    text: &str,
+    state: &ProxyState,
+    operation_id: &str,
+    related_domains: &Arc<RwLock<Vec<String>>>,
+    protection: &WebSocketProtection,
+) -> Result<Option<String>, String> {
+    let protected = protect_outbound_body_text(
+        text,
+        state,
+        operation_id,
+        state.outbound_policy_for_target(&protection.target_name),
+        protection.consent_scopes.as_slice(),
+    )
+    .map_err(|_| "WebSocket request frame protection failed".to_string())?;
+    if protected.output.is_none() {
+        record_proxy_event(
+            state,
+            operation_id,
+            LogLevel::Warn,
+            LogEventType::ProxyFailure,
+            "blocked",
+            "WebSocket request frame blocked by policy",
+        );
+        return Ok(None);
+    }
+    remember_related_domains(related_domains, &protected.summary.detections)?;
+    let Some(output) = protected.output else {
+        return Err("WebSocket request frame protection did not produce output".to_string());
+    };
+    record_proxy_event(
+        state,
+        operation_id,
+        LogLevel::Info,
+        LogEventType::ProxyForward,
+        "protected",
+        "WebSocket request text frame protected",
+    );
+    Ok(Some(output))
+}
+
+impl WebSocketInboundResolveBuffer {
+    fn push(
+        &mut self,
+        frame: websocket::WebSocketFrame,
+        state: &ProxyState,
+        operation_id: &str,
+    ) -> Result<Vec<WebSocketInboundFrame>, String> {
+        let mode = websocket_inbound_resolve_mode(&frame)?;
+        if self.pending.is_empty() {
+            let text = websocket_frame_text_for_mode(&frame, mode)?;
+            if has_possible_incomplete_reference_suffix(&text) {
+                self.mode = Some(mode);
+                self.pending.push(frame);
+                return Ok(Vec::new());
+            }
+
+            return resolve_websocket_inbound_frames(vec![frame], mode, state, operation_id);
+        }
+
+        if self.mode != Some(mode) {
+            let mut ready = self.finish(state, operation_id)?;
+            ready.extend(self.push(frame, state, operation_id)?);
+            return Ok(ready);
+        }
+
+        self.pending.push(frame);
+        self.emit_ready(state, operation_id)
+    }
+
+    fn finish(
+        &mut self,
+        state: &ProxyState,
+        operation_id: &str,
+    ) -> Result<Vec<WebSocketInboundFrame>, String> {
+        let Some(mode) = self.mode.take() else {
+            return Ok(Vec::new());
+        };
+        let frames = std::mem::take(&mut self.pending);
+        resolve_websocket_inbound_frames(frames, mode, state, operation_id)
+    }
+
+    fn emit_ready(
+        &mut self,
+        state: &ProxyState,
+        operation_id: &str,
+    ) -> Result<Vec<WebSocketInboundFrame>, String> {
+        let Some(mode) = self.mode else {
+            return Ok(Vec::new());
+        };
+        let combined = combined_websocket_frame_text(&self.pending, mode)?;
+        let pending_bytes = self
+            .pending
+            .iter()
+            .map(|frame| frame.payload.len())
+            .sum::<usize>();
+        if has_possible_incomplete_reference_suffix(&combined)
+            && self.pending.len() <= WEBSOCKET_INBOUND_RESOLVE_MAX_PENDING_FRAMES
+            && pending_bytes <= WEBSOCKET_INBOUND_RESOLVE_MAX_PENDING_BYTES
+        {
+            return Ok(Vec::new());
+        }
+
+        self.finish(state, operation_id)
+    }
+}
+
+fn websocket_inbound_resolve_mode(
+    frame: &websocket::WebSocketFrame,
+) -> Result<WebSocketInboundResolveMode, String> {
+    std::str::from_utf8(&frame.payload)
+        .map_err(|_| "WebSocket response text frame is not utf-8".to_string())?;
+    if websocket_text_delta_from_frame(frame)?.is_some() {
+        Ok(WebSocketInboundResolveMode::JsonTextDelta)
+    } else {
+        Ok(WebSocketInboundResolveMode::RawText)
+    }
+}
+
+fn websocket_frame_text_for_mode(
+    frame: &websocket::WebSocketFrame,
+    mode: WebSocketInboundResolveMode,
+) -> Result<String, String> {
+    match mode {
+        WebSocketInboundResolveMode::JsonTextDelta => websocket_text_delta_from_frame(frame)?
+            .map(|delta| delta.text)
+            .ok_or_else(|| "WebSocket text-delta frame could not be parsed".to_string()),
+        WebSocketInboundResolveMode::RawText => std::str::from_utf8(&frame.payload)
+            .map(str::to_string)
+            .map_err(|_| "WebSocket response text frame is not utf-8".to_string()),
+    }
+}
+
+fn combined_websocket_frame_text(
+    frames: &[websocket::WebSocketFrame],
+    mode: WebSocketInboundResolveMode,
+) -> Result<String, String> {
+    let mut combined = String::new();
+    for frame in frames {
+        combined.push_str(&websocket_frame_text_for_mode(frame, mode)?);
+    }
+    Ok(combined)
+}
+
+fn resolve_websocket_inbound_frames(
+    frames: Vec<websocket::WebSocketFrame>,
+    mode: WebSocketInboundResolveMode,
+    state: &ProxyState,
+    operation_id: &str,
+) -> Result<Vec<WebSocketInboundFrame>, String> {
+    match mode {
+        WebSocketInboundResolveMode::JsonTextDelta => {
+            resolve_websocket_json_text_delta_frames(frames, state, operation_id)
+        }
+        WebSocketInboundResolveMode::RawText => {
+            resolve_websocket_raw_text_frames(frames, state, operation_id)
+        }
+    }
+}
+
+fn resolve_websocket_json_text_delta_frames(
+    mut frames: Vec<websocket::WebSocketFrame>,
+    state: &ProxyState,
+    operation_id: &str,
+) -> Result<Vec<WebSocketInboundFrame>, String> {
+    let mut deltas = Vec::with_capacity(frames.len());
+    let mut combined = String::new();
+    for frame in &frames {
+        let Some(delta) = websocket_text_delta_from_frame(frame)? else {
+            return resolve_websocket_raw_text_frames(frames, state, operation_id);
+        };
+        combined.push_str(&delta.text);
+        deltas.push(delta);
+    }
+
+    let response_bytes = frames.iter().map(|frame| frame.payload.len()).sum();
+    let result = dam_pipeline::resolve_text(
+        &combined,
+        operation_id,
+        state.vault.as_ref(),
+        state.log_sink.as_deref(),
+    );
+    record_websocket_resolve_attempt(state, operation_id, &result.plan, response_bytes);
+    let Some(output) = result.output else {
+        return Ok(frames
+            .into_iter()
+            .map(|frame| WebSocketInboundFrame {
+                frame,
+                skip_inbound_protection: false,
+            })
+            .collect());
+    };
+
+    for (index, frame) in frames.iter_mut().enumerate() {
+        let replacement = if index == 0 { output.as_str() } else { "" };
+        let Some(delta) = deltas.get_mut(index) else {
+            return Err("WebSocket text-delta frame is missing".to_string());
+        };
+        if !set_websocket_text_delta(&mut delta.value, &delta.path, replacement) {
+            return Err("WebSocket text-delta frame could not be rewritten".to_string());
+        }
+        frame.payload = serde_json::to_vec(&delta.value)
+            .map_err(|error| format!("failed to serialize WebSocket text-delta JSON: {error}"))?;
+    }
+
+    Ok(frames
+        .into_iter()
+        .map(|frame| WebSocketInboundFrame {
+            frame,
+            skip_inbound_protection: true,
+        })
+        .collect())
+}
+
+fn resolve_websocket_raw_text_frames(
+    mut frames: Vec<websocket::WebSocketFrame>,
+    state: &ProxyState,
+    operation_id: &str,
+) -> Result<Vec<WebSocketInboundFrame>, String> {
+    let combined = combined_websocket_frame_text(&frames, WebSocketInboundResolveMode::RawText)?;
+    let response_bytes = frames.iter().map(|frame| frame.payload.len()).sum();
+    let result = dam_pipeline::resolve_text(
+        &combined,
+        operation_id,
+        state.vault.as_ref(),
+        state.log_sink.as_deref(),
+    );
+    record_websocket_resolve_attempt(state, operation_id, &result.plan, response_bytes);
+    let skip_inbound_protection = if let Some(output) = result.output {
+        if let Some(first) = frames.first_mut() {
+            first.payload = output.into_bytes();
+        }
+        for frame in frames.iter_mut().skip(1) {
+            frame.payload.clear();
+        }
+        true
+    } else {
+        false
+    };
+
+    Ok(frames
+        .into_iter()
+        .map(|frame| WebSocketInboundFrame {
+            frame,
+            skip_inbound_protection,
+        })
+        .collect())
+}
+
+fn record_websocket_resolve_attempt(
+    state: &ProxyState,
+    operation_id: &str,
+    plan: &dam_core::ResolvePlan,
+    response_bytes: usize,
+) {
+    record_proxy_event(
+        state,
+        operation_id,
+        LogLevel::Info,
+        LogEventType::Resolve,
+        "resolve_attempt",
+        format!(
+            "WebSocket inbound resolution references={} resolved={} missing={} read_failures={} response_bytes={response_bytes}",
+            plan.references.len(),
+            plan.resolved_count(),
+            plan.missing_count(),
+            plan.read_failure_count(),
+        ),
+    );
+}
+
+fn websocket_text_delta_from_frame(
+    frame: &websocket::WebSocketFrame,
+) -> Result<Option<WebSocketTextDelta>, String> {
+    let text = std::str::from_utf8(&frame.payload)
+        .map_err(|_| "WebSocket response text frame is not utf-8".to_string())?;
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Ok(None);
+    };
+    let Some((path, text)) = websocket_text_delta(&value) else {
+        return Ok(None);
+    };
+    let text = text.to_string();
+
+    Ok(Some(WebSocketTextDelta { value, path, text }))
+}
+
+fn websocket_text_delta(value: &serde_json::Value) -> Option<(WebSocketTextDeltaPath, &str)> {
+    if let Some(text) = value
+        .pointer("/delta/text")
+        .and_then(serde_json::Value::as_str)
+    {
+        return Some((WebSocketTextDeltaPath::DeltaText, text));
+    }
+    if let Some(text) = value.get("delta").and_then(serde_json::Value::as_str) {
+        return Some((WebSocketTextDeltaPath::ResponseDelta, text));
+    }
+    if let Some(choices) = value.get("choices").and_then(serde_json::Value::as_array) {
+        for (index, choice) in choices.iter().enumerate() {
+            if let Some(text) = choice
+                .pointer("/delta/content")
+                .and_then(serde_json::Value::as_str)
+            {
+                return Some((WebSocketTextDeltaPath::ChoiceDeltaContent(index), text));
+            }
+        }
+    }
+    if let Some(text) = value.get("completion").and_then(serde_json::Value::as_str) {
+        return Some((WebSocketTextDeltaPath::TopLevelCompletion, text));
+    }
+    if let Some(text) = value.get("text").and_then(serde_json::Value::as_str) {
+        return Some((WebSocketTextDeltaPath::TopLevelText, text));
+    }
+    if let Some(text) = value.get("content").and_then(serde_json::Value::as_str) {
+        return Some((WebSocketTextDeltaPath::TopLevelContent, text));
+    }
+    if let Some((index, text)) = websocket_array_text_field(value.get("content")) {
+        return Some((WebSocketTextDeltaPath::ContentText(index), text));
+    }
+    if let Some(text) = value
+        .pointer("/message/content")
+        .and_then(serde_json::Value::as_str)
+    {
+        return Some((WebSocketTextDeltaPath::MessageContent, text));
+    }
+    if let Some((index, text)) = websocket_array_text_field(value.pointer("/message/content")) {
+        return Some((WebSocketTextDeltaPath::MessageContentText(index), text));
+    }
+
+    None
+}
+
+fn websocket_array_text_field(value: Option<&serde_json::Value>) -> Option<(usize, &str)> {
+    let values = value?.as_array()?;
+    for (index, value) in values.iter().enumerate() {
+        if let Some(text) = value.get("text").and_then(serde_json::Value::as_str) {
+            return Some((index, text));
+        }
+    }
+
+    None
+}
+
+fn set_websocket_text_delta(
+    value: &mut serde_json::Value,
+    path: &WebSocketTextDeltaPath,
+    replacement: &str,
+) -> bool {
+    match path {
+        WebSocketTextDeltaPath::DeltaText => {
+            set_json_pointer_string(value, "/delta/text", replacement)
+        }
+        WebSocketTextDeltaPath::ChoiceDeltaContent(index) => {
+            let Some(choices) = value
+                .get_mut("choices")
+                .and_then(serde_json::Value::as_array_mut)
+            else {
+                return false;
+            };
+            let Some(choice) = choices.get_mut(*index) else {
+                return false;
+            };
+            set_json_pointer_string(choice, "/delta/content", replacement)
+        }
+        WebSocketTextDeltaPath::ResponseDelta => {
+            set_top_level_json_string(value, "delta", replacement)
+        }
+        WebSocketTextDeltaPath::TopLevelCompletion => {
+            set_top_level_json_string(value, "completion", replacement)
+        }
+        WebSocketTextDeltaPath::TopLevelText => {
+            set_top_level_json_string(value, "text", replacement)
+        }
+        WebSocketTextDeltaPath::TopLevelContent => {
+            set_top_level_json_string(value, "content", replacement)
+        }
+        WebSocketTextDeltaPath::ContentText(index) => {
+            set_json_array_text_field(value.get_mut("content"), *index, replacement)
+        }
+        WebSocketTextDeltaPath::MessageContent => {
+            set_json_pointer_string(value, "/message/content", replacement)
+        }
+        WebSocketTextDeltaPath::MessageContentText(index) => {
+            set_json_array_text_field(value.pointer_mut("/message/content"), *index, replacement)
+        }
+    }
+}
+
+fn set_json_array_text_field(
+    value: Option<&mut serde_json::Value>,
+    index: usize,
+    replacement: &str,
+) -> bool {
+    let Some(values) = value.and_then(serde_json::Value::as_array_mut) else {
+        return false;
+    };
+    let Some(value) = values.get_mut(index) else {
+        return false;
+    };
+    set_top_level_json_string(value, "text", replacement)
+}
+
+fn set_top_level_json_string(value: &mut serde_json::Value, key: &str, replacement: &str) -> bool {
+    let Some(target) = value.get_mut(key) else {
+        return false;
+    };
+    *target = serde_json::Value::String(replacement.to_string());
+    true
+}
+
+fn set_json_pointer_string(
+    value: &mut serde_json::Value,
+    pointer: &str,
+    replacement: &str,
+) -> bool {
+    let Some(target) = value.pointer_mut(pointer) else {
+        return false;
+    };
+    *target = serde_json::Value::String(replacement.to_string());
+    true
+}
+
+fn has_possible_incomplete_reference_suffix(text: &str) -> bool {
+    text.match_indices('[').any(|(start, _)| {
+        text.len().saturating_sub(start) <= WEBSOCKET_REFERENCE_LOOKBACK_BYTES
+            && possible_incomplete_reference_content(&text[start + 1..])
+    })
+}
+
+fn possible_incomplete_reference_content(content: &str) -> bool {
+    if content.contains(']') {
+        return false;
+    }
+    let content = content.strip_suffix('\\').unwrap_or(content);
+    if content.is_empty() {
+        return false;
+    }
+    for tag in ["email", "domain", "phone", "ssn", "cc"] {
+        let key_prefix = format!("{tag}:");
+        if key_prefix.starts_with(content) {
+            return true;
+        }
+        let Some(id) = content.strip_prefix(&key_prefix) else {
+            continue;
+        };
+        if id.len() <= 22 && id.bytes().all(is_base58_reference_byte) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn has_possible_incomplete_sensitive_suffix(text: &str) -> bool {
+    let tail = text
+        .chars()
+        .rev()
+        .take(WEBSOCKET_REFERENCE_LOOKBACK_BYTES * 2)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<String>();
+    tail.split(|ch: char| {
+        !(ch.is_ascii_alphanumeric() || matches!(ch, '@' | '.' | '_' | '%' | '+' | '-'))
+    })
+    .any(possible_incomplete_email_content)
+}
+
+fn possible_incomplete_email_content(content: &str) -> bool {
+    let Some((local, domain)) = content.rsplit_once('@') else {
+        return false;
+    };
+    if local.is_empty()
+        || domain.is_empty()
+        || !local.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'%' | b'+' | b'-')
+        })
+        || !domain
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+    {
+        return false;
+    }
+    let Some((_, tld)) = domain.rsplit_once('.') else {
+        return true;
+    };
+    tld.len() < 2
+}
+
+fn is_base58_reference_byte(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'1'..=b'9'
+            | b'A'..=b'H'
+            | b'J'..=b'N'
+            | b'P'..=b'Z'
+            | b'a'..=b'k'
+            | b'm'..=b'z'
+    )
+}
+
 async fn proxy_websocket_upstream_frames<R, W>(
     state: Arc<ProxyState>,
     operation_id: String,
@@ -1570,8 +2530,9 @@ where
     R: AsyncRead + Unpin,
     W: AsyncWrite + Unpin,
 {
+    let mut inbound_resolver = WebSocketInboundResolveBuffer::default();
     loop {
-        let Some(mut frame) = (match websocket::read_frame(reader).await {
+        let Some(frame) = (match websocket::read_frame(reader).await {
             Ok(frame) => frame,
             Err(error) if protection.enabled && websocket_frame_error_is_unsupported(&error) => {
                 record_proxy_event(
@@ -1586,6 +2547,20 @@ where
             }
             Err(error) => return Err(error),
         }) else {
+            for frame in inbound_resolver.finish(&state, &operation_id)? {
+                if let Some(outcome) = protect_and_write_websocket_upstream_text_frame(
+                    &state,
+                    &operation_id,
+                    writer,
+                    &related_domains,
+                    &protection,
+                    frame,
+                )
+                .await?
+                {
+                    return Ok(outcome);
+                }
+            }
             return Ok(WebSocketClientFrameOutcome::Completed);
         };
         if frame.is_unfragmented_text()
@@ -1593,104 +2568,54 @@ where
             && (protection.inbound_plan.resolve_references
                 || protection.inbound_plan.protect_sensitive_data)
         {
-            let text = std::str::from_utf8(&frame.payload)
-                .map_err(|_| "WebSocket response text frame is not utf-8".to_string())?;
             if protection.inbound_plan.resolve_references {
-                let result = dam_pipeline::resolve_text(
-                    text,
-                    &operation_id,
-                    state.vault.as_ref(),
-                    state.log_sink.as_deref(),
-                );
-                record_proxy_event(
-                    &state,
-                    &operation_id,
-                    LogLevel::Info,
-                    LogEventType::Resolve,
-                    "resolve_attempt",
-                    format!(
-                        "WebSocket inbound resolution references={} resolved={} missing={} read_failures={} response_bytes={}",
-                        result.plan.references.len(),
-                        result.plan.resolved_count(),
-                        result.plan.missing_count(),
-                        result.plan.read_failure_count(),
-                        frame.payload.len()
-                    ),
-                );
-                if let Some(output) = result.output {
-                    frame.payload = output.into_bytes();
-                    let is_close = frame.opcode == websocket::OPCODE_CLOSE;
-                    websocket::write_unmasked_frame(writer, &frame).await?;
-                    if is_close {
-                        return Ok(WebSocketClientFrameOutcome::Completed);
+                for frame in inbound_resolver.push(frame, &state, &operation_id)? {
+                    if let Some(outcome) = protect_and_write_websocket_upstream_text_frame(
+                        &state,
+                        &operation_id,
+                        writer,
+                        &related_domains,
+                        &protection,
+                        frame,
+                    )
+                    .await?
+                    {
+                        return Ok(outcome);
                     }
-                    continue;
                 }
-            }
-            if !protection.inbound_plan.protect_sensitive_data {
-                let is_close = frame.opcode == websocket::OPCODE_CLOSE;
-                websocket::write_unmasked_frame(writer, &frame).await?;
-                if is_close {
-                    return Ok(WebSocketClientFrameOutcome::Completed);
-                }
-                continue;
-            }
-            let domains = related_domains.read().map_err(|_| {
-                "WebSocket related-domain state is unavailable after a prior failure".to_string()
-            })?;
-            let inbound_policy = InboundRedactPolicy {
-                inner: &state.policy,
-            };
-            let protected = dam_pipeline::protect_text(
-                text,
+            } else if let Some(outcome) = protect_and_write_websocket_upstream_text_frame(
+                &state,
                 &operation_id,
-                &inbound_policy,
-                state.vault.as_ref(),
-                dam_pipeline::ProtectTextContext {
-                    reference_vault: Some(state.vault.as_ref()),
-                    consent_store: state.consent_store.as_deref(),
-                    consent_scopes: protection.consent_scopes.as_slice(),
-                    event_sink: state.log_sink.as_deref(),
-                    related_domains: domains.as_slice(),
+                writer,
+                &related_domains,
+                &protection,
+                WebSocketInboundFrame {
+                    frame,
+                    skip_inbound_protection: false,
                 },
-                state.replacement_options,
             )
-            .map_err(|_| "WebSocket response frame protection failed".to_string())?;
-            if protected.is_blocked() {
-                record_proxy_event(
+            .await?
+            {
+                return Ok(outcome);
+            }
+            continue;
+        } else {
+            for frame in inbound_resolver.finish(&state, &operation_id)? {
+                if let Some(outcome) = protect_and_write_websocket_upstream_text_frame(
                     &state,
                     &operation_id,
-                    LogLevel::Warn,
-                    LogEventType::ProxyFailure,
-                    "inbound_blocked",
-                    "WebSocket response frame blocked by policy",
-                );
-                return Ok(WebSocketClientFrameOutcome::PolicyBlocked);
-            } else {
-                let Some(output) = protected.output else {
-                    return Err(
-                        "WebSocket response frame protection did not produce output".to_string()
-                    );
-                };
-                frame.payload = output.into_bytes();
+                    writer,
+                    &related_domains,
+                    &protection,
+                    frame,
+                )
+                .await?
+                {
+                    return Ok(outcome);
+                }
             }
-            if !protected.detections.is_empty() {
-                record_proxy_event(
-                    &state,
-                    &operation_id,
-                    LogLevel::Info,
-                    LogEventType::ProxyForward,
-                    "inbound_protection",
-                    format!(
-                        "WebSocket response text frame protected detections={} replacements={} tokenized={} blocked={}",
-                        protected.detections.len(),
-                        protected.plan.replacements.len(),
-                        protected.plan.tokenized_count(),
-                        protected.plan.blocked_count()
-                    ),
-                );
-            }
-        } else if protection.enabled && websocket_frame_requires_body_protection(&frame) {
+        }
+        if protection.enabled && websocket_frame_requires_body_protection(&frame) {
             record_proxy_event(
                 &state,
                 &operation_id,
@@ -1707,6 +2632,81 @@ where
             return Ok(WebSocketClientFrameOutcome::Completed);
         }
     }
+}
+
+async fn protect_and_write_websocket_upstream_text_frame<W>(
+    state: &ProxyState,
+    operation_id: &str,
+    writer: &mut W,
+    related_domains: &Arc<RwLock<Vec<String>>>,
+    protection: &WebSocketProtection,
+    inbound_frame: WebSocketInboundFrame,
+) -> Result<Option<WebSocketClientFrameOutcome>, String>
+where
+    W: AsyncWrite + Unpin,
+{
+    let mut frame = inbound_frame.frame;
+    if protection.inbound_plan.protect_sensitive_data && !inbound_frame.skip_inbound_protection {
+        let text = std::str::from_utf8(&frame.payload)
+            .map_err(|_| "WebSocket response text frame is not utf-8".to_string())?;
+        let domains = related_domains.read().map_err(|_| {
+            "WebSocket related-domain state is unavailable after a prior failure".to_string()
+        })?;
+        let inbound_policy = InboundRedactPolicy {
+            inner: &state.policy,
+        };
+        let protected = dam_pipeline::protect_text(
+            text,
+            operation_id,
+            &inbound_policy,
+            state.vault.as_ref(),
+            dam_pipeline::ProtectTextContext {
+                reference_vault: Some(state.vault.as_ref()),
+                consent_store: state.consent_store.as_deref(),
+                consent_scopes: protection.consent_scopes.as_slice(),
+                event_sink: state.log_sink.as_deref(),
+                related_domains: domains.as_slice(),
+            },
+            state.replacement_options,
+        )
+        .map_err(|_| "WebSocket response frame protection failed".to_string())?;
+        if protected.is_blocked() {
+            record_proxy_event(
+                state,
+                operation_id,
+                LogLevel::Warn,
+                LogEventType::ProxyFailure,
+                "inbound_blocked",
+                "WebSocket response frame blocked by policy",
+            );
+            return Ok(Some(WebSocketClientFrameOutcome::PolicyBlocked));
+        }
+
+        let Some(output) = protected.output else {
+            return Err("WebSocket response frame protection did not produce output".to_string());
+        };
+        frame.payload = output.into_bytes();
+
+        if !protected.detections.is_empty() {
+            record_proxy_event(
+                state,
+                operation_id,
+                LogLevel::Info,
+                LogEventType::ProxyForward,
+                "inbound_protection",
+                format!(
+                    "WebSocket response text frame protected detections={} replacements={} tokenized={} blocked={}",
+                    protected.detections.len(),
+                    protected.plan.replacements.len(),
+                    protected.plan.tokenized_count(),
+                    protected.plan.blocked_count()
+                ),
+            );
+        }
+    }
+
+    websocket::write_unmasked_frame(writer, &frame).await?;
+    Ok(None)
 }
 
 fn remember_related_domains(

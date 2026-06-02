@@ -26,12 +26,28 @@ pub fn detect(input: &str) -> Vec<Detection> {
 pub fn detect_with_related_domains(input: &str, _related_domains: &[String]) -> Vec<Detection> {
     let mut detections = Vec::new();
 
-    detect_with_regex(input, &EMAIL_RE, SensitiveType::Email, &mut detections);
+    detect_emails(input, &mut detections);
     detect_with_regex(input, &PHONE_RE, SensitiveType::Phone, &mut detections);
     detect_ssns(input, &mut detections);
     detect_credit_cards(input, &mut detections);
 
     dedup_overlaps(detections)
+}
+
+fn detect_emails(input: &str, detections: &mut Vec<Detection>) {
+    detections.extend(
+        EMAIL_RE
+            .find_iter(input)
+            .filter(|m| valid_email_match(m.as_str()))
+            .map(|m| Detection {
+                kind: SensitiveType::Email,
+                span: Span {
+                    start: m.start(),
+                    end: m.end(),
+                },
+                value: m.as_str().to_string(),
+            }),
+    );
 }
 
 fn detect_with_regex(
@@ -48,6 +64,26 @@ fn detect_with_regex(
         },
         value: m.as_str().to_string(),
     }));
+}
+
+fn valid_email_match(value: &str) -> bool {
+    let compact = value
+        .chars()
+        .filter(|character| !matches!(character, ' ' | '\t' | '\r' | '\n'))
+        .collect::<String>();
+    let Some((_local, domain)) = compact.rsplit_once('@') else {
+        return false;
+    };
+    let mut labels = domain.split('.').collect::<Vec<_>>();
+    let Some(top_level) = labels.pop() else {
+        return false;
+    };
+
+    labels.iter().all(|label| !label.is_empty())
+        && top_level.len() >= 2
+        && top_level
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
 }
 
 fn detect_ssns(input: &str, detections: &mut Vec<Detection>) {
