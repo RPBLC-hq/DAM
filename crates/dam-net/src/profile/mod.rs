@@ -208,7 +208,7 @@ pub fn traffic_routes_from_profile(profile: &TrafficProfile) -> Vec<TrafficRoute
             .as_ref()
             .filter(|value| !value.trim().is_empty())
             .unwrap_or(&app.id);
-        for domain in app.match_rules.normalized_domains() {
+        for domain in app.match_rules.normalized_route_hosts() {
             routes.push(TrafficRoute::new_with_auth(
                 app.adapter,
                 domain,

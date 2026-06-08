@@ -44,6 +44,14 @@ impl TrafficMatch {
             .map(|domain| normalize_host(domain))
             .filter(|domain| !domain.is_empty() && !domain.starts_with("*."))
     }
+
+    pub fn normalized_route_hosts(&self) -> impl Iterator<Item = String> + '_ {
+        self.domains
+            .iter()
+            .chain(self.urls.iter())
+            .map(|value| normalize_host(value))
+            .filter(|host| !host.is_empty() && !host.starts_with("*."))
+    }
 }
 
 pub(crate) fn domain_matches(pattern: &str, host: &str) -> bool {
