@@ -2,7 +2,7 @@
 
 `dam-e2e` is the process-level end-to-end test package.
 
-It tests multiple DAM binaries and modules together using temp SQLite databases, synthetic data, fake upstreams, and no real provider calls.
+It tests multiple DAM binaries and modules together using temp SQLite databases, synthetic data, fake upstreams, and no real provider calls. The repo also includes a local llama.cpp smoke script for PR verification when a loopback OpenAI-compatible endpoint is available.
 
 ## Scope
 
@@ -45,6 +45,14 @@ cargo clippy --workspace -- -D warnings
 cargo test --workspace
 ```
 
+Local API-through-DAM smoke test for PR evidence:
+
+```bash
+python3 scripts/rpblc_dam_local_llm_e2e_smoke.py --upstream http://127.0.0.1:8080
+```
+
+The script builds `dam-proxy`, starts it on loopback with temporary vault/log SQLite files, sends synthetic email/SSN values through DAM to the local OpenAI-compatible upstream, verifies exact echo resolution on the trusted client side, verifies a token-transformation prompt cannot reconstruct the raw values, reports whether the local activity log database contains the synthetic values, and removes the temp directory unless `--keep-temp` is passed. Exit code `2` means the local upstream or binary prerequisite is blocked rather than a DAM privacy assertion failure.
+
 ## Rules
 
 - Use synthetic data only.
@@ -52,3 +60,4 @@ cargo test --workspace
 - Do not call OpenAI, Anthropic, OpenRouter, or other real providers.
 - Prefer fake upstreams and local processes.
 - Assert that persisted logs do not contain raw sensitive values.
+- For DAM PR readiness, run the local smoke script against a loopback OpenAI-compatible endpoint when available and include the command, upstream, proxy address, expected/actual results, and cleanup status in the PR/report.
