@@ -12,6 +12,11 @@ RESTART_AFTER_INSTALL="${DAM_RESTART_AFTER_INSTALL:-1}"
 AGENT_STATUS_STRICT="${DAM_AGENT_STATUS_STRICT:-0}"
 AGENT_NETWORK_MODE="${DAM_AGENT_NETWORK_MODE:-tun}"
 AGENT_TRUST_MODE="${DAM_AGENT_TRUST_MODE:-local_ca}"
+AGENT_E2E_UPSTREAM="${DAM_AGENT_E2E_UPSTREAM:-http://127.0.0.1:8080}"
+AGENT_E2E_LISTEN="${DAM_AGENT_E2E_LISTEN:-127.0.0.1:7831}"
+AGENT_E2E_STARTUP_TIMEOUT="${DAM_AGENT_E2E_STARTUP_TIMEOUT:-30}"
+AGENT_E2E_HTTP_TIMEOUT="${DAM_AGENT_E2E_HTTP_TIMEOUT:-60}"
+AGENT_E2E_SMOKE_SCRIPT="${DAM_AGENT_E2E_SMOKE_SCRIPT:-$ROOT/scripts/rpblc_dam_local_llm_e2e_smoke.py}"
 MACOS_NE_BUNDLE_ID="${DAM_MACOS_NE_BUNDLE_ID:-com.rpblc.dam.network-extension}"
 
 usage() {
@@ -27,6 +32,8 @@ Commands:
   release-macos Run checks, build signed DAM.app, notarize, staple, and zip it
   deploy-local  Build signed DAM.app and copy it to /Applications or --install-dir
   agent-check   Run the standard verification suite plus repo whitespace checks
+  agent-protection-smoke
+                Run local API-through-DAM protection smoke against local upstream
   agent-install Build, notarize when enabled, install, verify, restart, and status DAM
   agent-status  Print installed app, process, package, doctor, and setup status
 
@@ -59,6 +66,14 @@ Environment:
   DAM_AGENT_STATUS_STRICT   Set to 1 to make agent-status fail on probe errors
   DAM_AGENT_NETWORK_MODE    Setup mode for agent-status, currently tun
   DAM_AGENT_TRUST_MODE      Trust mode for agent-status, currently local_ca
+  DAM_AGENT_E2E_UPSTREAM    Local OpenAI-compatible smoke upstream, currently $AGENT_E2E_UPSTREAM
+  DAM_AGENT_E2E_LISTEN      Loopback listen address for smoke proxy, currently $AGENT_E2E_LISTEN
+  DAM_AGENT_E2E_STARTUP_TIMEOUT
+                           Smoke proxy startup timeout, currently $AGENT_E2E_STARTUP_TIMEOUT
+  DAM_AGENT_E2E_HTTP_TIMEOUT
+                           Smoke request timeout, currently $AGENT_E2E_HTTP_TIMEOUT
+  DAM_AGENT_E2E_SMOKE_SCRIPT
+                           Smoke verifier script, currently $AGENT_E2E_SMOKE_SCRIPT
 EOF
 }
 
@@ -238,6 +253,18 @@ cmd_agent_check() {
   else
     printf 'Skipped git diff --check because %s is not a git checkout.\n' "$ROOT"
   fi
+}
+
+cmd_agent_protection_smoke() {
+  if [[ ! -f "$AGENT_E2E_SMOKE_SCRIPT" ]]; then
+    echo "missing local protection smoke script: $AGENT_E2E_SMOKE_SCRIPT" >&2
+    exit 1
+  fi
+  run python3 "$AGENT_E2E_SMOKE_SCRIPT" \
+    --upstream "$AGENT_E2E_UPSTREAM" \
+    --listen "$AGENT_E2E_LISTEN" \
+    --startup-timeout "$AGENT_E2E_STARTUP_TIMEOUT" \
+    --http-timeout "$AGENT_E2E_HTTP_TIMEOUT"
 }
 
 cmd_dev() {
@@ -493,6 +520,7 @@ case "$COMMAND" in
   release-macos) cmd_release_macos ;;
   deploy-local) cmd_deploy_local ;;
   agent-check) cmd_agent_check ;;
+  agent-protection-smoke) cmd_agent_protection_smoke ;;
   agent-install) cmd_agent_install ;;
   agent-status) cmd_agent_status ;;
   *)

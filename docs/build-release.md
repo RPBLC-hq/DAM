@@ -13,6 +13,7 @@ scripts/dam-build.sh notarize --app target/dam-build/macos/DAM.app --notary-prof
 scripts/dam-build.sh release-macos --mode developer-id
 scripts/dam-build.sh deploy-local --mode development
 scripts/dam-build.sh agent-check
+scripts/dam-build.sh agent-protection-smoke
 scripts/dam-build.sh agent-install --skip-checks
 scripts/dam-build.sh agent-status --network-mode tun --trust-mode local_ca
 ```
@@ -33,6 +34,8 @@ scripts/dam-build.sh agent-status --network-mode tun --trust-mode local_ca
 
 `agent-check` is the default verification command for local agents and maintainers. It runs `check` and adds `git diff --check` when the source tree is a git checkout.
 
+`agent-protection-smoke` runs the local API-through-DAM protection smoke test against a loopback OpenAI-compatible upstream. By default it uses local llama.cpp at `http://127.0.0.1:8080`, starts `dam-proxy` on `127.0.0.1:7831`, uses temporary vault/activity SQLite stores, sends synthetic email/SSN values only, verifies trusted-side resolution, verifies the model can transform only DAM references, checks the activity log for raw synthetic leaks, then terminates the proxy and removes the temporary stores. It does not change system network settings or call paid providers.
+
 `agent-install` is the idempotent local release-path install command for macOS. It optionally runs `agent-check`, builds the app, notarizes Developer ID builds unless notarization is disabled, stops the installed tray/web processes before replacing the app bundle, verifies the installed app, refreshes app-owned System Extension activation, reconfigures the Network Extension manager for `tun` installs, restarts the daemon with the persisted DAM configuration, opens the tray app, and prints `agent-status`.
 
 `agent-status` inspects the installed app without mutating setup. It reports matching DAM processes, verifies code signing, validates notarization/Gatekeeper when notarization is enabled, and runs the installed `dam doctor --json`, `dam setup status --json`, `dam setup next-action --json`, and `dam status --json` probes. Setup probes default to the release-path `tun` + `local_ca` modes and can be overridden with `--network-mode` and `--trust-mode`. The npm wrapper package doctor remains part of `check`/`agent-check` through the npm smoke test; it is not an installed native app command.
@@ -51,8 +54,13 @@ scripts/dam-build.sh agent-status --network-mode tun --trust-mode local_ca
 - `DAM_AGENT_STATUS_STRICT`: set to `1` to make `agent-status` fail when any probe fails.
 - `DAM_AGENT_NETWORK_MODE`: setup mode for `agent-status`, default `tun`.
 - `DAM_AGENT_TRUST_MODE`: trust mode for `agent-status`, default `local_ca`.
+- `DAM_AGENT_E2E_UPSTREAM`: local OpenAI-compatible upstream for `agent-protection-smoke`, default `http://127.0.0.1:8080`.
+- `DAM_AGENT_E2E_LISTEN`: loopback listen address for the smoke proxy, default `127.0.0.1:7831`.
+- `DAM_AGENT_E2E_STARTUP_TIMEOUT`: smoke proxy startup timeout in seconds, default `30`.
+- `DAM_AGENT_E2E_HTTP_TIMEOUT`: smoke request timeout in seconds, default `60`.
+- `DAM_AGENT_E2E_SMOKE_SCRIPT`: verifier script path, default `scripts/rpblc_dam_local_llm_e2e_smoke.py`.
 
-The script intentionally keeps signing, provisioning, and notarization inputs in environment variables or keychain profiles. It must not require secrets in repository files.
+The script intentionally keeps signing, provisioning, notarization, and local smoke inputs in environment variables or keychain profiles. It must not require secrets in repository files.
 
 For contributors without Developer ID/notary credentials, use a development build:
 
