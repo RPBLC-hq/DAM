@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Button,
@@ -12,6 +12,24 @@ import {
 import { ApiError, api, apiPost } from '@/lib/api/client'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import type { WalletDetail, WalletItem } from './types'
+
+type AllowGrant = {
+  party: string
+  scope?: 'global'
+  profile_id?: string
+}
+
+type SettingsView = {
+  apps: AppSetting[]
+}
+
+type AppSetting = {
+  id: string
+  name: string
+  enabled: boolean
+}
+
+const ALL_PROFILES_PARTY = 'All profiles'
 
 /**
  * WalletInlineDetail — the detail surface that expands under an active
@@ -32,7 +50,7 @@ export function WalletInlineDetail({ id, seed }: { id: string; seed: WalletItem 
       item: seed,
       meta: [],
       first_seen: undefined,
-      reference: `[${seed.id}]`,
+      reference: `[${seed.kind}:${seed.id}]`,
     }),
     [seed],
   )
@@ -44,27 +62,56 @@ export function WalletInlineDetail({ id, seed }: { id: string; seed: WalletItem 
   })
 
   const allow = useMutation({
-    mutationFn: (party: string) =>
-      apiPost<WalletDetail>(`/wallet/${encodeURIComponent(id)}/allow`, {
-        party,
-      }),
-    onSuccess: (next) => queryClient.setQueryData(queryKey, next),
+    mutationFn: async (grantOrGrants: AllowGrant | AllowGrant[]) => {
+      const grants = Array.isArray(grantOrGrants) ? grantOrGrants : [grantOrGrants]
+      let latest: WalletDetail | undefined
+      for (const grant of grants) {
+        latest = await apiPost<WalletDetail>(
+          `/wallet/${encodeURIComponent(id)}/allow`,
+          grant,
+        )
+      }
+      if (!latest) throw new Error('no grants selected')
+      return latest
+    },
+    onSuccess: (next) => {
+      queryClient.setQueryData(queryKey, next)
+      void queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      void queryClient.invalidateQueries({ queryKey: ['connect'] })
+    },
   })
   const revoke = useMutation({
     mutationFn: (party: string) =>
       apiPost<WalletDetail>(`/wallet/${encodeURIComponent(id)}/revoke`, {
         party,
       }),
-    onSuccess: (next) => queryClient.setQueryData(queryKey, next),
+    onSuccess: (next) => {
+      queryClient.setQueryData(queryKey, next)
+      void queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      void queryClient.invalidateQueries({ queryKey: ['connect'] })
+    },
   })
   const protectAll = useMutation({
     mutationFn: () =>
       apiPost<WalletDetail>(`/wallet/${encodeURIComponent(id)}/protect`, {}),
-    onSuccess: (next) => queryClient.setQueryData(queryKey, next),
+    onSuccess: (next) => {
+      queryClient.setQueryData(queryKey, next)
+      void queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      void queryClient.invalidateQueries({ queryKey: ['connect'] })
+    },
+  })
+  const removeValue = useMutation({
+    mutationFn: () =>
+      apiPost<{ id: string }>(`/wallet/${encodeURIComponent(id)}/remove`, {}),
+    onSuccess: () => {
+      queryClient.removeQueries({ queryKey })
+      void queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      void queryClient.invalidateQueries({ queryKey: ['connect'] })
+    },
   })
 
   const mutationError =
-    allow.error ?? revoke.error ?? protectAll.error ?? null
+    allow.error ?? revoke.error ?? protectAll.error ?? removeValue.error ?? null
   const mutationCode =
     mutationError instanceof ApiError ? mutationError.message : undefined
 
@@ -115,9 +162,21 @@ export function WalletInlineDetail({ id, seed }: { id: string; seed: WalletItem 
           name: s.name,
           since: s.since,
         }))}
-        onAllow={(party) => allow.mutate(party)}
+        onAllow={(party) => allow.mutate({ party })}
         onRevoke={(party) => revoke.mutate(party)}
         onProtectAll={() => protectAll.mutate()}
+      />
+
+      <AllowProfilesAction
+        detail={detail.data}
+        pending={allow.isPending || revoke.isPending}
+        onAllow={(grants) => allow.mutate(grants)}
+        onRevoke={(party) => revoke.mutate(party)}
+      />
+
+      <RemoveValueAction
+        pending={removeValue.isPending}
+        onRemove={() => removeValue.mutate()}
       />
 
       {mutationError && (
@@ -132,6 +191,7 @@ export function WalletInlineDetail({ id, seed }: { id: string; seed: WalletItem 
                 allow.reset()
                 revoke.reset()
                 protectAll.reset()
+                removeValue.reset()
               }}
             >
               {t('walletDetail.dismiss')}
@@ -139,6 +199,170 @@ export function WalletInlineDetail({ id, seed }: { id: string; seed: WalletItem 
           }
         />
       )}
+    </div>
+  )
+}
+
+function AllowProfilesAction({
+  detail,
+  pending,
+  onAllow,
+  onRevoke,
+}: {
+  detail: WalletDetail
+  pending: boolean
+  onAllow: (grants: AllowGrant | AllowGrant[]) => void
+  onRevoke: (party: string) => void
+}) {
+  const { t } = useI18n()
+  const settings = useQuery({
+    queryKey: ['settings'],
+    queryFn: ({ signal }) => api<SettingsView>('/settings', { signal }),
+  })
+  const allProfilesParty = ALL_PROFILES_PARTY
+  const allowedNames = useMemo(
+    () => new Set(detail.item.shared_with.map((party) => party.name)),
+    [detail.item.shared_with],
+  )
+  const profiles = settings.data?.apps ?? []
+  const allProfilesAllowed = allowedNames.has(allProfilesParty)
+
+  return (
+    <div className="dam-wallet__allow">
+      <div className="dam-wallet__allow-head">
+        <h2>{t('walletDetail.allowHeading')}</h2>
+      </div>
+
+      {settings.isPending ? (
+        <p className="dam-wallet__allow-status">
+          {t('walletDetail.allowProfilesLoading')}
+        </p>
+      ) : settings.isError ? (
+        <p className="dam-wallet__allow-status">
+          {t('walletDetail.allowProfilesUnavailable')}
+        </p>
+      ) : profiles.length === 0 ? (
+        <p className="dam-wallet__allow-status">
+          {t('walletDetail.allowNoProfiles')}
+        </p>
+      ) : (
+        <details className="dam-wallet__profile-menu">
+          <summary className="dam-wallet__profile-trigger">
+            <span>{t('walletDetail.profileDropdown')}</span>
+            <b>{profileSelectionLabel(profiles, allowedNames, allProfilesAllowed, t)}</b>
+          </summary>
+          <div className="dam-wallet__profile-panel" role="group" aria-label={t('walletDetail.profileDropdown')}>
+            <label className="dam-wallet__profile-option">
+              <input
+                type="checkbox"
+                checked={allProfilesAllowed}
+                disabled={pending}
+                onChange={(event) => {
+                  if (event.currentTarget.checked) {
+                    onAllow({
+                      party: allProfilesParty,
+                      scope: 'global',
+                    })
+                  } else {
+                    onRevoke(allProfilesParty)
+                  }
+                }}
+              />
+              <span>{t('walletDetail.allowAllProfiles')}</span>
+            </label>
+            {profiles.map((app) => {
+              const checked = allowedNames.has(app.name) || allProfilesAllowed
+              return (
+                <label className="dam-wallet__profile-option" key={app.id}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={pending || allProfilesAllowed}
+                    onChange={(event) => {
+                      if (event.currentTarget.checked) {
+                        onAllow({
+                          party: app.name,
+                          profile_id: app.id,
+                        })
+                      } else {
+                        onRevoke(app.name)
+                      }
+                    }}
+                  />
+                  <span>{app.name}</span>
+                  {!app.enabled && (
+                    <em>{t('walletDetail.profileDisabled')}</em>
+                  )}
+                </label>
+              )
+            })}
+          </div>
+        </details>
+      )}
+    </div>
+  )
+}
+
+function profileSelectionLabel(
+  profiles: AppSetting[],
+  allowedNames: Set<string>,
+  allProfilesAllowed: boolean,
+  t: (key: MessageKey) => string,
+): string {
+  if (allProfilesAllowed) return t('walletDetail.allowAllProfiles')
+  const count = profiles.filter((profile) => allowedNames.has(profile.name)).length
+  if (count === 0) return t('walletDetail.profileDropdownEmpty')
+  if (count === 1) return t('walletDetail.profileDropdownOne')
+  return `${count} ${t('walletDetail.profileDropdownMany')}`
+}
+
+function RemoveValueAction({
+  pending,
+  onRemove,
+}: {
+  pending: boolean
+  onRemove: () => void
+}) {
+  const { t } = useI18n()
+  const [confirming, setConfirming] = useState(false)
+  if (confirming) {
+    return (
+      <div className="dam-wallet__remove-confirm">
+        <p>{t('walletDetail.removeConfirm')}</p>
+        <div className="dam-wallet__remove-actions">
+          <Button
+            variant="ghost"
+            size="sm"
+            type="button"
+            disabled={pending}
+            onClick={() => setConfirming(false)}
+          >
+            {t('walletDetail.removeCancel')}
+          </Button>
+          <Button
+            variant="danger"
+            size="sm"
+            bracketed
+            type="button"
+            disabled={pending}
+            onClick={onRemove}
+          >
+            {t('walletDetail.confirmRemove')}
+          </Button>
+        </div>
+      </div>
+    )
+  }
+  return (
+    <div className="dam-wallet__remove">
+      <Button
+        variant="danger"
+        size="sm"
+        type="button"
+        onClick={() => setConfirming(true)}
+      >
+        {t('walletDetail.remove')}
+      </Button>
     </div>
   )
 }
@@ -181,6 +405,8 @@ function detailErrorKey(code: string | undefined): MessageKey {
 function mutationErrorKey(code: string | undefined): MessageKey {
   if (code === 'consent_grant_failed') return 'walletDetail.error.grantFailed'
   if (code === 'consent_revoke_failed') return 'walletDetail.error.revokeFailed'
+  if (code === 'wallet_value_missing') return 'walletDetail.error.missing'
+  if (code === 'wallet_unreachable') return 'wallet.error.unreachable'
   if (code === 'not_implemented') return 'walletDetail.error.notImplemented'
   return 'walletDetail.error.unknown'
 }

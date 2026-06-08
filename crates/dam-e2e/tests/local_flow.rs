@@ -250,7 +250,7 @@ fn dam_connect_status_disconnect_tracks_profile_target() {
         .args([
             "connect",
             "--profile",
-            "codex",
+            "chatgpt",
             "--listen",
             "127.0.0.1:0",
             "--db",
@@ -347,7 +347,7 @@ fn dam_connect_profile_apply_keeps_claude_catalog_json_and_starts_daemon() {
     let profile_path = state_dir
         .join("integrations")
         .join("profiles")
-        .join("claude-code.json");
+        .join("claude.json");
     let vault_path = dir.path().join("vault.db");
     let log_path = dir.path().join("log.db");
     let consent_path = dir.path().join("consent.db");
@@ -356,7 +356,7 @@ fn dam_connect_profile_apply_keeps_claude_catalog_json_and_starts_daemon() {
 
     ensure_binaries();
     let profile_set = Command::new(binary("dam"))
-        .args(["profile", "set", "claude-code"])
+        .args(["profile", "set", "claude"])
         .current_dir(dir.path())
         .env("DAM_STATE_DIR", &state_dir)
         .env("HOME", &home_dir)
@@ -368,13 +368,13 @@ fn dam_connect_profile_apply_keeps_claude_catalog_json_and_starts_daemon() {
         "{}",
         utf8(&profile_set.stderr)
     );
-    assert!(utf8(&profile_set.stdout).contains("active_profile: claude-code"));
+    assert!(utf8(&profile_set.stdout).contains("active_profile: claude"));
 
     let connect_output = Command::new(binary("dam"))
         .args([
             "connect",
             "--profile",
-            "claude-code",
+            "claude",
             "--apply",
             "--listen",
             &addr.to_string(),
@@ -401,14 +401,14 @@ fn dam_connect_profile_apply_keeps_claude_catalog_json_and_starts_daemon() {
         utf8(&connect_output.stderr)
     );
     let stdout = utf8(&connect_output.stdout);
-    assert!(stdout.contains("profile: claude-code"));
+    assert!(stdout.contains("profile: claude"));
     assert!(stdout.contains("integration profile content is already present"));
-    assert!(!stdout.contains("rollback: dam integrations rollback claude-code"));
+    assert!(!stdout.contains("rollback: dam integrations rollback claude"));
     assert!(stdout.contains(&format!("DAM connected at http://{addr}")));
 
     let profile: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&profile_path).unwrap()).unwrap();
-    assert_eq!(profile["id"], "claude-code");
+    assert_eq!(profile["id"], "claude");
     assert_eq!(profile["settings"][0]["value"], "{{proxy_url}}");
     assert_eq!(profile["settings"][1]["value"], "{{proxy_url}}");
 
@@ -423,13 +423,13 @@ fn dam_connect_profile_apply_keeps_claude_catalog_json_and_starts_daemon() {
     assert!(status.status.success(), "{}", utf8(&status.stderr));
     let status_stdout = utf8(&status.stdout);
     assert!(status_stdout.contains("state: connected"));
-    assert!(status_stdout.contains("active_profile: claude-code"));
+    assert!(status_stdout.contains("active_profile: claude"));
 
     assert!(
         !state_dir
             .join("integrations")
             .join("apply-records")
-            .join("claude-code")
+            .join("claude")
             .join("latest.json")
             .exists()
     );
@@ -449,11 +449,13 @@ async fn dam_disconnect_pauses_explicit_claude_profile_without_closing_proxy() {
     let proxy_addr = unused_addr();
     let upstream_seen = Arc::new(Mutex::new(None::<String>));
     let upstream_url = spawn_fake_upstream(upstream_seen.clone()).await;
+    let anthropic_target =
+        format!(r#"{{"name":"anthropic","provider":"anthropic","upstream":"{upstream_url}"}}"#);
     let daemon = DamDaemonGuard::new(state_dir.clone(), dir.path().to_path_buf());
 
     ensure_binaries();
     let profile_set = Command::new(binary("dam"))
-        .args(["profile", "set", "claude-code"])
+        .args(["profile", "set", "claude"])
         .current_dir(dir.path())
         .env("DAM_STATE_DIR", &state_dir)
         .env("HOME", &home_dir)
@@ -469,12 +471,12 @@ async fn dam_disconnect_pauses_explicit_claude_profile_without_closing_proxy() {
         .args([
             "connect",
             "--profile",
-            "claude-code",
+            "claude",
             "--apply",
             "--listen",
             &proxy_addr.to_string(),
-            "--upstream",
-            &upstream_url,
+            "--target",
+            &anthropic_target,
             "--db",
             vault_path.to_str().unwrap(),
             "--log",
@@ -545,11 +547,11 @@ async fn dam_disconnect_pauses_explicit_claude_profile_without_closing_proxy() {
         .args([
             "connect",
             "--profile",
-            "claude-code",
+            "claude",
             "--listen",
             &proxy_addr.to_string(),
-            "--upstream",
-            &upstream_url,
+            "--target",
+            &anthropic_target,
             "--db",
             vault_path.to_str().unwrap(),
             "--log",
@@ -597,6 +599,8 @@ async fn dam_connect_apply_restarts_paused_daemon_when_profile_target_changes() 
     let proxy_addr = unused_addr();
     let upstream_seen = Arc::new(Mutex::new(None::<String>));
     let upstream_url = spawn_fake_upstream(upstream_seen.clone()).await;
+    let anthropic_target =
+        format!(r#"{{"name":"anthropic","provider":"anthropic","upstream":"{upstream_url}"}}"#);
     let daemon = DamDaemonGuard::new(state_dir.clone(), dir.path().to_path_buf());
 
     ensure_binaries();
@@ -605,8 +609,8 @@ async fn dam_connect_apply_restarts_paused_daemon_when_profile_target_changes() 
             "connect",
             "--listen",
             &proxy_addr.to_string(),
-            "--upstream",
-            &upstream_url,
+            "--target",
+            &anthropic_target,
             "--db",
             vault_path.to_str().unwrap(),
             "--log",
@@ -634,7 +638,7 @@ async fn dam_connect_apply_restarts_paused_daemon_when_profile_target_changes() 
     assert!(utf8(&paused.stdout).contains("DAM protection paused"));
 
     let profile_set = Command::new(binary("dam"))
-        .args(["profile", "set", "claude-code"])
+        .args(["profile", "set", "claude"])
         .current_dir(dir.path())
         .env("DAM_STATE_DIR", &state_dir)
         .env("HOME", &home_dir)
@@ -650,12 +654,12 @@ async fn dam_connect_apply_restarts_paused_daemon_when_profile_target_changes() 
         .args([
             "connect",
             "--profile",
-            "claude-code",
+            "claude",
             "--apply",
             "--listen",
             &proxy_addr.to_string(),
-            "--upstream",
-            &upstream_url,
+            "--target",
+            &anthropic_target,
             "--db",
             vault_path.to_str().unwrap(),
             "--log",
@@ -711,11 +715,13 @@ async fn dam_connect_apply_restarts_paused_daemon_when_profile_target_changes() 
         .await
         .unwrap();
 
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&response_body).unwrap(),
         serde_json::from_str::<serde_json::Value>(raw_body).unwrap()
     );
-    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(response_body.contains("frank@example.com"));
+    assert!(!response_body.contains("[email:"));
     assert!(!upstream_body.contains("frank@example.com"));
     assert!(upstream_body.contains("[email:"));
 
@@ -727,10 +733,10 @@ async fn dam_connect_apply_restarts_paused_daemon_when_profile_target_changes() 
 }
 
 #[test]
-fn dam_integrations_apply_codex_and_rollback_from_binary() {
+fn dam_integrations_apply_chatgpt_and_rollback_from_binary() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
-    let profile_path = dir.path().join("codex.json");
+    let profile_path = dir.path().join("chatgpt.json");
     let original_profile = "{\"id\":\"old-profile\"}\n";
     std::fs::write(&profile_path, original_profile).unwrap();
 
@@ -739,7 +745,7 @@ fn dam_integrations_apply_codex_and_rollback_from_binary() {
         .args([
             "integrations",
             "apply",
-            "codex",
+            "chatgpt",
             "--dry-run",
             "--target-path",
             profile_path.to_str().unwrap(),
@@ -762,7 +768,7 @@ fn dam_integrations_apply_codex_and_rollback_from_binary() {
         .args([
             "integrations",
             "apply",
-            "codex",
+            "chatgpt",
             "--write",
             "--target-path",
             profile_path.to_str().unwrap(),
@@ -779,13 +785,13 @@ fn dam_integrations_apply_codex_and_rollback_from_binary() {
 
     let raw = std::fs::read_to_string(&profile_path).unwrap();
     let profile: serde_json::Value = serde_json::from_str(&raw).unwrap();
-    assert_eq!(profile["id"], "codex");
+    assert_eq!(profile["id"], "chatgpt");
     assert_eq!(profile["settings"][0]["value"], "http://127.0.0.1:9000");
     assert_eq!(profile["settings"][1]["value"], "http://127.0.0.1:9000");
     assert!(!raw.contains("dam_openai"));
 
     let rollback = Command::new(binary("dam"))
-        .args(["integrations", "rollback", "codex"])
+        .args(["integrations", "rollback", "chatgpt"])
         .current_dir(dir.path())
         .env("DAM_STATE_DIR", &state_dir)
         .output()
@@ -803,7 +809,7 @@ fn dam_integrations_apply_codex_and_rollback_from_binary() {
 fn dam_integrations_apply_claude_code_profile_json_and_rollback_from_binary() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
-    let profile_path = dir.path().join("claude-code.json");
+    let profile_path = dir.path().join("claude.json");
     let original_profile = "{\"id\":\"old-profile\"}\n";
     std::fs::write(&profile_path, original_profile).unwrap();
 
@@ -812,7 +818,7 @@ fn dam_integrations_apply_claude_code_profile_json_and_rollback_from_binary() {
         .args([
             "integrations",
             "apply",
-            "claude-code",
+            "claude",
             "--write",
             "--target-path",
             profile_path.to_str().unwrap(),
@@ -829,12 +835,12 @@ fn dam_integrations_apply_claude_code_profile_json_and_rollback_from_binary() {
 
     let profile: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&profile_path).unwrap()).unwrap();
-    assert_eq!(profile["id"], "claude-code");
+    assert_eq!(profile["id"], "claude");
     assert_eq!(profile["settings"][0]["value"], "http://127.0.0.1:9000");
     assert_eq!(profile["settings"][1]["value"], "http://127.0.0.1:9000");
 
     let rollback = Command::new(binary("dam"))
-        .args(["integrations", "rollback", "claude-code"])
+        .args(["integrations", "rollback", "claude"])
         .current_dir(dir.path())
         .env("DAM_STATE_DIR", &state_dir)
         .output()
@@ -971,8 +977,9 @@ async fn web_api_reads_vault_and_activity_populated_by_filter() {
         .await
         .unwrap();
     assert!(wallet_json.contains("\"ok\":true"));
-    assert!(wallet_json.contains("alice@example.com"));
-    assert!(wallet_json.contains("123-45-6789"));
+    assert!(wallet_json.contains("\"items\":[]"));
+    assert!(!wallet_json.contains("alice@example.com"));
+    assert!(!wallet_json.contains("123-45-6789"));
 
     let activity_json = reqwest::get(format!("{base}/api/v1/activity"))
         .await
@@ -982,8 +989,10 @@ async fn web_api_reads_vault_and_activity_populated_by_filter() {
         .unwrap();
     assert!(activity_json.contains("\"ok\":true"));
     assert!(activity_json.contains("sealed"));
-    assert!(!activity_json.contains("alice@example.com"));
-    assert!(!activity_json.contains("123-45-6789"));
+    assert!(activity_json.contains("\"profile\""));
+    assert!(activity_json.contains("\"value\""));
+    assert!(activity_json.contains("alice@example.com"));
+    assert!(activity_json.contains("123-45-6789"));
 
     let health_json = reqwest::get(format!("{base}/api/v1/health"))
         .await
@@ -996,7 +1005,7 @@ async fn web_api_reads_vault_and_activity_populated_by_filter() {
 }
 
 #[tokio::test]
-async fn proxy_redacts_outbound_and_resolves_inbound_response() {
+async fn proxy_tokenizes_outbound_and_resolves_inbound_references() {
     let dir = tempfile::tempdir().unwrap();
     let vault_path = dir.path().join("vault.db");
     let log_path = dir.path().join("log.db");
@@ -1035,9 +1044,10 @@ async fn proxy_redacts_outbound_and_resolves_inbound_response() {
         .await
         .unwrap();
 
-    assert_eq!(response_body, raw_body);
-
     let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert_eq!(response_body, raw_body);
+    assert!(response_body.contains("carol@example.com"));
+    assert!(!response_body.contains("[email:"));
     assert!(!upstream_body.contains("carol@example.com"));
     assert!(upstream_body.contains("[email:"));
     let vault_entries = dam_vault::Vault::open(&vault_path).unwrap().list().unwrap();
@@ -1069,8 +1079,6 @@ async fn proxy_redacts_outbound_and_resolves_inbound_response() {
     let logs = dam_log::LogStore::open(&log_path).unwrap().list().unwrap();
     assert!(logs.iter().any(|entry| entry.event_type == "proxy_forward"));
     assert!(logs.iter().any(|entry| entry.event_type == "vault_write"));
-    assert!(logs.iter().any(|entry| entry.event_type == "vault_read"));
-    assert!(logs.iter().any(|entry| entry.event_type == "resolve"));
     assert_logs_do_not_contain(&log_path, &["carol@example.com"]);
 }
 

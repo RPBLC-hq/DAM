@@ -27,8 +27,8 @@ export type ValueDetailProps = {
   meta?: ValueDetailMetaItem[]
   /** Parties currently allowed. Renders the sharing roster. */
   sharedWith?: ValueDetailParty[]
-  /** Default candidate party for the "allow" action when state is
-   *  protected/revoked and no party is explicit. */
+  /** Candidate party for the "allow" action. Omit on generic wallet browsing;
+   *  live request surfaces pass the requesting app/provider explicitly. */
   candidateParty?: string
   /** Called when the user confirms allowing a party. */
   onAllow?: (party: string) => void
@@ -63,7 +63,7 @@ export function ValueDetail({
   state,
   meta,
   sharedWith = [],
-  candidateParty = 'anthropic',
+  candidateParty,
   onAllow,
   onRevoke,
   onProtectAll,
@@ -99,26 +99,39 @@ export function ValueDetail({
       )}
 
       {sharedWith.length > 0 && (
-        <ul className="rpblc-value-detail__sharing">
-          {sharedWith.map((p) => (
-            <li className="rpblc-value-detail__sharing-row" key={p.name}>
-              <span>
-                <span className="rpblc-value-detail__sharing-who">{p.name}</span>
-                <span className="rpblc-value-detail__sharing-verb">has been reading this</span>
-              </span>
-              {p.since && (
-                <span className="rpblc-value-detail__sharing-since">since {p.since}</span>
-              )}
-            </li>
-          ))}
-        </ul>
+        <section className="rpblc-value-detail__sharing" aria-label="Allowed profiles">
+          <h3 className="rpblc-value-detail__sharing-title">Allowed</h3>
+          <ul className="rpblc-value-detail__sharing-list">
+            {sharedWith.map((p) => (
+              <li className="rpblc-value-detail__sharing-row" key={p.name}>
+                <span className="rpblc-value-detail__sharing-info">
+                  <span className="rpblc-value-detail__sharing-who">{p.name}</span>
+                  {p.since && (
+                    <span className="rpblc-value-detail__sharing-since">
+                      since {p.since}
+                    </span>
+                  )}
+                </span>
+                {onRevoke && (
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    type="button"
+                    onClick={() => setPending({ kind: 'revoke', party: p.name })}
+                  >
+                    stop allowing
+                  </Button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {pending === null ? (
         <ActionRegion
           state={state}
           candidateParty={candidateParty}
-          firstSharedParty={sharedWith[0]?.name}
           onChoose={setPending}
         />
       ) : (
@@ -141,40 +154,14 @@ export function ValueDetail({
 function ActionRegion({
   state,
   candidateParty,
-  firstSharedParty,
   onChoose,
 }: {
   state: ProtectionState
-  candidateParty: string
-  firstSharedParty?: string
+  candidateParty?: string
   onChoose: (p: Pending) => void
 }) {
   if (state === 'allowed') {
-    const party = firstSharedParty ?? candidateParty
-    return (
-      <div className="rpblc-value-detail__actions">
-        <p className="rpblc-value-detail__hint">
-          <b>{party}</b> can read this. Stop allowing them at any time — the next request
-          from them will be blocked.
-        </p>
-        <div className="rpblc-value-detail__actions-row">
-          <Button
-            variant="danger"
-            bracketed
-            onClick={() => onChoose({ kind: 'revoke', party })}
-          >
-            stop allowing {party}
-          </Button>
-          <Button
-            variant="secondary"
-            bracketed
-            onClick={() => onChoose({ kind: 'protect-all' })}
-          >
-            protect from everyone
-          </Button>
-        </div>
-      </div>
-    )
+    return null
   }
 
   return (
@@ -184,15 +171,17 @@ function ActionRegion({
           ? 'This value is protected. Nothing outside your local vault can read it.'
           : 'This value is protected again. Past sharing is logged in the audit trail.'}
       </p>
-      <div className="rpblc-value-detail__actions-row">
-        <Button
-          variant="primary"
-          bracketed
-          onClick={() => onChoose({ kind: 'allow', party: candidateParty })}
-        >
-          allow {candidateParty} to read this
-        </Button>
-      </div>
+      {candidateParty ? (
+        <div className="rpblc-value-detail__actions-row">
+          <Button
+            variant="primary"
+            bracketed
+            onClick={() => onChoose({ kind: 'allow', party: candidateParty })}
+          >
+            allow {candidateParty} to read this
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }

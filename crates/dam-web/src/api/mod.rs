@@ -10,6 +10,7 @@ mod insights;
 mod recently_scanned;
 mod requests;
 mod settings;
+mod setup;
 mod system;
 mod wallet;
 
@@ -23,11 +24,17 @@ pub fn router() -> Router<AppState> {
         .route("/bootstrap", get(bootstrap_route::get))
         .route("/connect", get(connect::get))
         .route("/connect/action", post(connect::post_action))
-        .route("/wallet", get(wallet::list))
-        .route("/wallet/:key", get(wallet::detail))
-        .route("/wallet/:key/allow", post(wallet::allow))
-        .route("/wallet/:key/revoke", post(wallet::revoke))
-        .route("/wallet/:key/protect", post(wallet::protect))
+        .route("/setup/plan", get(setup::plan))
+        .route("/setup/next-action", get(setup::next_action))
+        .route("/setup/rescue", post(setup::rescue))
+        .route("/setup/repair", post(setup::repair))
+        .route("/setup/diagnostics", get(setup::diagnostics))
+        .route("/wallet", get(wallet::list).post(wallet::add))
+        .route("/wallet/:id", get(wallet::detail))
+        .route("/wallet/:id/allow", post(wallet::allow))
+        .route("/wallet/:id/revoke", post(wallet::revoke))
+        .route("/wallet/:id/protect", post(wallet::protect))
+        .route("/wallet/:id/remove", post(wallet::remove))
         .route("/activity", get(activity::list))
         .route("/activity/:id", get(activity::detail))
         .route("/allowed", get(allowed::list))

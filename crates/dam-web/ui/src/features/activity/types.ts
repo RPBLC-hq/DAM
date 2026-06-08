@@ -14,8 +14,10 @@ export type ActivityEvent = {
   id: number
   ts: number
   day: string
-  actor: string
+  profile: string
   kind: string
+  value?: string
+  reference?: string
   decision: ActivityDecision
   purpose?: string
   audit_id: string

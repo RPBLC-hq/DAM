@@ -41,5 +41,6 @@ export type SetupStep = {
   id: string
   label: string
   state: SetupStepState
+  detail: string
   reason_code?: string
 }

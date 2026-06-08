@@ -1,0 +1,60 @@
+{
+  "id": "chatgpt",
+  "aliases": ["codex", "openai-compatible", "codex-api", "codex-chatgpt"],
+  "sort_order": 20,
+  "name": "ChatGPT",
+  "summary": "Route ChatGPT, OpenAI API, OpenAI platform, and Codex traffic through DAM.",
+  "provider": "openai-compatible",
+  "traffic_app_ids": [
+    "openai-api",
+    "openai-platform",
+    "chatgpt-web",
+    "chatgpt-legacy-web"
+  ],
+  "connect_args": [
+    "--network-mode",
+    "tun",
+    "--trust-mode",
+    "local_ca"
+  ],
+  "settings": [
+    {
+      "key": "HTTPS_PROXY",
+      "value": "{{proxy_url}}",
+      "description": "HTTPS proxy for explicit-proxy fallback"
+    },
+    {
+      "key": "HTTP_PROXY",
+      "value": "{{proxy_url}}",
+      "description": "HTTP proxy for explicit-proxy fallback"
+    }
+  ],
+  "commands": [
+    {
+      "label": "Start DAM for ChatGPT",
+      "command": [
+        "dam",
+        "connect",
+        "--profile",
+        "chatgpt"
+      ]
+    },
+    {
+      "label": "Run OpenAI-compatible tools through explicit-proxy fallback",
+      "command": [
+        "env",
+        "{{https_proxy_env}}={{proxy_url}}",
+        "{{http_proxy_env}}={{proxy_url}}",
+        "YOUR_COMMAND"
+      ]
+    }
+  ],
+  "notes": [
+    "ChatGPT, Codex, and OpenAI API clients keep their normal endpoint and authentication configuration; DAM does not write a custom provider or base URL.",
+    "Network Extension capture is primary for installed builds. The proxy env fallback is retained for source builds and unsupported environments.",
+    "`dam integrations apply chatgpt` ensures a DAM-owned JSON profile file under the integration profile directory; it does not mutate app settings or shell startup files.",
+    "API-key mode routes api.openai.com through the HTTP adapter. ChatGPT-login mode routes chatgpt.com and ab.chatgpt.com through the WebSocket adapter. Legacy chat.openai.com and platform.openai.com are covered as HTTPS routes.",
+    "OPENAI_API_KEY stays owned by the caller or the user's shell; DAM forwards caller auth headers."
+  ],
+  "automation": "connect_preset"
+}

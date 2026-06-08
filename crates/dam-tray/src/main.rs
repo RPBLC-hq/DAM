@@ -27,6 +27,7 @@ struct CliArgs {
     config_path: Option<PathBuf>,
     db_path: Option<PathBuf>,
     log_path: Option<PathBuf>,
+    activate_system_extension: Option<String>,
     deactivate_system_extension: Option<String>,
 }
 
@@ -75,6 +76,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, String>
         config_path: None,
         db_path: None,
         log_path: None,
+        activate_system_extension: None,
         deactivate_system_extension: None,
     };
 
@@ -93,6 +95,10 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, String>
             }
             "--db" => cli.db_path = Some(PathBuf::from(required_value(&mut args, "--db")?)),
             "--log" => cli.log_path = Some(PathBuf::from(required_value(&mut args, "--log")?)),
+            "--activate-system-extension" => {
+                cli.activate_system_extension =
+                    Some(required_value(&mut args, "--activate-system-extension")?)
+            }
             "--deactivate-system-extension" => {
                 cli.deactivate_system_extension =
                     Some(required_value(&mut args, "--deactivate-system-extension")?)
@@ -114,7 +120,7 @@ fn required_value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result
 }
 
 fn usage() -> &'static str {
-    "Usage: dam-tray [--addr 127.0.0.1:2896] [--config dam.toml] [--db vault.db] [--log log.db] [--dam-bin /path/to/dam] [--dam-web-bin /path/to/dam-web] [--deactivate-system-extension BUNDLE_ID]"
+    "Usage: dam-tray [--addr 127.0.0.1:2896] [--config dam.toml] [--db vault.db] [--log log.db] [--dam-bin /path/to/dam] [--dam-web-bin /path/to/dam-web] [--activate-system-extension BUNDLE_ID] [--deactivate-system-extension BUNDLE_ID]"
 }
 
 fn choose_web_addr(explicit: Option<&str>) -> Result<String, String> {
@@ -306,6 +312,21 @@ mod macos {
     }
 
     pub(super) fn run(cli: CliArgs) -> Result<(), String> {
+        if let Some(bundle_identifier) = cli.activate_system_extension.as_deref() {
+            let data_paths = data_paths(&cli)?;
+            let outcome = activate_system_extension(&data_paths, bundle_identifier)?;
+            match outcome {
+                SystemExtensionActivation::Ready => println!("DAM Network Protection is active"),
+                SystemExtensionActivation::NeedsApproval => {
+                    println!("approve DAM Network Protection in System Settings")
+                }
+                SystemExtensionActivation::NeedsReboot => {
+                    println!("restart macOS to finish the DAM Network Protection system change")
+                }
+            }
+            return Ok(());
+        }
+
         if let Some(bundle_identifier) = cli.deactivate_system_extension.as_deref() {
             let outcome = crate::macos_system_extension::deactivate(
                 bundle_identifier,
@@ -784,13 +805,7 @@ mod macos {
         config_path: Option<&PathBuf>,
     ) -> Result<ConnectOutcome, String> {
         let setup_plan = tray_setup_plan(data_paths, config_path)?;
-        if let Some(step) = setup_plan.steps.iter().find(|step| {
-            matches!(
-                step.status,
-                dam_diagnostics::SetupStepStatus::Needed
-                    | dam_diagnostics::SetupStepStatus::Blocked
-            )
-        }) {
+        if let Some(step) = selected_setup_step(&setup_plan) {
             if step.status == dam_diagnostics::SetupStepStatus::Blocked {
                 return Err(format!("DAM setup is blocked: {}", step.message));
             }
@@ -805,6 +820,12 @@ mod macos {
             "connect DAM",
         )?;
         Ok(ConnectOutcome::Connected)
+    }
+
+    fn selected_setup_step(
+        setup_plan: &dam_diagnostics::SetupPlan,
+    ) -> Option<&dam_diagnostics::SetupStep> {
+        setup_plan.next_action.as_ref()
     }
 
     fn tray_setup_plan(
@@ -950,7 +971,14 @@ mod macos {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| DEFAULT_MACOS_NE_BUNDLE_ID.to_string());
-        match crate::macos_system_extension::activate(&bundle_identifier, Duration::from_secs(20)) {
+        activate_system_extension(data_paths, &bundle_identifier)
+    }
+
+    fn activate_system_extension(
+        data_paths: &DataPaths,
+        bundle_identifier: &str,
+    ) -> Result<SystemExtensionActivation, String> {
+        match crate::macos_system_extension::activate(bundle_identifier, Duration::from_secs(20)) {
             Ok(crate::macos_system_extension::ActivationOutcome::Ready(_)) => {
                 // System Extension activation is only the native
                 // host becoming available. The helper still has to
@@ -958,7 +986,7 @@ mod macos {
                 // before DAM can mark capture active.
                 let _ = dam_net_macos::record_system_extension_ready(
                     &data_paths.state_dir,
-                    bundle_identifier,
+                    bundle_identifier.to_string(),
                     None,
                     Vec::new(),
                 );
@@ -967,7 +995,7 @@ mod macos {
             Ok(crate::macos_system_extension::ActivationOutcome::NeedsApproval(_)) => {
                 let _ = dam_net_macos::record_system_extension_needs_approval(
                     &data_paths.state_dir,
-                    bundle_identifier,
+                    bundle_identifier.to_string(),
                     None,
                     Vec::new(),
                 );
@@ -981,7 +1009,7 @@ mod macos {
                 // state before continuing.
                 let _ = dam_net_macos::record_pending_reboot(
                     &data_paths.state_dir,
-                    bundle_identifier,
+                    bundle_identifier.to_string(),
                     None,
                     Vec::new(),
                 );
@@ -1401,240 +1429,10 @@ mod macos {
     }
 
     #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn popover_origin_centers_under_tray_anchor() {
-            let monitor = PhysicalFrame {
-                x: 0.0,
-                y: 0.0,
-                width: 1440.0,
-                height: 900.0,
-            };
-            let anchor = PhysicalFrame {
-                x: 980.0,
-                y: 0.0,
-                width: 80.0,
-                height: 24.0,
-            };
-
-            let origin = popover_origin(Some(anchor), monitor, 430.0, 720.0, 8.0);
-
-            assert_eq!(origin.x, 805);
-            assert_eq!(origin.y, 24);
-        }
-
-        #[test]
-        fn popover_origin_clamps_to_monitor_edges() {
-            let monitor = PhysicalFrame {
-                x: 0.0,
-                y: 0.0,
-                width: 1440.0,
-                height: 900.0,
-            };
-            let anchor = PhysicalFrame {
-                x: 1410.0,
-                y: 0.0,
-                width: 60.0,
-                height: 24.0,
-            };
-
-            let origin = popover_origin(Some(anchor), monitor, 430.0, 720.0, 8.0);
-
-            assert_eq!(origin.x, 1002);
-            assert_eq!(origin.y, 24);
-        }
-
-        #[test]
-        fn webview_origin_check_allows_only_local_http_authority() {
-            assert!(url_has_local_origin(
-                "http://127.0.0.1:2896/connect",
-                "127.0.0.1:2896"
-            ));
-            assert!(!url_has_local_origin(
-                "http://127.0.0.1:28960/connect",
-                "127.0.0.1:2896"
-            ));
-            assert!(!url_has_local_origin("https://rpblc.com", "127.0.0.1:2896"));
-        }
-
-        #[test]
-        fn native_connect_args_include_state_paths_and_dev_modes() {
-            let data_paths = DataPaths {
-                state_dir: PathBuf::from("/tmp/dam-state"),
-                vault_path: PathBuf::from("/tmp/dam-state/vault.db"),
-                log_path: PathBuf::from("/tmp/dam-state/log.db"),
-                consent_path: PathBuf::from("/tmp/dam-state/consent.db"),
-            };
-            let args = connect_args(&data_paths, Some(&PathBuf::from("dam.toml")), true);
-
-            assert!(args.contains(&"--apply".to_string()));
-            assert!(arg_pair_exists(&args, "--config", "dam.toml"));
-            assert!(arg_pair_exists(&args, "--db", "/tmp/dam-state/vault.db"));
-            assert!(arg_pair_exists(&args, "--log", "/tmp/dam-state/log.db"));
-            assert!(arg_pair_exists(
-                &args,
-                "--consent-db",
-                "/tmp/dam-state/consent.db"
-            ));
-            assert!(arg_pair_exists(&args, "--network-mode", "explicit_proxy"));
-            assert!(arg_pair_exists(&args, "--trust-mode", "disabled"));
-        }
-
-        #[test]
-        fn native_connect_notice_encoding_is_url_and_js_safe() {
-            assert_eq!(
-                form_url_encode_component("Connect failed: local trust"),
-                "Connect+failed%3A+local+trust"
-            );
-            assert_eq!(js_string_literal("\"<&"), "\"\\\"\\u003c\\u0026\"");
-        }
-
-        #[test]
-        fn native_connect_failure_redirect_uses_error_banner_param() {
-            assert_eq!(
-                connect_result_redirect(Ok(ConnectOutcome::Connected)),
-                "/connect?notice=DAM+connected"
-            );
-            assert_eq!(
-                connect_result_redirect(Ok(ConnectOutcome::NeedsApproval)),
-                "/connect"
-            );
-            assert_eq!(
-                connect_result_redirect(Ok(ConnectOutcome::AdvancedSetup)),
-                "/connect"
-            );
-            assert_eq!(
-                connect_result_redirect(Ok(ConnectOutcome::NeedsReboot)),
-                "/connect"
-            );
-            assert_eq!(
-                connect_result_redirect(Err("local trust".to_string())),
-                "/connect?error=Connect+failed%3A+local+trust"
-            );
-            assert_eq!(
-                connect_result_redirect(Err(
-                    "action required: approve DAM Network Protection in System Settings, then click Connect/Resume again"
-                        .to_string()
-                )),
-                "/connect?error=Action+required%3A+approve+DAM+Network+Protection+in+System+Settings%2C+then+click+Connect%2FResume+again"
-            );
-            assert_eq!(
-                connect_result_redirect(Err(
-                    "failed to install Network Extension routing: DAM Network Protection is enabled but did not connect: timeout"
-                        .to_string()
-                )),
-                "/connect?error=DAM+Network+Protection+is+enabled+but+did+not+connect%3A+timeout"
-            );
-        }
-
-        #[test]
-        fn native_command_error_prefers_actionable_approval_line() {
-            let stdout = concat!(
-                "state: needs_approval\n",
-                "message: raw helper state\n",
-                "approval: approve DAM Network Protection in System Settings, then click Connect/Resume again\n",
-            );
-
-            assert_eq!(
-                dam_command_failure_message(stdout, ""),
-                "approve DAM Network Protection in System Settings, then click Connect/Resume again"
-            );
-            assert_eq!(
-                dam_command_failure_message(stdout, "explicit failure"),
-                "explicit failure"
-            );
-            assert_eq!(
-                dam_command_failure_message(
-                    "",
-                    "dam-macos-ne-helper: DAM Network Protection is enabled but did not connect: timeout"
-                ),
-                "DAM Network Protection is enabled but did not connect: timeout"
-            );
-        }
-
-        #[test]
-        fn network_extension_settings_urls_prefer_specific_extension_section() {
-            assert_eq!(
-                network_extension_approval_settings_urls(),
-                [
-                    "x-apple.systempreferences:com.apple.ExtensionsPreferences?extensionPointIdentifier=com.apple.system_extension.network_extension.extension-point",
-                    "x-apple.systempreferences:com.apple.LoginItems-Settings.extension?ExtensionItems",
-                    "x-apple.systempreferences:com.apple.LoginItems-Settings.extension",
-                ]
-            );
-        }
-
-        fn arg_pair_exists(args: &[String], name: &str, value: &str) -> bool {
-            args.windows(2)
-                .any(|pair| pair[0] == name && pair[1] == value)
-        }
-    }
+    #[path = "main_tests_1.rs"]
+    mod tests;
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_tray_args() {
-        let args = parse_args([
-            "--addr".to_string(),
-            "127.0.0.1:3000".to_string(),
-            "--dam-bin".to_string(),
-            "/tmp/dam".to_string(),
-            "--dam-web-bin".to_string(),
-            "/tmp/dam-web".to_string(),
-            "--config".to_string(),
-            "dam.toml".to_string(),
-            "--db".to_string(),
-            "vault.db".to_string(),
-            "--log".to_string(),
-            "log.db".to_string(),
-            "--deactivate-system-extension".to_string(),
-            "com.rpblc.dam.network-extension".to_string(),
-        ])
-        .unwrap();
-
-        assert_eq!(args.addr.as_deref(), Some("127.0.0.1:3000"));
-        assert_eq!(args.dam_bin, Some(PathBuf::from("/tmp/dam")));
-        assert_eq!(args.dam_web_bin, Some(PathBuf::from("/tmp/dam-web")));
-        assert_eq!(args.config_path, Some(PathBuf::from("dam.toml")));
-        assert_eq!(args.db_path, Some(PathBuf::from("vault.db")));
-        assert_eq!(args.log_path, Some(PathBuf::from("log.db")));
-        assert_eq!(
-            args.deactivate_system_extension.as_deref(),
-            Some("com.rpblc.dam.network-extension")
-        );
-    }
-
-    #[test]
-    fn rejects_non_loopback_web_addr() {
-        let error = choose_web_addr(Some("0.0.0.0:2896")).unwrap_err();
-
-        assert!(error.contains("loopback"));
-    }
-
-    #[test]
-    fn rejects_occupied_explicit_web_addr() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap().to_string();
-        let error = choose_web_addr(Some(&addr)).unwrap_err();
-
-        assert!(error.contains("already in use"));
-    }
-
-    #[test]
-    fn builds_connect_url() {
-        assert_eq!(
-            connect_url("127.0.0.1:2896"),
-            "http://127.0.0.1:2896/connect"
-        );
-    }
-
-    #[test]
-    fn hex_encode_uses_lowercase_pairs() {
-        assert_eq!(macos::hex_encode(&[0x00, 0x0f, 0xa5, 0xff]), "000fa5ff");
-    }
-}
+#[path = "main_tests_2.rs"]
+mod tests;

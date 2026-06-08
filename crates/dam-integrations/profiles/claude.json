@@ -1,0 +1,60 @@
+{
+  "id": "claude",
+  "aliases": ["claude-code", "anthropic"],
+  "sort_order": 10,
+  "name": "Claude",
+  "summary": "Route Claude, Claude Code, Anthropic API, and Anthropic Console traffic through DAM.",
+  "provider": "anthropic",
+  "traffic_app_ids": [
+    "anthropic-api",
+    "claude-web",
+    "anthropic-console",
+    "claude-mcp-proxy",
+    "claude-platform"
+  ],
+  "connect_args": [
+    "--network-mode",
+    "tun",
+    "--trust-mode",
+    "local_ca"
+  ],
+  "settings": [
+    {
+      "key": "HTTPS_PROXY",
+      "value": "{{proxy_url}}",
+      "description": "HTTPS proxy for explicit-proxy fallback"
+    },
+    {
+      "key": "HTTP_PROXY",
+      "value": "{{proxy_url}}",
+      "description": "HTTP proxy for explicit-proxy fallback"
+    }
+  ],
+  "commands": [
+    {
+      "label": "Start DAM for Claude",
+      "command": [
+        "dam",
+        "connect",
+        "--profile",
+        "claude"
+      ]
+    },
+    {
+      "label": "Run Claude Code through explicit-proxy fallback",
+      "command": [
+        "env",
+        "{{https_proxy_env}}={{proxy_url}}",
+        "{{http_proxy_env}}={{proxy_url}}",
+        "claude"
+      ]
+    }
+  ],
+  "notes": [
+    "Claude Code keeps its normal Anthropic API endpoint; Claude web, Anthropic Console, and Claude platform pages use their normal HTTPS endpoints. Network Extension capture is primary and explicit proxy remains a fallback for source builds and unsupported environments.",
+    "`dam integrations apply claude` ensures a DAM-owned JSON profile file under the integration profile directory; it does not mutate Claude settings.",
+    "Use the listed explicit-proxy fallback command only for source builds and unsupported environments.",
+    "Claude and Anthropic clients keep provider authentication; DAM only receives and forwards the request headers."
+  ],
+  "automation": "connect_preset"
+}

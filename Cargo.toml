@@ -20,8 +20,7 @@ members = [
     "crates/dam-policy",
     "crates/dam-pipeline",
     "crates/dam-provider-common",
-    "crates/dam-provider-anthropic",
-    "crates/dam-provider-openai",
+    "crates/dam-http-adapter",
     "crates/dam-proxy",
     "crates/dam-router",
     "crates/dam-resolve",
@@ -59,8 +58,7 @@ dam-net-macos = { path = "crates/dam-net-macos" }
 dam-policy = { path = "crates/dam-policy" }
 dam-pipeline = { path = "crates/dam-pipeline" }
 dam-provider-common = { path = "crates/dam-provider-common" }
-dam-provider-anthropic = { path = "crates/dam-provider-anthropic" }
-dam-provider-openai = { path = "crates/dam-provider-openai" }
+dam-http-adapter = { path = "crates/dam-http-adapter" }
 dam-router = { path = "crates/dam-router" }
 dam-resolve = { path = "crates/dam-resolve" }
 dam-redact = { path = "crates/dam-redact" }
@@ -78,7 +76,7 @@ futures-util = "0.3"
 rusqlite = { version = "0.31", features = ["bundled"] }
 pem = "3"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 sha1 = "0.10"
 sha2 = "0.10"
 tempfile = "3"

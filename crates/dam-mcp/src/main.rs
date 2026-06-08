@@ -69,11 +69,61 @@ fn handle_message(config: &dam_config::DamConfig, message: &Value) -> Option<Val
 }
 
 fn tools(config: &dam_config::DamConfig) -> Vec<Value> {
-    let mut tools = vec![json!({
-        "name": "dam_consent_list",
-        "description": "List DAM passthrough consents.",
-        "inputSchema": { "type": "object", "properties": {} }
-    })];
+    let mut tools = vec![
+        json!({
+            "name": "dam_status",
+            "description": "Inspect local DAM daemon status.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "dam_setup_plan",
+            "description": "Return DAM's read-only local setup plan.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "dam_setup_next_action",
+            "description": "Return the next idempotent DAM setup action.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "dam_setup_rescue",
+            "description": "Preview or apply local DAM setup rescue. Applying stops DAM and removes DAM-managed network routing.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "apply": { "type": "boolean" },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required as remove_dam_network_setup when apply is true."
+                    }
+                }
+            }
+        }),
+        json!({
+            "name": "dam_setup_repair",
+            "description": "Preview or apply rescue, then return the current setup plan.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "apply": { "type": "boolean" },
+                    "confirm": {
+                        "type": "string",
+                        "description": "Required as remove_dam_network_setup when apply is true."
+                    }
+                }
+            }
+        }),
+        json!({
+            "name": "dam_setup_export_diagnostics",
+            "description": "Export offline DAM setup diagnostics for agent repair workflows.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+        json!({
+            "name": "dam_consent_list",
+            "description": "List DAM passthrough consents.",
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+    ];
 
     if config.consent.mcp_write_enabled {
         tools.push(json!({
@@ -135,13 +185,20 @@ fn call_tool(
     name: &str,
     arguments: &Value,
 ) -> Result<String, String> {
-    let store = open_consent_store(config)?;
     match name {
+        "dam_status" => dam_status_tool(),
+        "dam_setup_plan" => dam_setup_plan_tool(config),
+        "dam_setup_next_action" => dam_setup_next_action_tool(config),
+        "dam_setup_rescue" => dam_setup_rescue_tool(arguments),
+        "dam_setup_repair" => dam_setup_repair_tool(config, arguments),
+        "dam_setup_export_diagnostics" => dam_setup_export_diagnostics_tool(config),
         "dam_consent_list" => {
+            let store = open_consent_store(config)?;
             let entries = store.list().map_err(|error| error.to_string())?;
             Ok(serde_json::to_string(&json!({ "consents": entries_to_json(&entries) })).unwrap())
         }
         "dam_consent_grant" if config.consent.mcp_write_enabled => {
+            let store = open_consent_store(config)?;
             let vault_key = arguments
                 .get("vault_key")
                 .and_then(Value::as_str)
@@ -161,6 +218,7 @@ fn call_tool(
             Ok(serde_json::to_string(&entry_to_json(&entry)).unwrap())
         }
         "dam_consent_revoke" if config.consent.mcp_write_enabled => {
+            let store = open_consent_store(config)?;
             let consent_id = arguments
                 .get("consent_id")
                 .and_then(Value::as_str)
@@ -173,6 +231,95 @@ fn call_tool(
         "dam_consent_request" => Err("dam_consent_request is parked until dam-notify".to_string()),
         _ => Err("unknown or disabled tool".to_string()),
     }
+}
+
+fn dam_setup_rescue_tool(arguments: &Value) -> Result<String, String> {
+    let apply = confirmed_apply(arguments)?;
+    let rescue = dam_diagnostics::setup_rescue(&dam_diagnostics::SetupRescueOptions {
+        state_dir: None,
+        proxy_url: None,
+        apply,
+    })?;
+    Ok(serde_json::to_string(&rescue).unwrap())
+}
+
+fn dam_setup_repair_tool(
+    config: &dam_config::DamConfig,
+    arguments: &Value,
+) -> Result<String, String> {
+    let apply = confirmed_apply(arguments)?;
+    let repair = dam_diagnostics::setup_repair(
+        config,
+        &dam_diagnostics::SetupRepairOptions {
+            setup: dam_diagnostics::SetupPlanOptions::default(),
+            apply,
+        },
+    )?;
+    Ok(serde_json::to_string(&repair).unwrap())
+}
+
+fn dam_setup_export_diagnostics_tool(config: &dam_config::DamConfig) -> Result<String, String> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("failed to start diagnostics runtime: {error}"))?;
+    let export = runtime.block_on(dam_diagnostics::setup_diagnostics_export(
+        config,
+        &dam_diagnostics::DoctorOptions::default(),
+        &dam_diagnostics::SetupPlanOptions::default(),
+    ))?;
+    Ok(serde_json::to_string(&export).unwrap())
+}
+
+fn confirmed_apply(arguments: &Value) -> Result<bool, String> {
+    let apply = arguments
+        .get("apply")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if apply && arguments.get("confirm").and_then(Value::as_str) != Some("remove_dam_network_setup")
+    {
+        return Err("confirm must be remove_dam_network_setup when apply is true".to_string());
+    }
+    Ok(apply)
+}
+
+fn dam_status_tool() -> Result<String, String> {
+    let value = match dam_daemon::daemon_status().map_err(|error| error.to_string())? {
+        dam_daemon::DaemonStatus::Disconnected => json!({
+            "state": "disconnected",
+            "message": "DAM is not connected"
+        }),
+        dam_daemon::DaemonStatus::Stale(state) => json!({
+            "state": "stale",
+            "message": format!("daemon state points at stopped pid {}", state.pid),
+            "daemon": state
+        }),
+        dam_daemon::DaemonStatus::Connected(state) => json!({
+            "state": if state.protection_enabled { "connected" } else { "paused" },
+            "message": format!("daemon process {} is running", state.pid),
+            "daemon": state
+        }),
+    };
+    Ok(serde_json::to_string(&value).unwrap())
+}
+
+fn dam_setup_plan_tool(config: &dam_config::DamConfig) -> Result<String, String> {
+    let plan = dam_diagnostics::setup_plan(config, &dam_diagnostics::SetupPlanOptions::default())?;
+    Ok(serde_json::to_string(&plan).unwrap())
+}
+
+fn dam_setup_next_action_tool(config: &dam_config::DamConfig) -> Result<String, String> {
+    let plan = dam_diagnostics::setup_plan(config, &dam_diagnostics::SetupPlanOptions::default())?;
+    Ok(serde_json::to_string(&json!({
+        "state": plan.state,
+        "message": plan.message,
+        "state_dir": plan.state_dir,
+        "proxy_url": plan.proxy_url,
+        "network_mode": plan.network_mode,
+        "trust_mode": plan.trust_mode,
+        "next_action": plan.next_action
+    }))
+    .unwrap())
 }
 
 fn open_consent_store(config: &dam_config::DamConfig) -> Result<dam_consent::ConsentStore, String> {
@@ -365,64 +512,5 @@ fn usage() -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn lists_tools() {
-        let config = dam_config::DamConfig::default();
-        let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/list"});
-        let response = handle_message(&config, &request).unwrap();
-
-        assert!(response.to_string().contains("dam_consent_grant"));
-        assert!(response.to_string().contains("dam_consent_revoke"));
-    }
-
-    #[test]
-    fn parses_content_length_messages() {
-        let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
-        let input = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
-
-        let messages = parse_messages(&input);
-
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0]["method"], "tools/list");
-    }
-
-    #[test]
-    fn stdio_handles_framed_messages_in_sequence() {
-        let config = dam_config::DamConfig::default();
-        let initialize = r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
-        let tools = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
-        let input = format!(
-            "Content-Length: {}\r\n\r\n{}Content-Length: {}\r\n\r\n{}",
-            initialize.len(),
-            initialize,
-            tools.len(),
-            tools
-        );
-        let mut output = Vec::new();
-
-        run_stdio(&config, input.as_bytes(), &mut output).unwrap();
-
-        let output = String::from_utf8(output).unwrap();
-        let responses = parse_messages(&output);
-        assert_eq!(responses.len(), 2);
-        assert_eq!(responses[0]["id"], 1);
-        assert_eq!(responses[0]["result"]["serverInfo"]["name"], "dam-mcp");
-        assert_eq!(responses[1]["id"], 2);
-        assert!(responses[1].to_string().contains("dam_consent_list"));
-    }
-
-    #[test]
-    fn stdio_rejects_oversized_message_frames() {
-        let config = dam_config::DamConfig::default();
-        let input = format!("Content-Length: {}\r\n\r\n{{}}", MAX_MESSAGE_BYTES + 1);
-        let mut output = Vec::new();
-
-        let error = run_stdio(&config, input.as_bytes(), &mut output).unwrap_err();
-
-        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert!(output.is_empty());
-    }
-}
+#[path = "main_tests.rs"]
+mod tests;

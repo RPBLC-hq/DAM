@@ -1,47 +1,56 @@
-import { useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Button,
   EmptyTile,
   ErrorTile,
+  ProtectionMark,
+  type ProtectionState,
   RedactionLoader,
   SearchBar,
   SegmentedControl,
 } from '@rpblc/design'
 
-import { ApiError, api } from '@/lib/api/client'
+import { ApiError, api, apiPost } from '@/lib/api/client'
 import { useI18n, type MessageKey } from '@/lib/i18n'
-import { resolveSurface } from '@/lib/surface'
 import { useUrlSearchParam, useUrlSearchString } from '@/lib/url-search'
 import type { ActivityDecision, ActivityEvent, ActivityView } from './types'
+import type { WalletDetail, WalletKind } from '@/features/wallet/types'
 
 type Decision = 'all' | ActivityDecision
-type Since = 'today' | '7d' | '30d' | 'all'
+type Since = '1h' | 'today' | '7d' | '30d' | 'all'
 
 const DECISION_VALUES: Decision[] = ['all', 'granted', 'sealed', 'denied']
-const SINCE_VALUES: Since[] = ['today', '7d', '30d', 'all']
+const SINCE_VALUES: Since[] = ['1h', 'today', '7d', '30d', 'all']
 
 const QUERY_KEY = 'activity' as const
+const ACTIVITY_REFETCH_INTERVAL_MS = 5_000
+
+type AddActivityValueRequest = {
+  eventId: number
+  kind: WalletKind
+  value: string
+}
 
 export function ActivityPage() {
   const { t, locale } = useI18n()
-  const surface = resolveSurface()
+  const queryClient = useQueryClient()
+  const [addedActivityIds, setAddedActivityIds] = useState<ReadonlySet<number>>(new Set())
   const formatter = useMemo(
     () => new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }),
     [locale],
   )
 
   // Filters: q + decision + since. URL-stable so refresh and share
-  // preserve state. Tray surface skips the URL plumbing (memory router)
-  // but the same state shape applies — just no surfaced filter UI on
-  // tray, since `recently-scanned` there is a fixed seed.
+  // preserve state. Tray surface uses memory history, but the same filter
+  // state applies so Activity never opens as an unbounded log dump.
   const [query, setQuery] = useUrlSearchString('q')
   const [decision, setDecision] = useUrlSearchParam<Decision>(
     'decision',
     'all',
     isDecision,
   )
-  const [since, setSince] = useUrlSearchParam<Since>('since', '7d', isSince)
+  const [since, setSince] = useUrlSearchParam<Since>('since', '1h', isSince)
 
   const activity = useQuery({
     queryKey: [QUERY_KEY, { query, decision, since }] as const,
@@ -57,7 +66,26 @@ export function ActivityPage() {
         { signal },
       )
     },
-    refetchInterval: 5_000,
+    refetchInterval: () =>
+      typeof document !== 'undefined' && document.visibilityState === 'hidden'
+        ? false
+        : ACTIVITY_REFETCH_INTERVAL_MS,
+    refetchOnWindowFocus: true,
+    staleTime: 1_000,
+  })
+
+  const addToWallet = useMutation({
+    mutationFn: ({ kind, value }: AddActivityValueRequest) =>
+      apiPost<WalletDetail>('/wallet', { kind, value }),
+    onSuccess: (_detail, variables) => {
+      setAddedActivityIds((current) => {
+        const next = new Set(current)
+        next.add(variables.eventId)
+        return next
+      })
+      void queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      void queryClient.invalidateQueries({ queryKey: ['connect'] })
+    },
   })
 
   const decisionOptions = DECISION_VALUES.map((value) => ({
@@ -77,28 +105,26 @@ export function ActivityPage() {
       <header className="dam-activity__header">
         <h1 className="dam-activity__heading">{t('activity.heading')}</h1>
         <p className="dam-activity__hint">{t('activity.hint')}</p>
-        {surface === 'web' && (
-          <div className="dam-activity__filters">
-            <SearchBar
-              value={query}
-              onValueChange={setQuery}
-              aria-label={t('activity.searchAria')}
-              placeholder={t('activity.searchPlaceholder')}
-            />
-            <SegmentedControl<Decision>
-              value={decision}
-              onValueChange={setDecision}
-              options={decisionOptions}
-              aria-label={t('activity.decisionAria')}
-            />
-            <SegmentedControl<Since>
-              value={since}
-              onValueChange={setSince}
-              options={sinceOptions}
-              aria-label={t('activity.sinceAria')}
-            />
-          </div>
-        )}
+        <div className="dam-activity__filters">
+          <SearchBar
+            value={query}
+            onValueChange={setQuery}
+            aria-label={t('activity.searchAria')}
+            placeholder={t('activity.searchPlaceholder')}
+          />
+          <SegmentedControl<Decision>
+            value={decision}
+            onValueChange={setDecision}
+            options={decisionOptions}
+            aria-label={t('activity.decisionAria')}
+          />
+          <SegmentedControl<Since>
+            value={since}
+            onValueChange={setSince}
+            options={sinceOptions}
+            aria-label={t('activity.sinceAria')}
+          />
+        </div>
       </header>
 
       <div className="dam-activity__list">
@@ -126,6 +152,11 @@ export function ActivityPage() {
               key={item.id}
               item={item}
               relative={(seconds) => relativePast(formatter, seconds)}
+              addBusy={addToWallet.isPending}
+              addPending={addToWallet.isPending && addToWallet.variables?.eventId === item.id}
+              addSucceeded={addedActivityIds.has(item.id)}
+              addFailed={addToWallet.isError && addToWallet.variables?.eventId === item.id}
+              onAddToWallet={(kind, value) => addToWallet.mutate({ eventId: item.id, kind, value })}
             />
           ))
         )}
@@ -137,48 +168,122 @@ export function ActivityPage() {
 function ActivityRow({
   item,
   relative,
+  addBusy,
+  addPending,
+  addSucceeded,
+  addFailed,
+  onAddToWallet,
 }: {
   item: ActivityEvent
   relative: (secondsAgo: number) => string
+  addBusy: boolean
+  addPending: boolean
+  addSucceeded: boolean
+  addFailed: boolean
+  onAddToWallet: (kind: WalletKind, value: string) => void
 }) {
   const { t } = useI18n()
   const ago = relative(Math.max(0, Math.floor(Date.now() / 1000) - item.ts))
   const decision = t(activityDecisionLabelKey(item.decision))
+  const detected = activityDetectedLabel(item, t('activity.valueUnavailable'))
+  const identifier = activityIdentifierLabel(item)
+  const walletKind = walletKindForActivityKind(item.kind)
+  const walletValue = item.value?.trim() ?? ''
+  const showWalletAction = walletKind !== null
+  const addDisabled = addBusy || addPending || addSucceeded || !walletValue
 
   return (
     <article className="dam-activity__row">
-      <div className="dam-activity__lead">
-        <span className="dam-activity__time">{ago}</span>
-        <span className="dam-activity__kind">[{item.kind}]</span>
-        <span className="dam-activity__value">{decision}</span>
+      <header className="dam-activity__row-header">
+        <div className="dam-activity__lead">
+          <span className="dam-activity__time">{ago}</span>
+          <span className="dam-activity__value">{detected}</span>
+        </div>
+        <ProtectionMark
+          state={protectionStateForDecision(item.decision)}
+          label={decision}
+          className="dam-activity__outcome"
+        />
+      </header>
+      <div className="dam-activity__facts" aria-label={t('activity.factsAria')}>
+        <ActivityIdentifier value={identifier} />
+        <ActivityFact label={t('activity.profile')} value={item.profile} />
       </div>
-      <span className="dam-activity__actor">
-        {t('activity.from')} <b>{item.actor}</b>
-      </span>
-      <div className="dam-activity__actions">
-        <Button
-          variant="primary"
-          size="sm"
-          bracketed
-          type="button"
-          disabled
-          title={t('activity.actionParked')}
-        >
-          {t('activity.add')}
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          bracketed
-          type="button"
-          disabled
-          title={t('activity.actionParked')}
-        >
-          {t('activity.allowOnce')}
-        </Button>
-      </div>
+      {showWalletAction && (
+        <div className="dam-activity__actions">
+          {addFailed && (
+            <p className="dam-activity__action-error">{t('activity.error.addFailed')}</p>
+          )}
+          <Button
+            variant="secondary"
+            size="sm"
+            bracketed
+            type="button"
+            disabled={addDisabled}
+            title={!walletValue ? t('activity.valueUnavailable') : undefined}
+            onClick={() => {
+              if (!walletKind || !walletValue) return
+              onAddToWallet(walletKind, walletValue)
+            }}
+          >
+            {addPending
+              ? t('activity.adding')
+              : addSucceeded
+                ? t('activity.added')
+                : t('activity.add')}
+          </Button>
+        </div>
+      )}
     </article>
   )
+}
+
+function activityDetectedLabel(item: ActivityEvent, unavailable: string): string {
+  if (item.value) return item.value
+  if (item.kind !== 'unknown') return `[${item.kind}]`
+  return unavailable
+}
+
+function activityIdentifierLabel(item: ActivityEvent): string {
+  if (item.reference) return item.reference
+  if (item.kind !== 'unknown') return item.kind
+  return item.audit_id
+}
+
+function ActivityIdentifier({ value }: { value: string }) {
+  return (
+    <span className="dam-activity__fact dam-activity__identifier">
+      [<b>{value}</b>]
+    </span>
+  )
+}
+
+function ActivityFact({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="dam-activity__fact">
+      [{label}: <b>{value}</b>]
+    </span>
+  )
+}
+
+function protectionStateForDecision(decision: ActivityDecision): ProtectionState {
+  if (decision === 'granted') return 'allowed'
+  if (decision === 'denied') return 'revoked'
+  return 'protected'
+}
+
+function walletKindForActivityKind(kind: string): WalletKind | null {
+  if (
+    kind === 'email' ||
+    kind === 'domain' ||
+    kind === 'phone' ||
+    kind === 'ssn' ||
+    kind === 'cc'
+  ) {
+    return kind
+  }
+  if (kind === 'credit_card' || kind === 'credit-card') return 'cc'
+  return null
 }
 
 function LoadingState() {
@@ -231,6 +336,7 @@ function activityDecisionLabelKey(value: ActivityDecision): MessageKey {
 }
 
 function sinceLabelKey(value: Since): MessageKey {
+  if (value === '1h') return 'activity.since.1h'
   if (value === 'today') return 'activity.since.today'
   if (value === '7d') return 'activity.since.7d'
   if (value === '30d') return 'activity.since.30d'
@@ -238,8 +344,9 @@ function sinceLabelKey(value: Since): MessageKey {
 }
 
 function sinceTimestamp(value: Since): number | null {
-  if (value === 'all') return null
+  if (value === 'all') return 0
   const now = Math.floor(Date.now() / 1000)
+  if (value === '1h') return now - 3_600
   if (value === 'today') {
     const start = new Date()
     start.setHours(0, 0, 0, 0)

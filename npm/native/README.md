@@ -4,9 +4,11 @@ Expected layout:
 
 ```text
 npm/native/darwin-arm64/dam
+npm/native/darwin-arm64/damctl
 npm/native/darwin-arm64/dam-web
 npm/native/darwin-arm64/dam-proxy
 npm/native/darwin-arm64/dam-mcp
+npm/native/darwin-arm64/dam-tray
 npm/native/darwin-arm64/dam-macos-ne-helper
 ```
 

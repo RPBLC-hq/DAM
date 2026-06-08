@@ -51,7 +51,7 @@ log_write = "warn_continue"
 
 [traffic]
 profile_path = "traffic-profile.json"
-enabled_apps = ["openai-api", "anthropic-api", "chatgpt-codex"]
+enabled_apps = ["openai-api", "openai-platform", "anthropic-api", "claude-web", "anthropic-console", "claude-mcp-proxy", "claude-platform", "chatgpt-web", "chatgpt-legacy-web"]
 
 [web]
 addr = "127.0.0.1:2896"
@@ -69,9 +69,17 @@ provider = "openai-compatible"
 upstream = "https://api.openai.com"
 failure_mode = "bypass_on_error"
 api_key_env = "OPENAI_API_KEY"
+
+[proxy.targets.auth]
+caller_headers = ["authorization"]
+
+[proxy.targets.auth.inject]
+header = "authorization"
+scheme = "Bearer"
+strip_headers = ["authorization"]
 ```
 
-Supported first-slice provider values are `generic-http`, `openai-compatible`, and `anthropic`. The local proxy can accept multiple configured targets; `dam-router` selects the OpenAI-compatible or Anthropic route from request path/header shape or from the transparent AI route match. `generic-http` remains a low-level caller-auth pass-through target value for future profile-builder/import work; Settings-created generic website profiles are not wired in the current app.
+Provider values are labels used to match traffic-profile routes to proxy targets. The local proxy can accept multiple configured targets; `dam-router` selects the default target for direct app-layer requests and selects a specific target only when `dam-proxy` passes in a matched traffic-profile route. It no longer infers providers from request paths or provider headers. Caller-auth headers and optional target-key injection are target/profile data. Settings-created generic website profiles are not wired in the current app.
 
 `traffic.profile_path` is optional. Without it, DAM loads the bundled JSON traffic profile at `crates/dam-net/profiles/llm-mvp.json`. A traffic profile contains app entries: each entry names match rules such as domains, IPs, URLs, ports, protocols, and process names; an action such as `inspect` or `bypass`; the protocol adapter; and the generic pipeline steps to run. LLM providers are only the bundled MVP entries, not the shape of the system.
 
@@ -98,11 +106,14 @@ Private enterprise gateways and provider-compatible endpoints are traffic profil
       "upstream": "https://api.enterprise-ai.example",
       "steps": [
         {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
-        {"id": "tokenize", "kind": "replace_sensitive_data", "direction": "outbound"},
+        {"id": "redact", "kind": "replace_sensitive_data", "direction": "outbound"},
         {"id": "resolve", "kind": "resolve_references", "direction": "inbound"}
       ],
+      "outbound": {
+        "filter": {"default_action": "redact"}
+      },
       "inbound": {
-        "resolve_references": false,
+        "resolve_references": true,
         "protect_sensitive_data": true
       }
     }
@@ -110,7 +121,7 @@ Private enterprise gateways and provider-compatible endpoints are traffic profil
 }
 ```
 
-`inbound.resolve_references` controls whether existing DAM references are restored in HTTP responses. `inbound.protect_sensitive_data` is separate and defaults to `false`; it must be set for routes that should redetect/tokenize raw inbound HTTP response text. Stateful or browser-like routes should leave HTTP inbound protection off unless their response envelopes are known safe to rewrite.
+`inbound.resolve_references` controls whether existing DAM references are restored in HTTP responses. `inbound.protect_sensitive_data` is separate and defaults to `false`; it must be set for routes that should redetect/redact raw inbound HTTP response text without writing those inbound detections to Wallet. Stateful or browser-like routes should leave HTTP inbound protection off unless their response envelopes are known safe to rewrite.
 
 `network.ai_routes` has been removed. Config files that still contain `[[network.ai_routes]]` fail validation with a migration message instead of silently dropping private endpoint protection.
 
@@ -139,7 +150,7 @@ export DAM_POLICY_SSN_ACTION=redact
 export DAM_FAILURE_VAULT_WRITE=redact_only
 export DAM_FAILURE_LOG_WRITE=warn_continue
 export DAM_TRAFFIC_PROFILE=/etc/dam/traffic-profile.json
-export DAM_TRAFFIC_ENABLED_APPS=openai-api,anthropic-api,chatgpt-codex
+export DAM_TRAFFIC_ENABLED_APPS=openai-api,openai-platform,anthropic-api,claude-web,anthropic-console,claude-mcp-proxy,claude-platform,chatgpt-web,chatgpt-legacy-web
 export DAM_WEB_ADDR=127.0.0.1:2896
 export DAM_PROXY_ENABLED=true
 export DAM_PROXY_LISTEN=127.0.0.1:7828
@@ -251,7 +262,7 @@ upstream = "https://api.openai.com"
 api_key_env = "OPENAI_API_KEY"
 ```
 
-`dam-proxy` uses the resolved key if present. If `api_key_env` is configured but missing and the request does not provide provider auth, the proxy returns `config_required`. For `openai-compatible`, provider auth is `Authorization`. For `anthropic`, provider auth is `x-api-key`; `Authorization` is also accepted as caller auth for compatibility but is dropped when DAM injects an Anthropic target key.
+`dam-proxy` uses the resolved key if present and the target defines `auth.inject`. If `api_key_env` is configured but missing and the request does not provide one of the target's configured `auth.caller_headers`, the proxy returns `config_required`. Bundled profiles define the OpenAI-compatible and Anthropic header behavior in JSON rather than Rust provider code.
 
 ## Tests
 

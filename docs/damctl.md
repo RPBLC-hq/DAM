@@ -45,7 +45,7 @@ With an explicit proxy URL:
 
 ```bash
 cargo run -p damctl -- status --proxy-url http://127.0.0.1:7828
-cargo run -p damctl -- integrations check codex --proxy-url http://127.0.0.1:7828
+cargo run -p damctl -- integrations check chatgpt --proxy-url http://127.0.0.1:7828
 ```
 
 JSON output:
@@ -92,7 +92,7 @@ It checks:
 - proxy runtime `/health` when proxy is enabled;
 - default setup-plan readiness for the local proxy/interception connect flow;
 - integration profile apply state summary;
-- enabled integration profile and Codex ChatGPT-login setup readiness.
+- enabled integration profile and ChatGPT-login setup readiness.
 
 Exit codes:
 
@@ -141,7 +141,7 @@ It reports:
 - lifecycle state: `connected`, `stale`, or `disconnected`;
 - state directory and state file path;
 - whether the recorded PID is running when a state file exists;
-- proxy URL, target, provider, upstream, network mode, transparent AI route count, per-route routing readiness, trust mode, local CA installed state, per-route trust readiness, per-route interception readiness, local database paths, and inbound resolution setting from the state file.
+- proxy URL, target, provider, upstream, network mode, transparent route count, per-route routing readiness, trust mode, local CA installed state, per-route trust readiness, per-route interception readiness, local database paths, and inbound resolution setting from the state file.
 
 Use `--state-dir PATH` to inspect a non-default state directory, for example in tests or support sessions.
 
@@ -166,7 +166,7 @@ It reports:
 - platform trust-store tag;
 - whether a local CA record is installed;
 - local CA artifact paths when artifacts exist;
-- trusted AI host count;
+- trusted host count;
 - per-route trust readiness for the active traffic profile routes recorded in daemon state;
 - trust actions and whether each is implemented or planned.
 
@@ -220,6 +220,7 @@ It reports:
 - effective proxy URL;
 - requested network mode and trust mode;
 - active integration profile when one is selected;
+- `next_action`, the first blocked setup step when setup cannot continue or otherwise the first needed setup step;
 - setup steps for app selection, system proxy or Network Extension routing, local CA trust, and daemon lifecycle.
 
 Each step reports:
@@ -230,6 +231,8 @@ Each step reports:
 - `skipped`: the step is not required for the selected mode.
 
 Use `--network-mode explicit_proxy|system_proxy|tun` and `--trust-mode disabled|local_ca` to preview a richer local setup path. `system_proxy`, `tun`, and `local_ca` steps are marked as system-changing when they require installation. `tun` reports the macOS Network Extension install step and still requires the signed helper/app bundle before it can become active.
+
+The same shared plan is exposed through `dam setup status --json` and `dam setup plan --json`. `dam setup next-action --json` and `dam setup resume --json` return only the next-action projection for autonomous installers. User-facing `dam setup` steps include stable `kind`, `status`, and `detail` fields for machine callers; `dam setup repair --json` combines rescue preview/apply with a fresh setup plan, and `dam setup export-diagnostics --json` returns the offline doctor/setup/rescue-preview bundle.
 
 Exit codes:
 
@@ -243,8 +246,8 @@ Exit codes:
 
 ```bash
 cargo run -p damctl -- integrations check
-cargo run -p damctl -- integrations check codex
-cargo run -p damctl -- integrations check codex --target-path ./codex-test.json
+cargo run -p damctl -- integrations check chatgpt
+cargo run -p damctl -- integrations check chatgpt --target-path ./chatgpt-test.json
 ```
 
 It reports each profile as:

@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const DEFAULT_SCOPE: &str = "global";
+pub const DEFAULT_SCOPE: &str = "global";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConsentError {
@@ -126,13 +126,22 @@ impl ConsentStore {
     }
 
     pub fn grant(&self, grant: &GrantConsent) -> ConsentResult<ConsentEntry> {
+        self.grant_scoped(grant, DEFAULT_SCOPE)
+    }
+
+    pub fn grant_scoped(
+        &self,
+        grant: &GrantConsent,
+        scope: impl AsRef<str>,
+    ) -> ConsentResult<ConsentEntry> {
         let now = now_unix_secs()?;
+        let scope = normalize_scope(scope.as_ref());
         let entry = ConsentEntry {
             id: generate_consent_id(),
             kind: grant.kind,
             value_fingerprint: fingerprint(grant.kind, &grant.value),
             vault_key: grant.vault_key.clone(),
-            scope: DEFAULT_SCOPE.to_string(),
+            scope,
             created_at: now,
             expires_at: now + grant.ttl_seconds as i64,
             revoked_at: None,
@@ -174,26 +183,72 @@ impl ConsentStore {
         created_by: impl Into<String>,
         reason: Option<String>,
     ) -> ConsentResult<ConsentEntry> {
+        self.grant_for_reference_scoped(
+            vault_key,
+            vault,
+            ttl_seconds,
+            created_by,
+            reason,
+            DEFAULT_SCOPE,
+        )
+    }
+
+    pub fn grant_for_reference_scoped(
+        &self,
+        vault_key: &str,
+        vault: &(impl VaultReader + ?Sized),
+        ttl_seconds: u64,
+        created_by: impl Into<String>,
+        reason: Option<String>,
+        scope: impl AsRef<str>,
+    ) -> ConsentResult<ConsentEntry> {
         let reference = Reference::parse_key(vault_key)
             .ok_or_else(|| ConsentError::InvalidReference(vault_key.to_string()))?;
         let Some(value) = vault.read(&reference)? else {
             return Err(ConsentError::VaultValueNotFound(vault_key.to_string()));
         };
 
-        self.grant(&GrantConsent {
-            kind: reference.kind,
-            value,
-            vault_key: Some(reference.key()),
-            ttl_seconds,
-            created_by: created_by.into(),
-            reason,
-        })
+        self.grant_scoped(
+            &GrantConsent {
+                kind: reference.kind,
+                value,
+                vault_key: Some(reference.key()),
+                ttl_seconds,
+                created_by: created_by.into(),
+                reason,
+            },
+            scope,
+        )
     }
 
     pub fn active_for_value(
         &self,
         kind: SensitiveType,
         value: &str,
+    ) -> ConsentResult<Option<ConsentEntry>> {
+        self.active_for_value_in_scopes(kind, value, &[])
+    }
+
+    pub fn active_for_value_in_scopes(
+        &self,
+        kind: SensitiveType,
+        value: &str,
+        scopes: &[String],
+    ) -> ConsentResult<Option<ConsentEntry>> {
+        let lookup_scopes = lookup_scopes(scopes);
+        for scope in lookup_scopes {
+            if let Some(entry) = self.active_for_value_in_scope(kind, value, &scope)? {
+                return Ok(Some(entry));
+            }
+        }
+        Ok(None)
+    }
+
+    fn active_for_value_in_scope(
+        &self,
+        kind: SensitiveType,
+        value: &str,
+        scope: &str,
     ) -> ConsentResult<Option<ConsentEntry>> {
         let now = now_unix_secs()?;
         let value_fingerprint = fingerprint(kind, value);
@@ -212,7 +267,7 @@ impl ConsentStore {
                 ORDER BY expires_at DESC
                 LIMIT 1
                 ",
-                params![kind.tag(), value_fingerprint, DEFAULT_SCOPE, now],
+                params![kind.tag(), value_fingerprint, scope, now],
                 row_to_entry,
             )
             .optional()?;
@@ -259,6 +314,50 @@ impl ConsentStore {
         Ok(changed > 0)
     }
 
+    pub fn revoke_for_vault_key(&self, vault_key: &str) -> ConsentResult<u64> {
+        self.revoke_for_vault_key_where(vault_key, None)
+    }
+
+    pub fn revoke_for_vault_key_and_created_by(
+        &self,
+        vault_key: &str,
+        created_by: &str,
+    ) -> ConsentResult<u64> {
+        self.revoke_for_vault_key_where(vault_key, Some(created_by))
+    }
+
+    fn revoke_for_vault_key_where(
+        &self,
+        vault_key: &str,
+        created_by: Option<&str>,
+    ) -> ConsentResult<u64> {
+        let now = now_unix_secs()?;
+        let conn = self.conn.lock().expect("consent sqlite mutex poisoned");
+        let changed = if let Some(created_by) = created_by {
+            conn.execute(
+                "
+                UPDATE consents
+                SET revoked_at = ?1
+                WHERE vault_key = ?2
+                  AND created_by = ?3
+                  AND revoked_at IS NULL
+                ",
+                params![now, vault_key, created_by],
+            )?
+        } else {
+            conn.execute(
+                "
+                UPDATE consents
+                SET revoked_at = ?1
+                WHERE vault_key = ?2
+                  AND revoked_at IS NULL
+                ",
+                params![now, vault_key],
+            )?
+        };
+        Ok(changed as u64)
+    }
+
     pub fn list(&self) -> ConsentResult<Vec<ConsentEntry>> {
         let conn = self.conn.lock().expect("consent sqlite mutex poisoned");
         let mut stmt = conn.prepare(
@@ -288,6 +387,14 @@ pub fn apply_consents_to_decisions(
     decisions: &[PolicyDecision],
     store: Option<&ConsentStore>,
 ) -> ConsentResult<(Vec<PolicyDecision>, Vec<ConsentMatch>)> {
+    apply_consents_to_decisions_in_scopes(decisions, store, &[])
+}
+
+pub fn apply_consents_to_decisions_in_scopes(
+    decisions: &[PolicyDecision],
+    store: Option<&ConsentStore>,
+    scopes: &[String],
+) -> ConsentResult<(Vec<PolicyDecision>, Vec<ConsentMatch>)> {
     let Some(store) = store else {
         return Ok((decisions.to_vec(), Vec::new()));
     };
@@ -300,9 +407,11 @@ pub fn apply_consents_to_decisions(
             continue;
         }
 
-        if let Some(consent) =
-            store.active_for_value(decision.detection.kind, &decision.detection.value)?
-        {
+        if let Some(consent) = store.active_for_value_in_scopes(
+            decision.detection.kind,
+            &decision.detection.value,
+            scopes,
+        )? {
             matches.push(ConsentMatch {
                 consent_id: consent.id,
                 kind: decision.detection.kind,
@@ -317,6 +426,10 @@ pub fn apply_consents_to_decisions(
     }
 
     Ok((applied, matches))
+}
+
+pub fn target_scope(target_name: &str) -> String {
+    format!("target:{}", target_name.trim())
 }
 
 fn row_to_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConsentEntry> {
@@ -351,6 +464,26 @@ fn generate_consent_id() -> String {
     format!("consent_{}", bs58::encode(uuid.as_bytes()).into_string())
 }
 
+fn normalize_scope(scope: &str) -> String {
+    let trimmed = scope.trim();
+    if trimmed.is_empty() {
+        DEFAULT_SCOPE.to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn lookup_scopes(scopes: &[String]) -> Vec<String> {
+    let mut normalized = vec![DEFAULT_SCOPE.to_string()];
+    for scope in scopes {
+        let scope = normalize_scope(scope);
+        if scope != DEFAULT_SCOPE && !normalized.contains(&scope) {
+            normalized.push(scope);
+        }
+    }
+    normalized
+}
+
 fn now_unix_secs() -> ConsentResult<i64> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -359,168 +492,5 @@ fn now_unix_secs() -> ConsentResult<i64> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use dam_core::{VaultRecord, VaultWriter};
-
-    #[test]
-    fn grant_and_match_active_value() {
-        let store = ConsentStore::open_in_memory().unwrap();
-        let entry = store
-            .grant(&GrantConsent {
-                kind: SensitiveType::Email,
-                value: "alice@example.test".to_string(),
-                vault_key: None,
-                ttl_seconds: 60,
-                created_by: "test".to_string(),
-                reason: None,
-            })
-            .unwrap();
-
-        let matched = store
-            .active_for_value(SensitiveType::Email, "alice@example.test")
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(matched.id, entry.id);
-        assert_eq!(store.count().unwrap(), 1);
-    }
-
-    #[test]
-    fn grant_matches_canonical_email_variants() {
-        let store = ConsentStore::open_in_memory().unwrap();
-        let entry = store
-            .grant(&GrantConsent {
-                kind: SensitiveType::Email,
-                value: "alice@example.com".to_string(),
-                vault_key: None,
-                ttl_seconds: 60,
-                created_by: "test".to_string(),
-                reason: None,
-            })
-            .unwrap();
-
-        let matched = store
-            .active_for_value(SensitiveType::Email, "alice@ example.COM")
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(matched.id, entry.id);
-    }
-
-    #[test]
-    fn revoked_consent_does_not_match() {
-        let store = ConsentStore::open_in_memory().unwrap();
-        let entry = store
-            .grant(&GrantConsent {
-                kind: SensitiveType::Email,
-                value: "alice@example.test".to_string(),
-                vault_key: None,
-                ttl_seconds: 60,
-                created_by: "test".to_string(),
-                reason: None,
-            })
-            .unwrap();
-
-        assert!(store.revoke(&entry.id).unwrap());
-
-        assert!(
-            store
-                .active_for_value(SensitiveType::Email, "alice@example.test")
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn revoke_stops_all_active_grants_for_same_exact_value() {
-        let store = ConsentStore::open_in_memory().unwrap();
-        let first = store
-            .grant(&GrantConsent {
-                kind: SensitiveType::Email,
-                value: "alice@example.test".to_string(),
-                vault_key: Some("email:first".to_string()),
-                ttl_seconds: 60,
-                created_by: "test".to_string(),
-                reason: None,
-            })
-            .unwrap();
-        store
-            .grant(&GrantConsent {
-                kind: SensitiveType::Email,
-                value: "alice@example.test".to_string(),
-                vault_key: Some("email:second".to_string()),
-                ttl_seconds: 60,
-                created_by: "test".to_string(),
-                reason: None,
-            })
-            .unwrap();
-
-        assert!(store.revoke(&first.id).unwrap());
-
-        assert!(
-            store
-                .active_for_value(SensitiveType::Email, "alice@example.test")
-                .unwrap()
-                .is_none()
-        );
-        assert_eq!(
-            store
-                .list()
-                .unwrap()
-                .iter()
-                .filter(|entry| entry.revoked_at.is_some())
-                .count(),
-            2
-        );
-    }
-
-    #[test]
-    fn expired_consent_does_not_match() {
-        let store = ConsentStore::open_in_memory().unwrap();
-        store
-            .grant(&GrantConsent {
-                kind: SensitiveType::Email,
-                value: "alice@example.test".to_string(),
-                vault_key: None,
-                ttl_seconds: 0,
-                created_by: "test".to_string(),
-                reason: None,
-            })
-            .unwrap();
-
-        assert!(
-            store
-                .active_for_value(SensitiveType::Email, "alice@example.test")
-                .unwrap()
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn grants_from_vault_reference_without_storing_raw_value() {
-        let vault = dam_vault::Vault::open_in_memory().unwrap();
-        let store = ConsentStore::open_in_memory().unwrap();
-        let reference = Reference::generate(SensitiveType::Email);
-        vault
-            .write(&VaultRecord {
-                reference: reference.clone(),
-                kind: SensitiveType::Email,
-                value: "alice@example.test".to_string(),
-            })
-            .unwrap();
-
-        let entry = store
-            .grant_for_reference(&reference.key(), &vault, 60, "test", None)
-            .unwrap();
-
-        assert_eq!(entry.vault_key, Some(reference.key()));
-        assert_ne!(entry.value_fingerprint, "alice@example.test");
-        assert!(
-            store
-                .active_for_value(SensitiveType::Email, "alice@example.test")
-                .unwrap()
-                .is_some()
-        );
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;

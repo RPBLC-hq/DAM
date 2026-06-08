@@ -29,15 +29,19 @@ export function useEventStream(): void {
 
     const onPending = () => {
       void queryClient.invalidateQueries({ queryKey: ['pending-requests'] })
+      void queryClient.invalidateQueries({ queryKey: ['activity'] })
     }
     const onResolved = () => {
       void queryClient.invalidateQueries({ queryKey: ['pending-requests'] })
+      void queryClient.invalidateQueries({ queryKey: ['activity'] })
     }
     const onConnect = () => {
       void queryClient.invalidateQueries({ queryKey: ['connect'] })
+      void queryClient.invalidateQueries({ queryKey: ['activity'] })
     }
     const onWallet = () => {
       void queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      void queryClient.invalidateQueries({ queryKey: ['activity'] })
     }
     // EventSource auto-reconnects on transient drops (server restart,
     // network blip). On every (re)open we re-invalidate the live keys
@@ -48,6 +52,7 @@ export function useEventStream(): void {
       void queryClient.invalidateQueries({ queryKey: ['connect'] })
       void queryClient.invalidateQueries({ queryKey: ['pending-requests'] })
       void queryClient.invalidateQueries({ queryKey: ['wallet'] })
+      void queryClient.invalidateQueries({ queryKey: ['activity'] })
     }
 
     source.addEventListener('request.pending', onPending)

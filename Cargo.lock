@@ -550,6 +550,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dam-http-adapter"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "dam-provider-common",
+ "futures-util",
+ "reqwest",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "dam-integrations"
 version = "0.1.0"
 dependencies = [
@@ -584,9 +596,14 @@ version = "0.1.0"
 dependencies = [
  "dam-config",
  "dam-consent",
+ "dam-daemon",
+ "dam-diagnostics",
+ "dam-net",
+ "dam-trust",
  "dam-vault",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -631,36 +648,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "dam-provider-anthropic"
-version = "0.1.0"
-dependencies = [
- "axum",
- "dam-provider-common",
- "futures-util",
- "reqwest",
- "thiserror 2.0.18",
- "tokio",
-]
-
-[[package]]
 name = "dam-provider-common"
 version = "0.1.0"
 dependencies = [
  "axum",
  "futures-util",
  "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "dam-provider-openai"
-version = "0.1.0"
-dependencies = [
- "axum",
- "dam-provider-common",
- "futures-util",
- "reqwest",
- "thiserror 2.0.18",
  "tokio",
 ]
 
@@ -673,13 +666,12 @@ dependencies = [
  "dam-config",
  "dam-consent",
  "dam-core",
+ "dam-http-adapter",
  "dam-intercept",
  "dam-log",
  "dam-net",
  "dam-pipeline",
  "dam-policy",
- "dam-provider-anthropic",
- "dam-provider-openai",
  "dam-router",
  "dam-trust",
  "dam-vault",
@@ -2905,6 +2897,7 @@ version = "1.0.149"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "83fc039473c5595ace860d8c4fafa220ff474b3fc6bfdb4293327f1a37e94d86"
 dependencies = [
+ "indexmap",
  "itoa",
  "memchr",
  "serde",

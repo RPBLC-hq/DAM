@@ -18,14 +18,21 @@
       "provider": "openai-compatible",
       "target_name": "openai",
       "upstream": "https://api.openai.com",
-      "traffic_kind": "open_ai_api",
+      "auth": {
+        "caller_headers": ["authorization"],
+        "inject": {
+          "header": "authorization",
+          "scheme": "Bearer",
+          "strip_headers": ["authorization"]
+        }
+      },
       "steps": [
         {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
         {"id": "consent", "kind": "apply_consents", "direction": "outbound"},
-        {"id": "tokenize", "kind": "replace_sensitive_data", "direction": "outbound"}
+        {"id": "redact", "kind": "replace_sensitive_data", "direction": "outbound"}
       ],
       "outbound": {"filter": {"default_action": "tokenize"}},
-      "inbound": {"resolve_references": false, "protect_sensitive_data": true}
+      "inbound": {"resolve_references": true, "protect_sensitive_data": true}
     },
     {
       "id": "anthropic-api",
@@ -42,18 +49,139 @@
       "provider": "anthropic",
       "target_name": "anthropic",
       "upstream": "https://api.anthropic.com",
-      "traffic_kind": "anthropic_api",
+      "auth": {
+        "caller_headers": ["x-api-key", "authorization"],
+        "inject": {
+          "header": "x-api-key",
+          "strip_headers": ["x-api-key", "authorization"]
+        }
+      },
       "steps": [
         {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
         {"id": "consent", "kind": "apply_consents", "direction": "outbound"},
-        {"id": "tokenize", "kind": "replace_sensitive_data", "direction": "outbound"}
+        {"id": "redact", "kind": "replace_sensitive_data", "direction": "outbound"}
       ],
       "outbound": {"filter": {"default_action": "tokenize"}},
-      "inbound": {"resolve_references": false, "protect_sensitive_data": true}
+      "inbound": {"resolve_references": true, "protect_sensitive_data": true}
     },
     {
-      "id": "chatgpt-codex",
-      "name": "ChatGPT Codex",
+      "id": "claude-web",
+      "name": "Claude Web",
+      "enabled": true,
+      "priority": 0,
+      "match": {
+        "domains": ["claude.ai"],
+        "ports": [443],
+        "protocols": ["https", "web_socket"]
+      },
+      "action": "inspect",
+      "adapter": "http",
+      "provider": "generic-http",
+      "target_name": "claude-web",
+      "upstream": "https://claude.ai",
+      "steps": [
+        {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
+        {"id": "consent", "kind": "apply_consents", "direction": "outbound"},
+        {"id": "redact", "kind": "replace_sensitive_data", "direction": "outbound"}
+      ],
+      "outbound": {"filter": {"default_action": "tokenize"}},
+      "inbound": {"resolve_references": true, "protect_sensitive_data": true}
+    },
+    {
+      "id": "anthropic-console",
+      "name": "Anthropic Console",
+      "enabled": true,
+      "priority": 0,
+      "match": {
+        "domains": ["console.anthropic.com"],
+        "ports": [443],
+        "protocols": ["https", "web_socket"]
+      },
+      "action": "inspect",
+      "adapter": "http",
+      "provider": "generic-http",
+      "target_name": "anthropic-console",
+      "upstream": "https://console.anthropic.com",
+      "steps": [
+        {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
+        {"id": "consent", "kind": "apply_consents", "direction": "outbound"},
+        {"id": "redact", "kind": "replace_sensitive_data", "direction": "outbound"}
+      ],
+      "outbound": {"filter": {"default_action": "tokenize"}},
+      "inbound": {"resolve_references": true, "protect_sensitive_data": true}
+    },
+    {
+      "id": "claude-mcp-proxy",
+      "name": "Claude MCP Proxy",
+      "enabled": true,
+      "priority": 0,
+      "match": {
+        "domains": ["mcp-proxy.anthropic.com"],
+        "ports": [443],
+        "protocols": ["https", "web_socket"]
+      },
+      "action": "inspect",
+      "adapter": "http",
+      "provider": "generic-http",
+      "target_name": "claude-mcp-proxy",
+      "upstream": "https://mcp-proxy.anthropic.com",
+      "steps": [
+        {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
+        {"id": "consent", "kind": "apply_consents", "direction": "outbound"},
+        {"id": "redact", "kind": "replace_sensitive_data", "direction": "outbound"}
+      ],
+      "outbound": {"filter": {"default_action": "tokenize"}},
+      "inbound": {"resolve_references": true, "protect_sensitive_data": true}
+    },
+    {
+      "id": "claude-platform",
+      "name": "Claude Platform",
+      "enabled": true,
+      "priority": 0,
+      "match": {
+        "domains": ["platform.claude.com"],
+        "ports": [443],
+        "protocols": ["https", "web_socket"]
+      },
+      "action": "inspect",
+      "adapter": "http",
+      "provider": "generic-http",
+      "target_name": "claude-platform",
+      "upstream": "https://platform.claude.com",
+      "steps": [
+        {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
+        {"id": "consent", "kind": "apply_consents", "direction": "outbound"},
+        {"id": "redact", "kind": "replace_sensitive_data", "direction": "outbound"}
+      ],
+      "outbound": {"filter": {"default_action": "tokenize"}},
+      "inbound": {"resolve_references": true, "protect_sensitive_data": true}
+    },
+    {
+      "id": "openai-platform",
+      "name": "OpenAI Platform",
+      "enabled": true,
+      "priority": 0,
+      "match": {
+        "domains": ["platform.openai.com"],
+        "ports": [443],
+        "protocols": ["https", "web_socket"]
+      },
+      "action": "inspect",
+      "adapter": "http",
+      "provider": "generic-http",
+      "target_name": "openai-platform",
+      "upstream": "https://platform.openai.com",
+      "steps": [
+        {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
+        {"id": "consent", "kind": "apply_consents", "direction": "outbound"},
+        {"id": "redact", "kind": "replace_sensitive_data", "direction": "outbound"}
+      ],
+      "outbound": {"filter": {"default_action": "tokenize"}},
+      "inbound": {"resolve_references": true, "protect_sensitive_data": true}
+    },
+    {
+      "id": "chatgpt-web",
+      "name": "ChatGPT Web",
       "enabled": true,
       "priority": 0,
       "match": {
@@ -64,16 +192,38 @@
       "action": "inspect",
       "adapter": "web_socket",
       "provider": "openai-compatible",
-      "target_name": "chatgpt-codex",
+      "target_name": "chatgpt-web",
       "upstream": "https://chatgpt.com",
-      "traffic_kind": "chat_gpt_codex_backend",
       "steps": [
         {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
         {"id": "consent", "kind": "apply_consents", "direction": "outbound"},
-        {"id": "tokenize", "kind": "replace_sensitive_data", "direction": "outbound"}
+        {"id": "redact", "kind": "replace_sensitive_data", "direction": "outbound"}
       ],
       "outbound": {"filter": {"default_action": "tokenize"}},
-      "inbound": {"resolve_references": false}
+      "inbound": {"resolve_references": true}
+    },
+    {
+      "id": "chatgpt-legacy-web",
+      "name": "ChatGPT Legacy Web",
+      "enabled": true,
+      "priority": 0,
+      "match": {
+        "domains": ["chat.openai.com"],
+        "ports": [443],
+        "protocols": ["https", "web_socket"]
+      },
+      "action": "inspect",
+      "adapter": "web_socket",
+      "provider": "openai-compatible",
+      "target_name": "chatgpt-legacy-web",
+      "upstream": "https://chat.openai.com",
+      "steps": [
+        {"id": "detect", "kind": "detect_sensitive_data", "direction": "outbound"},
+        {"id": "consent", "kind": "apply_consents", "direction": "outbound"},
+        {"id": "redact", "kind": "replace_sensitive_data", "direction": "outbound"}
+      ],
+      "outbound": {"filter": {"default_action": "tokenize"}},
+      "inbound": {"resolve_references": true}
     }
   ]
 }

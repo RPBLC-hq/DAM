@@ -1,5 +1,6 @@
 use dam_core::{EventSink, LogEvent, LogWriteError};
-use rusqlite::{Connection, params};
+use rusqlite::types::Value;
+use rusqlite::{Connection, params, params_from_iter};
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
@@ -8,7 +9,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const LEGACY_OPERATION_ID: &str = "legacy";
 const LEGACY_EVENT_TYPE: &str = "legacy";
 const LEGACY_MESSAGE: &str = "legacy log event migrated without raw preview";
-const SCHEMA_VERSION: u32 = 2;
+const SCHEMA_VERSION: u32 = 3;
+const DEFAULT_QUERY_LIMIT: usize = 1_000;
+const MAX_QUERY_LIMIT: usize = 10_000;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LogStoreError {
@@ -29,6 +32,7 @@ pub struct LogEntry {
     pub level: String,
     pub event_type: String,
     pub kind: Option<String>,
+    pub value: Option<String>,
     pub reference: Option<String>,
     pub action: Option<String>,
     pub message: String,
@@ -36,6 +40,62 @@ pub struct LogEntry {
 
 pub struct LogStore {
     conn: Mutex<Connection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogQuery {
+    pub min_timestamp: Option<i64>,
+    pub after_id: Option<i64>,
+    pub event_types: Vec<String>,
+    pub actions: Vec<String>,
+    pub limit: usize,
+}
+
+impl Default for LogQuery {
+    fn default() -> Self {
+        Self {
+            min_timestamp: None,
+            after_id: None,
+            event_types: Vec::new(),
+            actions: Vec::new(),
+            limit: DEFAULT_QUERY_LIMIT,
+        }
+    }
+}
+
+impl LogQuery {
+    pub fn with_min_timestamp(mut self, min_timestamp: i64) -> Self {
+        self.min_timestamp = Some(min_timestamp);
+        self
+    }
+
+    pub fn with_after_id(mut self, after_id: i64) -> Self {
+        self.after_id = Some(after_id);
+        self
+    }
+
+    pub fn with_event_types<I, S>(mut self, event_types: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.event_types = event_types.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn with_actions<I, S>(mut self, actions: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.actions = actions.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn with_limit(mut self, limit: usize) -> Self {
+        self.limit = limit;
+        self
+    }
 }
 
 impl LogStore {
@@ -64,6 +124,7 @@ impl LogStore {
                 level TEXT NOT NULL,
                 event_type TEXT NOT NULL,
                 kind TEXT,
+                value TEXT,
                 reference TEXT,
                 action TEXT,
                 message TEXT NOT NULL
@@ -81,6 +142,12 @@ impl LogStore {
 
             CREATE INDEX IF NOT EXISTS idx_log_events_event_type
                 ON log_events(event_type);
+
+            CREATE INDEX IF NOT EXISTS idx_log_events_timestamp_id
+                ON log_events(timestamp, id);
+
+            CREATE INDEX IF NOT EXISTS idx_log_events_action
+                ON log_events(action);
             ",
         )?;
 
@@ -102,11 +169,12 @@ impl LogStore {
                 level,
                 event_type,
                 kind,
+                value,
                 reference,
                 action,
                 message
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
             ",
             params![
                 event.timestamp,
@@ -114,6 +182,7 @@ impl LogStore {
                 event.level.tag(),
                 event.event_type.tag(),
                 kind,
+                event.value.as_deref(),
                 reference,
                 event.action.as_deref(),
                 event.message.as_str()
@@ -127,7 +196,7 @@ impl LogStore {
         let conn = self.conn.lock().expect("log sqlite mutex poisoned");
         let mut stmt = conn.prepare(
             "
-            SELECT id, timestamp, operation_id, level, event_type, kind, reference, action, message
+            SELECT id, timestamp, operation_id, level, event_type, kind, value, reference, action, message
             FROM log_events
             ORDER BY id DESC
             ",
@@ -142,11 +211,23 @@ impl LogStore {
                     level: row.get(3)?,
                     event_type: row.get(4)?,
                     kind: row.get(5)?,
-                    reference: row.get(6)?,
-                    action: row.get(7)?,
-                    message: row.get(8)?,
+                    value: row.get(6)?,
+                    reference: row.get(7)?,
+                    action: row.get(8)?,
+                    message: row.get(9)?,
                 })
             })?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(entries)
+    }
+
+    pub fn list_query(&self, query: LogQuery) -> LogStoreResult<Vec<LogEntry>> {
+        let conn = self.conn.lock().expect("log sqlite mutex poisoned");
+        let (sql, params) = build_list_query(&query);
+        let mut stmt = conn.prepare(&sql)?;
+        let entries = stmt
+            .query_map(params_from_iter(params.iter()), map_log_entry)?
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(entries)
@@ -157,6 +238,74 @@ impl LogStore {
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM log_events", [], |row| row.get(0))?;
         Ok(count as u64)
     }
+}
+
+fn build_list_query(query: &LogQuery) -> (String, Vec<Value>) {
+    let mut sql = String::from(
+        "
+        SELECT id, timestamp, operation_id, level, event_type, kind, value, reference, action, message
+        FROM log_events
+        WHERE 1 = 1
+        ",
+    );
+    let mut params = Vec::new();
+
+    if let Some(min_timestamp) = query.min_timestamp {
+        sql.push_str(" AND timestamp >= ?");
+        params.push(Value::Integer(min_timestamp));
+    }
+    if let Some(after_id) = query.after_id {
+        sql.push_str(" AND id > ?");
+        params.push(Value::Integer(after_id));
+    }
+    append_text_filter(&mut sql, &mut params, "event_type", &query.event_types);
+    append_text_filter(&mut sql, &mut params, "action", &query.actions);
+    sql.push_str(" ORDER BY id DESC LIMIT ?");
+    params.push(Value::Integer(clamped_limit(query.limit) as i64));
+
+    (sql, params)
+}
+
+fn append_text_filter(sql: &mut String, params: &mut Vec<Value>, column: &str, values: &[String]) {
+    let values = values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        return;
+    }
+
+    sql.push_str(" AND ");
+    sql.push_str(column);
+    sql.push_str(" IN (");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            sql.push_str(", ");
+        }
+        sql.push('?');
+        params.push(Value::Text((*value).to_string()));
+    }
+    sql.push(')');
+}
+
+fn clamped_limit(limit: usize) -> usize {
+    limit.clamp(1, MAX_QUERY_LIMIT)
+}
+
+fn map_log_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<LogEntry> {
+    Ok(LogEntry {
+        id: row.get(0)?,
+        timestamp: row.get(1)?,
+        operation_id: row.get(2)?,
+        level: row.get(3)?,
+        event_type: row.get(4)?,
+        kind: row.get(5)?,
+        value: row.get(6)?,
+        reference: row.get(7)?,
+        action: row.get(8)?,
+        message: row.get(9)?,
+    })
 }
 
 fn migrate_log_events_schema(conn: &Connection, path: Option<&Path>) -> LogStoreResult<()> {
@@ -189,6 +338,7 @@ fn migrate_log_events_schema(conn: &Connection, path: Option<&Path>) -> LogStore
         &format!("event_type TEXT NOT NULL DEFAULT '{LEGACY_EVENT_TYPE}'"),
     )?;
     ensure_column(conn, &columns, "kind", "kind TEXT")?;
+    ensure_column(conn, &columns, "value", "value TEXT")?;
     ensure_column(conn, &columns, "reference", "reference TEXT")?;
     ensure_column(conn, &columns, "action", "action TEXT")?;
     ensure_column(
@@ -215,6 +365,7 @@ fn rebuild_legacy_log_events_schema(conn: &Connection, columns: &[String]) -> ru
         "level".to_string(),
         "event_type".to_string(),
         "kind".to_string(),
+        "value".to_string(),
         "reference".to_string(),
         "action".to_string(),
         "message".to_string(),
@@ -233,6 +384,7 @@ fn rebuild_legacy_log_events_schema(conn: &Connection, columns: &[String]) -> ru
         } else {
             "NULL".to_string()
         },
+        "NULL".to_string(),
         "NULL".to_string(),
         if has_column(columns, "action") {
             "action".to_string()
@@ -260,6 +412,7 @@ fn rebuild_legacy_log_events_schema(conn: &Connection, columns: &[String]) -> ru
             level TEXT NOT NULL,
             event_type TEXT NOT NULL,
             kind TEXT,
+            value TEXT,
             reference TEXT,
             action TEXT,
             message TEXT NOT NULL
@@ -342,138 +495,5 @@ impl EventSink for LogStore {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use dam_core::{LogEventType, LogLevel, Reference, SensitiveType};
-
-    fn event() -> LogEvent {
-        LogEvent::new(
-            "op-1",
-            LogLevel::Info,
-            LogEventType::VaultWrite,
-            "vault write succeeded",
-        )
-        .with_kind(SensitiveType::Email)
-        .with_reference(Reference {
-            kind: SensitiveType::Email,
-            id: "7B2HkqFn9xR4mWpD3nYvKt".to_string(),
-        })
-        .with_action("vault_write_succeeded")
-    }
-
-    #[test]
-    fn record_then_list_returns_entry() {
-        let store = LogStore::open_in_memory().unwrap();
-
-        store.record(&event()).unwrap();
-
-        let entries = store.list().unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].operation_id, "op-1");
-        assert_eq!(entries[0].level, "info");
-        assert_eq!(entries[0].event_type, "vault_write");
-        assert_eq!(entries[0].kind, Some("email".to_string()));
-        assert_eq!(
-            entries[0].reference,
-            Some("email:7B2HkqFn9xR4mWpD3nYvKt".to_string())
-        );
-        assert_eq!(entries[0].action, Some("vault_write_succeeded".to_string()));
-    }
-
-    #[test]
-    fn entries_persist_on_disk() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("log.db");
-
-        {
-            let store = LogStore::open(&db_path).unwrap();
-            store.record(&event()).unwrap();
-        }
-
-        let store = LogStore::open(&db_path).unwrap();
-        assert_eq!(store.count().unwrap(), 1);
-    }
-
-    #[test]
-    fn opens_legacy_log_schema_without_exposing_value_preview() {
-        let dir = tempfile::tempdir().unwrap();
-        let db_path = dir.path().join("legacy-log.db");
-        {
-            let conn = Connection::open(&db_path).unwrap();
-            conn.execute_batch(
-                "
-                CREATE TABLE log_events (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    data_type     TEXT    NOT NULL,
-                    destination   TEXT    NOT NULL,
-                    action        TEXT    NOT NULL,
-                    timestamp     INTEGER NOT NULL,
-                    module_name   TEXT    NOT NULL,
-                    value_preview TEXT    NOT NULL
-                );
-
-                INSERT INTO log_events (
-                    data_type,
-                    destination,
-                    action,
-                    timestamp,
-                    module_name,
-                    value_preview
-                )
-                VALUES (
-                    'email',
-                    'stdout',
-                    'tokenize',
-                    1,
-                    'dam-filter',
-                    'banana@banana.com'
-                );
-                ",
-            )
-            .unwrap();
-        }
-
-        let store = LogStore::open(&db_path).unwrap();
-        let entries = store.list().unwrap();
-
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].operation_id, LEGACY_OPERATION_ID);
-        assert_eq!(entries[0].level, "info");
-        assert_eq!(entries[0].event_type, LEGACY_EVENT_TYPE);
-        assert_eq!(entries[0].kind, Some("email".to_string()));
-        assert!(entries[0].message.contains(LEGACY_MESSAGE));
-        assert!(entries[0].message.contains("kind=email"));
-        assert!(entries[0].message.contains("module=dam-filter"));
-        assert!(entries[0].message.contains("destination=stdout"));
-        assert!(!format!("{:?}", entries[0]).contains("banana@banana.com"));
-        assert_eq!(
-            Connection::open(&db_path)
-                .unwrap()
-                .query_row("PRAGMA user_version", [], |row| row.get::<_, u32>(0))
-                .unwrap(),
-            SCHEMA_VERSION
-        );
-        assert!(fs::read_dir(dir.path()).unwrap().any(|entry| {
-            entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .contains(".pre-migration-")
-        }));
-
-        store.record(&event()).unwrap();
-        let entries = store.list().unwrap();
-        assert_eq!(entries.len(), 2);
-        assert_eq!(entries[0].operation_id, "op-1");
-    }
-
-    #[test]
-    fn implements_event_sink_contract() {
-        let store = LogStore::open_in_memory().unwrap();
-        let sink: &dyn EventSink = &store;
-
-        sink.record(&event()).unwrap();
-
-        assert_eq!(store.count().unwrap(), 1);
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;

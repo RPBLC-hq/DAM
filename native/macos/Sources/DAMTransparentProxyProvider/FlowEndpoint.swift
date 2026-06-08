@@ -13,6 +13,23 @@ struct FlowEndpoint: Equatable, Sendable {
         return "\(host):\(port)"
     }
 
+    var isIPAddress: Bool {
+        IPv4Address(host) != nil || IPv6Address(host) != nil
+    }
+
+    var isHostlessTLSCandidate: Bool {
+        port == 443 && isIPAddress
+    }
+
+    func replacingHost(_ host: String) -> FlowEndpoint {
+        FlowEndpoint(host: host, port: port)
+    }
+
+    init(host: String, port: UInt16) {
+        self.host = host
+        self.port = port
+    }
+
     init?(tcpFlow: NEAppProxyTCPFlow) {
         let endpoint = tcpFlow.remoteFlowEndpoint
         guard case let .hostPort(endpointHost, endpointPort) = endpoint else {

@@ -42,5 +42,9 @@ let package = Package(
             name: "DAMNetworkExtensionSupportTests",
             dependencies: ["DAMNetworkExtensionSupport"]
         ),
+        .testTarget(
+            name: "DAMTransparentProxyProviderTests",
+            dependencies: ["DAMTransparentProxyProvider"]
+        ),
     ]
 )

@@ -145,7 +145,7 @@ pub struct MacosSystemProxyPlan {
     pub paths: MacosNetworkPaths,
     pub proxy_url: String,
     pub pac_url: String,
-    pub ai_hosts: Vec<String>,
+    pub protected_hosts: Vec<String>,
     pub services: Vec<MacosSystemProxyServiceState>,
     pub commands: Vec<MacosNetworkCommand>,
     pub requires_admin: bool,
@@ -182,17 +182,17 @@ pub fn preview_install_system_proxy(
     state_dir: impl AsRef<Path>,
     proxy_url: &str,
 ) -> Result<MacosSystemProxyResult, MacosNetworkError> {
-    let hosts = default_ai_hosts();
+    let hosts = default_protected_hosts();
     preview_install_system_proxy_for_hosts(state_dir, proxy_url, &hosts)
 }
 
 pub fn preview_install_system_proxy_for_hosts(
     state_dir: impl AsRef<Path>,
     proxy_url: &str,
-    ai_hosts: &[String],
+    protected_hosts: &[String],
 ) -> Result<MacosSystemProxyResult, MacosNetworkError> {
     ensure_macos()?;
-    let plan = install_plan_for_hosts(state_dir, proxy_url, ai_hosts, &NetworkSetupRunner)?;
+    let plan = install_plan_for_hosts(state_dir, proxy_url, protected_hosts, &NetworkSetupRunner)?;
     Ok(MacosSystemProxyResult {
         state: if plan.can_execute {
             MacosSystemProxyResultState::Preview
@@ -227,17 +227,22 @@ pub fn install_system_proxy(
     state_dir: impl AsRef<Path>,
     proxy_url: &str,
 ) -> Result<MacosSystemProxyResult, MacosNetworkError> {
-    let hosts = default_ai_hosts();
+    let hosts = default_protected_hosts();
     install_system_proxy_for_hosts(state_dir, proxy_url, &hosts)
 }
 
 pub fn install_system_proxy_for_hosts(
     state_dir: impl AsRef<Path>,
     proxy_url: &str,
-    ai_hosts: &[String],
+    protected_hosts: &[String],
 ) -> Result<MacosSystemProxyResult, MacosNetworkError> {
     ensure_macos()?;
-    install_system_proxy_for_hosts_with_runner(state_dir, proxy_url, ai_hosts, &NetworkSetupRunner)
+    install_system_proxy_for_hosts_with_runner(
+        state_dir,
+        proxy_url,
+        protected_hosts,
+        &NetworkSetupRunner,
+    )
 }
 
 pub fn remove_system_proxy(
@@ -254,17 +259,17 @@ fn install_system_proxy_with_runner(
     proxy_url: &str,
     runner: &impl Runner,
 ) -> Result<MacosSystemProxyResult, MacosNetworkError> {
-    let hosts = default_ai_hosts();
+    let hosts = default_protected_hosts();
     install_system_proxy_for_hosts_with_runner(state_dir, proxy_url, &hosts, runner)
 }
 
 fn install_system_proxy_for_hosts_with_runner(
     state_dir: impl AsRef<Path>,
     proxy_url: &str,
-    ai_hosts: &[String],
+    protected_hosts: &[String],
     runner: &impl Runner,
 ) -> Result<MacosSystemProxyResult, MacosNetworkError> {
-    let plan = install_plan_for_hosts(&state_dir, proxy_url, ai_hosts, runner)?;
+    let plan = install_plan_for_hosts(&state_dir, proxy_url, protected_hosts, runner)?;
     if !plan.can_execute {
         return Ok(MacosSystemProxyResult {
             state: MacosSystemProxyResultState::AlreadyInstalled,
@@ -288,7 +293,7 @@ fn install_system_proxy_for_hosts_with_runner(
     };
     write_atomic(
         &plan.paths.pac_path,
-        pac_content_for_hosts(&plan.proxy_url, &plan.ai_hosts).as_bytes(),
+        pac_content_for_hosts(&plan.proxy_url, &plan.protected_hosts).as_bytes(),
         0o644,
     )?;
 
@@ -343,24 +348,24 @@ fn install_plan(
     proxy_url: &str,
     runner: &impl Runner,
 ) -> Result<MacosSystemProxyPlan, MacosNetworkError> {
-    let hosts = default_ai_hosts();
+    let hosts = default_protected_hosts();
     install_plan_for_hosts(state_dir, proxy_url, &hosts, runner)
 }
 
 fn install_plan_for_hosts(
     state_dir: impl AsRef<Path>,
     proxy_url: &str,
-    ai_hosts: &[String],
+    protected_hosts: &[String],
     runner: &impl Runner,
 ) -> Result<MacosSystemProxyPlan, MacosNetworkError> {
     let paths = MacosNetworkPaths::for_state_dir(state_dir);
     let pac_url = file_url(&paths.pac_path);
-    let ai_hosts = normalized_ai_hosts(ai_hosts);
+    let protected_hosts = normalized_protected_hosts(protected_hosts);
     if paths.rollback_path.exists() {
         let services = read_rollback(&paths)?
             .map(|record| record.services)
             .unwrap_or_default();
-        let desired_pac = pac_content_for_hosts(proxy_url, &ai_hosts);
+        let desired_pac = pac_content_for_hosts(proxy_url, &protected_hosts);
         let pac_needs_update = fs::read_to_string(&paths.pac_path)
             .map(|current| current != desired_pac)
             .unwrap_or(true);
@@ -370,7 +375,7 @@ fn install_plan_for_hosts(
             paths,
             proxy_url: proxy_url.to_string(),
             pac_url,
-            ai_hosts,
+            protected_hosts,
             services,
             commands: Vec::new(),
             requires_admin: false,
@@ -395,7 +400,7 @@ fn install_plan_for_hosts(
         paths,
         proxy_url: proxy_url.to_string(),
         pac_url,
-        ai_hosts,
+        protected_hosts,
         services,
         commands,
         requires_admin: false,
@@ -427,7 +432,7 @@ fn remove_plan(
             .as_ref()
             .map(|record| record.proxy_url.clone())
             .unwrap_or_else(|| proxy_url.to_string()),
-        ai_hosts: default_ai_hosts(),
+        protected_hosts: default_protected_hosts(),
         services,
         commands,
         requires_admin: false,
@@ -552,17 +557,17 @@ fn parse_url(output: &str) -> Option<String> {
 
 #[cfg(test)]
 fn pac_content(proxy_url: &str) -> String {
-    let hosts = default_ai_hosts();
+    let hosts = default_protected_hosts();
     pac_content_for_hosts(proxy_url, &hosts)
 }
 
-fn pac_content_for_hosts(proxy_url: &str, ai_hosts: &[String]) -> String {
+fn pac_content_for_hosts(proxy_url: &str, protected_hosts: &[String]) -> String {
     let proxy = proxy_url
         .trim()
         .trim_start_matches("http://")
         .trim_start_matches("https://")
         .trim_end_matches('/');
-    let protected_host_comment = normalized_ai_hosts(ai_hosts)
+    let protected_host_comment = normalized_protected_hosts(protected_hosts)
         .into_iter()
         .map(|host| format!("// protected-host: {host}"))
         .collect::<Vec<_>>()
@@ -572,14 +577,14 @@ fn pac_content_for_hosts(proxy_url: &str, ai_hosts: &[String]) -> String {
     )
 }
 
-fn default_ai_hosts() -> Vec<String> {
-    dam_net::known_ai_hosts()
+fn default_protected_hosts() -> Vec<String> {
+    dam_net::default_traffic_hosts()
 }
 
-fn normalized_ai_hosts(hosts: &[String]) -> Vec<String> {
+fn normalized_protected_hosts(hosts: &[String]) -> Vec<String> {
     let mut normalized = Vec::new();
     for host in hosts {
-        let host = dam_net::normalize_ai_host(host);
+        let host = dam_net::normalize_traffic_host(host);
         if !host.is_empty() && !normalized.contains(&host) {
             normalized.push(host);
         }
@@ -717,188 +722,5 @@ impl Runner for NetworkSetupRunner {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::{cell::RefCell, collections::VecDeque};
-
-    struct FakeRunner {
-        outputs: RefCell<VecDeque<String>>,
-        commands: RefCell<Vec<Vec<String>>>,
-        fail_on_networksetup: bool,
-    }
-
-    impl FakeRunner {
-        fn new(outputs: Vec<&str>) -> Self {
-            Self {
-                outputs: RefCell::new(outputs.into_iter().map(str::to_string).collect()),
-                commands: RefCell::new(Vec::new()),
-                fail_on_networksetup: false,
-            }
-        }
-
-        fn failing(outputs: Vec<&str>) -> Self {
-            Self {
-                outputs: RefCell::new(outputs.into_iter().map(str::to_string).collect()),
-                commands: RefCell::new(Vec::new()),
-                fail_on_networksetup: true,
-            }
-        }
-    }
-
-    impl Runner for FakeRunner {
-        fn run(&self, program: &str, args: &[&str]) -> Result<String, MacosNetworkError> {
-            let mut command = vec![program.to_string()];
-            command.extend(args.iter().map(|arg| (*arg).to_string()));
-            self.commands.borrow_mut().push(command);
-            if self.fail_on_networksetup
-                && program == NETWORKSETUP
-                && args.first().is_some_and(|arg| arg.starts_with("-set"))
-            {
-                return Err(MacosNetworkError::CommandFailed {
-                    program: program.to_string(),
-                    args: args.join(" "),
-                    status: "exit status: 1".to_string(),
-                    stderr: "synthetic failure".to_string(),
-                });
-            }
-            Ok(self.outputs.borrow_mut().pop_front().unwrap_or_default())
-        }
-    }
-
-    #[test]
-    fn parses_network_services_without_disabled_entries() {
-        let services = parse_network_services(
-            "An asterisk (*) denotes that a network service is disabled.\nWi-Fi\n*Bluetooth PAN\nUSB 10/100/1000 LAN\n",
-        );
-
-        assert_eq!(services, vec!["Wi-Fi", "USB 10/100/1000 LAN"]);
-    }
-
-    #[test]
-    fn parses_auto_proxy_state() {
-        let output = "URL: file:///tmp/dam.pac\nEnabled: Yes\n";
-
-        assert!(parse_enabled(output));
-        assert_eq!(parse_url(output), Some("file:///tmp/dam.pac".to_string()));
-    }
-
-    #[test]
-    fn pac_routes_proxyable_http_traffic_with_local_bypass() {
-        let pac = pac_content("http://127.0.0.1:7828");
-
-        assert!(pac.contains("protected-host: api.openai.com"));
-        assert!(pac.contains("PROXY 127.0.0.1:7828"));
-        assert!(pac.contains("DIRECT"));
-        assert!(pac.contains("url.substring(0, 5) === \"http:\""));
-        assert!(pac.contains("host === \"localhost\""));
-        assert!(pac.contains("shExpMatch(host, \"192.168.*\")"));
-        assert!(pac.contains("bareHost === \"::1\""));
-        assert!(pac.contains("shExpMatch(bareHost, \"fe8*:*\")"));
-        assert!(pac.contains("shExpMatch(bareHost, \"fc*:*\")"));
-    }
-
-    #[test]
-    fn pac_accepts_configured_ai_hosts() {
-        let pac = pac_content_for_hosts(
-            "http://127.0.0.1:7828",
-            &[
-                "https://api.enterprise-ai.example/v1".to_string(),
-                "API.ENTERPRISE-AI.EXAMPLE:443".to_string(),
-            ],
-        );
-
-        assert!(pac.contains("protected-host: api.enterprise-ai.example"));
-        assert_eq!(pac.matches("api.enterprise-ai.example").count(), 1);
-        assert!(!pac.contains("api.openai.com"));
-    }
-
-    #[test]
-    fn file_url_percent_encodes_paths_for_pac_settings() {
-        let path = PathBuf::from("/Users/DAM Tester/.dam/network/macos-system-proxy/dam ai.pac");
-
-        assert_eq!(
-            file_url(&path),
-            "file:///Users/DAM%20Tester/.dam/network/macos-system-proxy/dam%20ai.pac"
-        );
-    }
-
-    #[test]
-    fn install_plan_records_prior_service_states_and_commands() {
-        let runner = FakeRunner::new(vec![
-            "Wi-Fi\nUSB LAN\n",
-            "URL: file:///old.pac\nEnabled: Yes\n",
-            "URL:\nEnabled: No\n",
-        ]);
-        let dir = tempfile::tempdir().unwrap();
-
-        let plan = install_plan(dir.path(), "http://127.0.0.1:7828", &runner).unwrap();
-
-        assert!(plan.can_execute || plan.support == MacosSystemProxySupport::Planned);
-        assert!(plan.ai_hosts.contains(&"api.openai.com".to_string()));
-        assert_eq!(plan.services.len(), 2);
-        assert_eq!(plan.commands.len(), 4);
-        assert_eq!(plan.commands[0].args[0], "-setautoproxyurl");
-        assert_eq!(plan.commands[1].args[0], "-setautoproxystate");
-        assert_eq!(plan.commands[1].args[2], "on");
-    }
-
-    #[test]
-    fn apply_writes_rollback_after_route_commands_and_remove_restores() {
-        let runner = FakeRunner::new(vec![
-            "Wi-Fi\n",
-            "URL: file:///old.pac\nEnabled: Yes\n",
-            "",
-            "",
-            "",
-            "",
-        ]);
-        let dir = tempfile::tempdir().unwrap();
-
-        let installed =
-            install_system_proxy_with_runner(dir.path(), "http://127.0.0.1:7828", &runner).unwrap();
-
-        if support() == MacosSystemProxySupport::Implemented {
-            assert_eq!(installed.state, MacosSystemProxyResultState::Installed);
-            assert!(installed.plan.paths.rollback_path.exists());
-            assert!(installed.plan.paths.pac_path.exists());
-
-            let removed =
-                remove_system_proxy_with_runner(dir.path(), "http://127.0.0.1:7828", &runner)
-                    .unwrap();
-
-            assert_eq!(removed.state, MacosSystemProxyResultState::Removed);
-            assert!(!removed.plan.paths.rollback_path.exists());
-            assert!(!removed.plan.paths.pac_path.exists());
-            let commands = runner.commands.borrow();
-            assert!(
-                commands
-                    .iter()
-                    .any(|command| command.contains(&"-setautoproxyurl".to_string()))
-            );
-            assert!(
-                commands
-                    .iter()
-                    .any(|command| command.contains(&"-setautoproxystate".to_string()))
-            );
-        } else {
-            assert_eq!(
-                installed.state,
-                MacosSystemProxyResultState::AlreadyInstalled
-            );
-        }
-    }
-
-    #[test]
-    fn install_failure_does_not_leave_rollback_marker() {
-        let runner = FakeRunner::failing(vec!["Wi-Fi\n", "URL: file:///old.pac\nEnabled: Yes\n"]);
-        let dir = tempfile::tempdir().unwrap();
-
-        let result = install_system_proxy_with_runner(dir.path(), "http://127.0.0.1:7828", &runner);
-
-        if support() == MacosSystemProxySupport::Implemented {
-            assert!(result.is_err());
-            let paths = MacosNetworkPaths::for_state_dir(dir.path());
-            assert!(!paths.rollback_path.exists());
-        }
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;

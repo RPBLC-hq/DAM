@@ -239,7 +239,7 @@ body {
      ceiling, the .dam-connect element spans the full window and the
      inner 28rem column reads as a tiny island in empty space. The
      ceiling matches the other web surfaces' framing pattern (insights
-     880px, allowed/health 720px, system 880px); 36rem is the right
+     880px, health 720px, system 880px); 36rem is the right
      ceiling here because the connect body is short, focused, and
      centered text — wider than the 28rem inner column for breathing
      room around the narrative, narrower than the data-dense surfaces
@@ -443,6 +443,12 @@ body {
   align-self: auto;
 }
 
+.dam-settings__app-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .dam-settings__app-details {
   display: flex;
   flex-direction: column;
@@ -537,6 +543,17 @@ body {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: var(--space-2) 0 var(--space-3);
+  margin-top: calc(-1 * var(--space-2));
+  border-bottom: var(--border-1) solid var(--line);
+  background: var(--bg);
+}
+
+.dam-tray-frame--nav-only .dam-wallet__header {
+  background: var(--panel);
 }
 
 .dam-wallet__heading {
@@ -559,6 +576,39 @@ body {
 .dam-wallet__controls .rpblc-search-bar {
   flex: 1 1 12rem;
   min-width: 0;
+}
+
+.dam-wallet__add {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.8fr) minmax(12rem, 1.2fr) auto;
+  align-items: end;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: var(--border-1) solid var(--line);
+  background: var(--panel);
+}
+
+.dam-wallet__add-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dam-wallet__add-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--alarm);
+  font-size: 12px;
+}
+
+@media (max-width: 620px) {
+  .dam-wallet__add {
+    grid-template-columns: 1fr;
+  }
+
+  .dam-wallet__add-actions {
+    justify-content: flex-end;
+  }
 }
 
 .dam-wallet__list {
@@ -587,6 +637,11 @@ body {
   display: flex;
   flex-direction: column;
   overflow-anchor: auto;
+  scroll-margin-top: 9rem;
+}
+.dam-wallet__row--settled {
+  position: relative;
+  z-index: 2;
 }
 
 /* Wrapper around the inline detail. Its height animates from 0 to the
@@ -611,6 +666,9 @@ body {
 }
 .dam-wallet__row--active .dam-wallet__inline-wrap {
   grid-template-rows: minmax(0, 1fr);
+}
+.dam-wallet__row--settled .dam-wallet__inline-wrap {
+  overflow: visible;
 }
 .dam-wallet__inline-wrap > * {
   /* Anchor the panel's bottom to the wrapper's bottom so as the track
@@ -670,6 +728,151 @@ body {
   background: var(--panel);
 }
 
+.dam-wallet__allow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: var(--border-1) solid var(--line);
+}
+
+.dam-wallet__allow-head,
+.dam-wallet__allow-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.dam-wallet__allow-head h2 {
+  margin: 0;
+  color: var(--bright);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: var(--fw-bold);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.dam-wallet__profile-menu {
+  position: relative;
+  max-width: 22rem;
+}
+
+.dam-wallet__profile-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 2.5rem;
+  padding: 0 var(--space-3);
+  border: var(--border-1) solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.dam-wallet__profile-trigger::-webkit-details-marker {
+  display: none;
+}
+
+.dam-wallet__profile-trigger::after {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-right: var(--border-1) solid var(--accent);
+  border-bottom: var(--border-1) solid var(--accent);
+  content: "";
+  transform: rotate(45deg);
+}
+
+.dam-wallet__profile-menu[open] .dam-wallet__profile-trigger::after {
+  transform: rotate(225deg);
+}
+
+.dam-wallet__profile-trigger b {
+  color: var(--bright);
+  font-weight: var(--fw-semibold);
+}
+
+.dam-wallet__profile-panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + var(--space-1));
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  border: var(--border-1) solid var(--line);
+  background: var(--panel);
+}
+
+.dam-wallet__profile-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 2rem;
+  padding: var(--space-2);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dam-wallet__profile-option:hover {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.dam-wallet__profile-option input {
+  accent-color: var(--accent);
+}
+
+.dam-wallet__profile-option em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 10px;
+}
+
+.dam-wallet__allow-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.dam-wallet__remove {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.dam-wallet__remove-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: var(--border-1) solid var(--line);
+}
+
+.dam-wallet__remove-confirm p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.dam-wallet__remove-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
 /* ── Recently Scanned ──────────────────────────────────────────── */
 .dam-activity {
   display: flex;
@@ -726,11 +929,20 @@ body {
   border: var(--border-1) solid var(--line);
 }
 
+.dam-activity__row-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
 .dam-activity__lead {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: var(--space-2) var(--space-3);
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -740,15 +952,6 @@ body {
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--muted);
-  white-space: nowrap;
-}
-
-.dam-activity__kind {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--accent);
   white-space: nowrap;
 }
 
@@ -764,16 +967,37 @@ body {
   white-space: nowrap;
 }
 
-.dam-activity__actor {
+.dam-activity__facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dam-activity__fact {
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--muted);
-  letter-spacing: 0.04em;
 }
 
-.dam-activity__actor b {
+.dam-activity__fact b {
   color: var(--bright);
   font-weight: var(--fw-semibold);
+}
+
+.dam-activity__identifier b {
+  color: var(--accent);
+}
+
+.dam-activity__outcome {
+  flex: 0 0 auto;
+  padding: 0.24em 0.48em;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+}
+
+.dam-activity__outcome .rpblc-protection-mark__dot {
+  display: none;
 }
 
 .dam-activity__actions {
@@ -782,6 +1006,13 @@ body {
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
+}
+
+.dam-activity__action-error {
+  margin: 0;
+  color: var(--alarm);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .dam-activity__loading {
@@ -835,20 +1066,10 @@ body {
   padding: var(--space-6) 0 var(--space-4);
 }
 
-.dam-connect__intro .dam-connect__mark {
-  /* Push the mark below the lede + fine print, not flush with them. */
+.dam-connect__connect-button {
+  /* Push the action below the lede + fine print, not flush with them. */
   margin-top: var(--space-3);
-}
-
-.dam-connect__mark {
-  /* Bumped from 26px so the mark reads as the page's destination,
-     not as another block of inline text. */
-  font-size: 32px;
-}
-
-.dam-connect__mark .rpblc-connect-mark[aria-disabled='true'] {
-  opacity: 0.5;
-  cursor: not-allowed;
+  min-width: 13em;
 }
 
 .dam-connect__lede,
@@ -1346,54 +1567,6 @@ body {
   font-family: var(--font-sans);
   font-size: 13px;
   color: var(--text);
-}
-
-/* ── Allowed ──────────────────────────────────────────────────── */
-
-.dam-allowed {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-  max-width: 720px;
-  margin: 0 auto;
-  padding: var(--space-6) var(--space-5);
-}
-
-.dam-allowed__head {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.dam-allowed__heading {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: 14px;
-  font-weight: var(--fw-bold);
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--bright);
-}
-
-.dam-allowed__rows {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.dam-allowed__rows--archive {
-  margin-top: var(--space-3);
-  opacity: 0.7;
-}
-
-.dam-allowed__archive {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  margin-top: var(--space-4);
 }
 
 /* ── Health ───────────────────────────────────────────────────── */

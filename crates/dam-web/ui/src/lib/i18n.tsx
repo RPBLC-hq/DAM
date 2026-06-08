@@ -10,23 +10,11 @@ export type MessageKey =
   | 'nav.pendingRequests'
   | 'nav.insights'
   | 'nav.wallet'
-  | 'nav.allowed'
   | 'nav.activity'
   | 'nav.more'
   | 'nav.settings'
   | 'nav.system'
   | 'nav.health'
-  | 'allowed.aria'
-  | 'allowed.heading'
-  | 'allowed.empty'
-  | 'allowed.searchAria'
-  | 'allowed.searchPlaceholder'
-  | 'allowed.tryAgain'
-  | 'allowed.loadingReason'
-  | 'allowed.expiredDisclosure'
-  | 'allowed.stopAllowing'
-  | 'allowed.until'
-  | 'allowed.error.unknown'
   | 'insights.aria'
   | 'insights.heading'
   | 'insights.range.today'
@@ -93,17 +81,14 @@ export type MessageKey =
   | 'connect.loading'
   | 'connect.loadingReason'
   | 'connect.checkAgain'
+  | 'connect.connectDam'
   | 'connect.connectAria'
-  | 'connect.connectCaption'
   | 'connect.disconnectedLede'
   | 'connect.disconnectedFine'
   | 'connect.protectedStatus'
   | 'connect.pausedStatus'
   | 'connect.degradedStatus'
   | 'connect.setupStatus'
-  | 'connect.pauseProtection'
-  | 'connect.resumeProtection'
-  | 'connect.recoveryAction'
   | 'connect.nothingAsking'
   | 'connect.protectedFor'
   | 'connect.systemMode'
@@ -130,8 +115,10 @@ export type MessageKey =
   | 'connect.stepBlocked'
   | 'connect.step.launch_at_login'
   | 'connect.step.ne_install'
+  | 'connect.step.ne_approval'
   | 'connect.step.ne_config'
   | 'connect.step.ne_enable'
+  | 'connect.step.ne_rolled_back'
   | 'connect.step.ne_start'
   | 'connect.step.linux_capture'
   | 'connect.step.windows_capture'
@@ -143,8 +130,10 @@ export type MessageKey =
   | 'connect.step.unknown'
   | 'connect.hint.launch_at_login'
   | 'connect.hint.ne_install'
+  | 'connect.hint.ne_approval'
   | 'connect.hint.ne_config'
   | 'connect.hint.ne_enable'
+  | 'connect.hint.ne_rolled_back'
   | 'connect.hint.ne_start'
   | 'connect.hint.linux_capture'
   | 'connect.hint.windows_capture'
@@ -154,19 +143,7 @@ export type MessageKey =
   | 'connect.hint.apply_profiles'
   | 'connect.hint.daemon_start'
   | 'connect.hintAriaLabel'
-  | 'connect.action.launch_at_login'
   | 'connect.action.launch_at_login_skip'
-  | 'connect.action.ne_install'
-  | 'connect.action.ne_config'
-  | 'connect.action.ne_enable'
-  | 'connect.action.ne_start'
-  | 'connect.action.platform_capture'
-  | 'connect.action.ne_reboot'
-  | 'connect.action.ca_install'
-  | 'connect.action.system_proxy'
-  | 'connect.action.apply_profiles'
-  | 'connect.action.daemon_start'
-  | 'connect.action.unknown'
   | 'connect.error.load'
   | 'connect.error.not_implemented'
   | 'connect.error.ne_pending_user_approval'
@@ -200,6 +177,7 @@ export type MessageKey =
   | 'settings.apps'
   | 'settings.appsHint'
   | 'settings.appsLoading'
+  | 'settings.appsApplying'
   | 'settings.appsEmpty'
   | 'settings.appsToggleOn'
   | 'settings.appsToggleOff'
@@ -272,6 +250,21 @@ export type MessageKey =
   | 'wallet.heading'
   | 'wallet.searchAria'
   | 'wallet.searchPlaceholder'
+  | 'wallet.filterAria'
+  | 'wallet.filter.all'
+  | 'wallet.filter.protected'
+  | 'wallet.filter.allowed'
+  | 'wallet.addValue'
+  | 'wallet.addKind'
+  | 'wallet.addValueLabel'
+  | 'wallet.addValuePlaceholder'
+  | 'wallet.addCancel'
+  | 'wallet.addSubmit'
+  | 'wallet.kind.email'
+  | 'wallet.kind.domain'
+  | 'wallet.kind.phone'
+  | 'wallet.kind.ssn'
+  | 'wallet.kind.cc'
   | 'wallet.empty.first'
   | 'wallet.empty.searchPrefix'
   | 'wallet.clearSearch'
@@ -281,6 +274,7 @@ export type MessageKey =
   | 'wallet.meta.revokedFrom'
   | 'wallet.meta.notShared'
   | 'wallet.meta.lastSeen'
+  | 'wallet.error.invalidRequest'
   | 'wallet.error.unreachable'
   | 'wallet.error.daemon'
   | 'wallet.error.unknown'
@@ -293,6 +287,20 @@ export type MessageKey =
   | 'walletDetail.lastSeen'
   | 'walletDetail.firstSeen'
   | 'walletDetail.reference'
+  | 'walletDetail.allowHeading'
+  | 'walletDetail.allowAllProfiles'
+  | 'walletDetail.allowProfilesLoading'
+  | 'walletDetail.allowProfilesUnavailable'
+  | 'walletDetail.allowNoProfiles'
+  | 'walletDetail.profileDisabled'
+  | 'walletDetail.profileDropdown'
+  | 'walletDetail.profileDropdownEmpty'
+  | 'walletDetail.profileDropdownOne'
+  | 'walletDetail.profileDropdownMany'
+  | 'walletDetail.remove'
+  | 'walletDetail.removeConfirm'
+  | 'walletDetail.removeCancel'
+  | 'walletDetail.confirmRemove'
   | 'walletDetail.error.missing'
   | 'walletDetail.error.grantFailed'
   | 'walletDetail.error.revokeFailed'
@@ -304,11 +312,16 @@ export type MessageKey =
   | 'activity.empty'
   | 'activity.tryAgain'
   | 'activity.loadingReason'
-  | 'activity.from'
   | 'activity.add'
-  | 'activity.allowOnce'
-  | 'activity.actionParked'
+  | 'activity.adding'
+  | 'activity.added'
+  | 'activity.factsAria'
+  | 'activity.outcome'
+  | 'activity.type'
+  | 'activity.profile'
+  | 'activity.valueUnavailable'
   | 'activity.error.unknown'
+  | 'activity.error.addFailed'
   | 'activity.searchAria'
   | 'activity.searchPlaceholder'
   | 'activity.decisionAria'
@@ -317,6 +330,7 @@ export type MessageKey =
   | 'activity.decision.granted'
   | 'activity.decision.sealed'
   | 'activity.decision.denied'
+  | 'activity.since.1h'
   | 'activity.since.today'
   | 'activity.since.7d'
   | 'activity.since.30d'
@@ -333,23 +347,11 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'nav.pendingRequests': 'pending requests',
     'nav.insights': 'Insights',
     'nav.wallet': 'Wallet',
-    'nav.allowed': 'Allowed',
     'nav.activity': 'Activity',
     'nav.more': 'more',
     'nav.settings': 'Settings',
     'nav.system': 'System log',
     'nav.health': 'Health',
-    'allowed.aria': 'allowed data',
-    'allowed.heading': 'Allowed Data',
-    'allowed.empty': 'nothing allowed through',
-    'allowed.searchAria': 'filter allowed values',
-    'allowed.searchPlaceholder': 'actor, kind, value…',
-    'allowed.tryAgain': 'try again',
-    'allowed.loadingReason': 'reading allowed grants',
-    'allowed.expiredDisclosure': 'show expired',
-    'allowed.stopAllowing': 'stop allowing',
-    'allowed.until': 'until',
-    'allowed.error.unknown': 'we couldn’t read allowed grants. Try again.',
     'insights.aria': 'DAM insights',
     'insights.heading': 'Insights',
     'insights.range.today': 'today',
@@ -417,8 +419,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.loading': 'Checking protection state.',
     'connect.loadingReason': 'Checking protection state',
     'connect.checkAgain': 'Check again',
-    'connect.connectAria': 'Connect DAM',
-    'connect.connectCaption': 'click to connect',
+    'connect.connectDam': 'Connect : DAM',
+    'connect.connectAria': 'Connect : DAM',
     'connect.disconnectedLede':
       'Reclaim control of what your apps know about you.',
     'connect.disconnectedFine':
@@ -427,9 +429,6 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.pausedStatus': 'Protection is paused. Local clients can keep their endpoint.',
     'connect.degradedStatus': 'Protection needs attention. DAM is still here.',
     'connect.setupStatus': 'Finish local setup before DAM can protect this device.',
-    'connect.pauseProtection': 'Pause protection',
-    'connect.resumeProtection': 'Resume protection',
-    'connect.recoveryAction': 'Try the recovery action',
     'connect.nothingAsking': 'no new requests',
     'connect.protectedFor': 'Protected for',
     'connect.systemMode': 'system proxy · local CA',
@@ -442,8 +441,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'request.allowOnce': 'allow once',
     'request.allowAlways': 'allow + remember',
     'request.deny': 'deny',
-    'connect.grants': 'grants',
-    'connect.grantsAria': 'open active grants',
+    'connect.grants': 'allowed',
+    'connect.grantsAria': 'open allowed wallet values',
     'connect.redactedToday': 'redacted today',
     'connect.redactedTodayAria': 'open redacted activity',
     'connect.appsMediated': 'apps mediated',
@@ -456,8 +455,10 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.stepBlocked': 'blocked',
     'connect.step.launch_at_login': 'Choose startup behavior',
     'connect.step.ne_install': 'Install network extension',
+    'connect.step.ne_approval': 'Approve network extension',
     'connect.step.ne_config': 'Add network configuration',
     'connect.step.ne_enable': 'Enable network extension',
+    'connect.step.ne_rolled_back': 'Repair network extension',
     'connect.step.ne_start': 'Enable protection layer',
     'connect.step.linux_capture': 'Set up Linux routing',
     'connect.step.windows_capture': 'Set up Windows routing',
@@ -471,10 +472,14 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
       'Add DAM to Open at Login so it comes back automatically after the setup restart, or skip it and continue manually. macOS lists this in System Settings > General > Login Items > Open at Login.',
     'connect.hint.ne_install':
       'Adds a system-level network extension so DAM can mediate every request your apps make to the open internet. macOS will ask you to approve the extension.',
+    'connect.hint.ne_approval':
+      'macOS has the DAM Network Protection request and is waiting for approval in System Settings > General > Login Items & Extensions > Network Extensions.',
     'connect.hint.ne_config':
       'Adds the DAM Network Protection configuration that routes protected traffic through DAM. macOS shows this consent separately from system extension approval.',
     'connect.hint.ne_enable':
       'macOS has added the DAM network configuration but has not started it yet. Enable DAM Network Protection in System Settings > General > Login Items & Extensions > Network Extensions, then continue setup.',
+    'connect.hint.ne_rolled_back':
+      'DAM disabled Network Protection after it failed to start, which keeps normal networking working. Enable it again to retry from a known state.',
     'connect.hint.ne_start':
       'DAM Network Protection is enabled but not connected yet. Continue setup so DAM can start it and verify capture before moving to trust.',
     'connect.hint.linux_capture':
@@ -492,19 +497,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.hint.daemon_start':
       'Starts the DAM background process that mediates traffic. Runs locally; nothing leaves your device unless you allow it.',
     'connect.hintAriaLabel': 'more info',
-    'connect.action.launch_at_login': 'Add DAM to Open at Login',
     'connect.action.launch_at_login_skip': 'Skip',
-    'connect.action.ne_install': 'Install network extension',
-    'connect.action.ne_config': 'Add network configuration',
-    'connect.action.ne_enable': 'Enable network extension',
-    'connect.action.ne_start': 'Enable protection layer',
-    'connect.action.platform_capture': 'Use explicit proxy mode',
-    'connect.action.ne_reboot': 'Restart macOS',
-    'connect.action.ca_install': 'Trust local CA',
-    'connect.action.system_proxy': 'Install system proxy',
-    'connect.action.apply_profiles': 'Write profile files',
-    'connect.action.daemon_start': 'Start DAM',
-    'connect.action.unknown': 'Continue setup',
     'connect.error.load': 'DAM could not read the connection state.',
     'connect.error.not_implemented': 'This connect action is not wired in this build yet.',
     'connect.error.ne_pending_user_approval':
@@ -550,6 +543,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'settings.appsHint':
       'Toggle the app profiles DAM mediates. Profile files stay under DAM state.',
     'settings.appsLoading': 'reading apps',
+    'settings.appsApplying': 'applying profile',
     'settings.appsEmpty': 'no apps configured yet',
     'settings.appsToggleOn': 'turn off',
     'settings.appsToggleOff': 'turn on',
@@ -638,6 +632,21 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'wallet.heading': 'Wallet',
     'wallet.searchAria': 'filter wallet values',
     'wallet.searchPlaceholder': 'email, phone, token…',
+    'wallet.filterAria': 'filter wallet state',
+    'wallet.filter.all': 'all',
+    'wallet.filter.protected': 'protected',
+    'wallet.filter.allowed': 'allowed',
+    'wallet.addValue': 'add value',
+    'wallet.addKind': 'kind',
+    'wallet.addValueLabel': 'value',
+    'wallet.addValuePlaceholder': 'value to protect',
+    'wallet.addCancel': 'cancel',
+    'wallet.addSubmit': 'add',
+    'wallet.kind.email': 'email',
+    'wallet.kind.domain': 'domain',
+    'wallet.kind.phone': 'phone',
+    'wallet.kind.ssn': 'SSN',
+    'wallet.kind.cc': 'credit card',
     'wallet.empty.first': 'nothing in your wallet yet',
     'wallet.empty.searchPrefix': 'no value matches',
     'wallet.clearSearch': 'clear',
@@ -647,6 +656,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'wallet.meta.revokedFrom': 'revoked from',
     'wallet.meta.notShared': 'not shared with anyone',
     'wallet.meta.lastSeen': 'last seen',
+    'wallet.error.invalidRequest': 'choose a kind and enter a value.',
     'wallet.error.unreachable': 'we couldn’t load your wallet.',
     'wallet.error.daemon': 'we can’t reach DAM right now.',
     'wallet.error.unknown': 'something didn’t work loading your wallet.',
@@ -659,6 +669,21 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'walletDetail.lastSeen': 'last seen',
     'walletDetail.firstSeen': 'first seen',
     'walletDetail.reference': 'reference',
+    'walletDetail.allowHeading': 'allow',
+    'walletDetail.allowAllProfiles': 'allow all profiles',
+    'walletDetail.allowProfilesLoading': 'loading profiles',
+    'walletDetail.allowProfilesUnavailable': 'profiles unavailable',
+    'walletDetail.allowNoProfiles': 'no configured profiles',
+    'walletDetail.profileDisabled': 'currently off',
+    'walletDetail.profileDropdown': 'profiles',
+    'walletDetail.profileDropdownEmpty': 'choose profiles',
+    'walletDetail.profileDropdownOne': '1 profile',
+    'walletDetail.profileDropdownMany': 'profiles',
+    'walletDetail.remove': 'remove from wallet',
+    'walletDetail.removeConfirm':
+      'Remove this value from your wallet? Active access for it will stop first.',
+    'walletDetail.removeCancel': 'cancel',
+    'walletDetail.confirmRemove': 'remove',
     'walletDetail.error.missing': 'this value isn’t in your wallet anymore.',
     'walletDetail.error.grantFailed':
       'we couldn’t allow that — try once more.',
@@ -670,25 +695,31 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'activity.aria': 'wallet activity',
     'activity.heading': 'Activity',
     'activity.hint':
-      'Values DAM has seen in recent traffic that aren’t in your wallet yet. Add a value to manage it like the rest, or allow it once for the actor that asked.',
+      'Values DAM has seen in recent traffic. Add a value to manage it from Wallet.',
     'activity.empty': 'nothing happening yet',
     'activity.tryAgain': 'try again',
     'activity.loadingReason': 'reading activity',
-    'activity.from': 'from',
     'activity.add': 'add to wallet',
-    'activity.allowOnce': 'allow once',
-    'activity.actionParked':
-      'this action ships when the DAM scanner can stream values to the surface.',
+    'activity.adding': 'adding…',
+    'activity.added': 'added',
+    'activity.factsAria': 'activity facts',
+    'activity.outcome': 'outcome',
+    'activity.type': 'type',
+    'activity.profile': 'profile',
+    'activity.valueUnavailable': 'value not stored',
     'activity.error.unknown':
       'we couldn’t read activity right now. Try again.',
+    'activity.error.addFailed':
+      'we couldn’t add that value to your wallet. Try again.',
     'activity.searchAria': 'filter activity',
-    'activity.searchPlaceholder': 'actor, kind, value…',
+    'activity.searchPlaceholder': 'profile, type, value…',
     'activity.decisionAria': 'decision',
     'activity.sinceAria': 'time range',
     'activity.decision.all': 'all',
     'activity.decision.granted': 'granted',
     'activity.decision.sealed': 'sealed',
     'activity.decision.denied': 'denied',
+    'activity.since.1h': '1h',
     'activity.since.today': 'today',
     'activity.since.7d': '7d',
     'activity.since.30d': '30d',
@@ -704,23 +735,11 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'nav.pendingRequests': 'demandes en attente',
     'nav.insights': 'Aperçu',
     'nav.wallet': 'Portefeuille',
-    'nav.allowed': 'Autorisés',
     'nav.activity': 'Activité',
     'nav.more': 'plus',
     'nav.settings': 'Réglages',
     'nav.system': 'Journal système',
     'nav.health': 'Santé',
-    'allowed.aria': 'données autorisées',
-    'allowed.heading': 'Données autorisées',
-    'allowed.empty': 'rien n’est autorisé',
-    'allowed.searchAria': 'filtrer les valeurs autorisées',
-    'allowed.searchPlaceholder': 'acteur, type, valeur…',
-    'allowed.tryAgain': 'réessayer',
-    'allowed.loadingReason': 'lecture des autorisations',
-    'allowed.expiredDisclosure': 'afficher les expirées',
-    'allowed.stopAllowing': 'cesser d’autoriser',
-    'allowed.until': 'jusqu’au',
-    'allowed.error.unknown': 'lecture impossible pour l’instant. Réessayez.',
     'insights.aria': 'Aperçu DAM',
     'insights.heading': 'Aperçu',
     'insights.range.today': 'aujourd’hui',
@@ -788,8 +807,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.loading': 'Vérification de l’état de protection.',
     'connect.loadingReason': 'Vérification de l’état de protection',
     'connect.checkAgain': 'Revérifier',
-    'connect.connectAria': 'Connecter DAM',
-    'connect.connectCaption': 'cliquez pour connecter',
+    'connect.connectDam': 'Connect : DAM',
+    'connect.connectAria': 'Connect : DAM',
     'connect.disconnectedLede':
       'Reprenez le contrôle de ce que vos apps savent de vous.',
     'connect.disconnectedFine':
@@ -798,9 +817,6 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.pausedStatus': 'La protection est en pause. Les clients locaux gardent leur point d’accès.',
     'connect.degradedStatus': 'La protection demande une attention. DAM reste présent.',
     'connect.setupStatus': 'Terminez la configuration locale avant que DAM protège cet appareil.',
-    'connect.pauseProtection': 'Mettre la protection en pause',
-    'connect.resumeProtection': 'Reprendre la protection',
-    'connect.recoveryAction': 'Tenter la correction',
     'connect.nothingAsking': 'aucune nouvelle demande',
     'connect.protectedFor': 'Protégé depuis',
     'connect.systemMode': 'proxy système · AC locale',
@@ -813,8 +829,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'request.allowOnce': 'autoriser une fois',
     'request.allowAlways': 'autoriser et mémoriser',
     'request.deny': 'refuser',
-    'connect.grants': 'autorisations',
-    'connect.grantsAria': 'voir les autorisations actives',
+    'connect.grants': 'autorisés',
+    'connect.grantsAria': 'voir les valeurs autorisées du portefeuille',
     'connect.redactedToday': 'masqués aujourd’hui',
     'connect.redactedTodayAria': 'voir l’activité masquée',
     'connect.appsMediated': 'apps encadrées',
@@ -827,8 +843,10 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.stepBlocked': 'bloqué',
     'connect.step.launch_at_login': 'Choisir le démarrage',
     'connect.step.ne_install': 'Installer l’extension réseau',
+    'connect.step.ne_approval': 'Approuver l’extension réseau',
     'connect.step.ne_config': 'Ajouter la configuration réseau',
     'connect.step.ne_enable': 'Activer l’extension réseau',
+    'connect.step.ne_rolled_back': 'Réparer l’extension réseau',
     'connect.step.ne_start': 'Activer la couche de protection',
     'connect.step.linux_capture': 'Configurer le routage Linux',
     'connect.step.windows_capture': 'Configurer le routage Windows',
@@ -842,10 +860,14 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
       'Ajoutez DAM à l’ouverture pour qu’il revienne automatiquement après le redémarrage de configuration, ou ignorez cette étape et continuez manuellement. Visible dans Réglages Système > Général > Éléments d’ouverture > Ouvrir à l’ouverture de session.',
     'connect.hint.ne_install':
       'Ajoute une extension réseau au niveau du système pour que DAM puisse encadrer chaque requête que vos apps envoient sur l’internet ouvert. macOS vous demandera d’approuver l’extension.',
+    'connect.hint.ne_approval':
+      'macOS a reçu la demande DAM Network Protection et attend votre approbation dans Réglages Système > Général > Ouverture et extensions > Extensions réseau.',
     'connect.hint.ne_config':
       'Ajoute la configuration DAM Network Protection qui route le trafic protégé via DAM. macOS demande ce consentement séparément de l’approbation de l’extension système.',
     'connect.hint.ne_enable':
       'macOS a ajouté la configuration réseau de DAM, mais ne l’a pas encore démarrée. Activez DAM Network Protection dans Réglages Système > Général > Ouverture et extensions > Extensions réseau, puis continuez la configuration.',
+    'connect.hint.ne_rolled_back':
+      'DAM a désactivé Network Protection après un échec de démarrage afin de préserver le réseau normal. Réactivez-le pour réessayer depuis un état connu.',
     'connect.hint.ne_start':
       'DAM Network Protection est activé, mais pas encore connecté. Continuez la configuration pour que DAM le démarre et vérifie la capture avant de passer à la confiance.',
     'connect.hint.linux_capture':
@@ -863,19 +885,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.hint.daemon_start':
       'Démarre le processus DAM en arrière-plan qui encadre le trafic. Tout local ; rien ne quitte votre appareil sans votre accord.',
     'connect.hintAriaLabel': 'plus d’info',
-    'connect.action.launch_at_login': 'Ajouter DAM à l’ouverture',
     'connect.action.launch_at_login_skip': 'Ignorer',
-    'connect.action.ne_install': 'Installer l’extension réseau',
-    'connect.action.ne_config': 'Ajouter la configuration réseau',
-    'connect.action.ne_enable': 'Activer l’extension réseau',
-    'connect.action.ne_start': 'Activer la couche de protection',
-    'connect.action.platform_capture': 'Utiliser le proxy explicite',
-    'connect.action.ne_reboot': 'Redémarrer macOS',
-    'connect.action.ca_install': 'Faire confiance à l’AC locale',
-    'connect.action.system_proxy': 'Installer le proxy système',
-    'connect.action.apply_profiles': 'Écrire les profils',
-    'connect.action.daemon_start': 'Démarrer DAM',
-    'connect.action.unknown': 'Continuer la configuration',
     'connect.error.load': 'DAM n’a pas pu lire l’état de connexion.',
     'connect.error.not_implemented': 'Cette action de connexion n’est pas encore câblée dans cette version.',
     'connect.error.ne_pending_user_approval':
@@ -921,6 +931,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'settings.appsHint':
       'Activez les apps que DAM encadre. Activer écrit leur profil ; désactiver le retire.',
     'settings.appsLoading': 'lecture des apps',
+    'settings.appsApplying': 'application du profil',
     'settings.appsEmpty': 'aucune app configurée',
     'settings.appsToggleOn': 'désactiver',
     'settings.appsToggleOff': 'activer',
@@ -1010,6 +1021,21 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'wallet.heading': 'Portefeuille',
     'wallet.searchAria': 'filtrer les valeurs du portefeuille',
     'wallet.searchPlaceholder': 'email, téléphone, jeton…',
+    'wallet.filterAria': 'filtrer l’état du portefeuille',
+    'wallet.filter.all': 'tout',
+    'wallet.filter.protected': 'protégés',
+    'wallet.filter.allowed': 'autorisés',
+    'wallet.addValue': 'ajouter une valeur',
+    'wallet.addKind': 'type',
+    'wallet.addValueLabel': 'valeur',
+    'wallet.addValuePlaceholder': 'valeur à protéger',
+    'wallet.addCancel': 'annuler',
+    'wallet.addSubmit': 'ajouter',
+    'wallet.kind.email': 'email',
+    'wallet.kind.domain': 'domaine',
+    'wallet.kind.phone': 'téléphone',
+    'wallet.kind.ssn': 'NAS',
+    'wallet.kind.cc': 'carte',
     'wallet.empty.first': 'rien dans votre portefeuille pour l’instant',
     'wallet.empty.searchPrefix': 'aucune valeur ne correspond à',
     'wallet.clearSearch': 'effacer',
@@ -1019,6 +1045,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'wallet.meta.revokedFrom': 'révoqué pour',
     'wallet.meta.notShared': 'pas partagé',
     'wallet.meta.lastSeen': 'vu pour la dernière fois',
+    'wallet.error.invalidRequest':
+      'choisissez un type et entrez une valeur.',
     'wallet.error.unreachable': 'le portefeuille n’a pas pu être chargé.',
     'wallet.error.daemon': 'DAM est injoignable pour l’instant.',
     'wallet.error.unknown':
@@ -1032,6 +1060,21 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'walletDetail.lastSeen': 'vu pour la dernière fois',
     'walletDetail.firstSeen': 'vu pour la première fois',
     'walletDetail.reference': 'référence',
+    'walletDetail.allowHeading': 'autoriser',
+    'walletDetail.allowAllProfiles': 'autoriser tous les profils',
+    'walletDetail.allowProfilesLoading': 'chargement des profils',
+    'walletDetail.allowProfilesUnavailable': 'profils indisponibles',
+    'walletDetail.allowNoProfiles': 'aucun profil configuré',
+    'walletDetail.profileDisabled': 'désactivé',
+    'walletDetail.profileDropdown': 'profils',
+    'walletDetail.profileDropdownEmpty': 'choisir des profils',
+    'walletDetail.profileDropdownOne': '1 profil',
+    'walletDetail.profileDropdownMany': 'profils',
+    'walletDetail.remove': 'retirer du portefeuille',
+    'walletDetail.removeConfirm':
+      'Retirer cette valeur du portefeuille ? Les accès actifs seront arrêtés avant.',
+    'walletDetail.removeCancel': 'annuler',
+    'walletDetail.confirmRemove': 'retirer',
     'walletDetail.error.missing':
       'cette valeur n’est plus dans le portefeuille.',
     'walletDetail.error.grantFailed':
@@ -1045,25 +1088,31 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'activity.aria': 'activité du portefeuille',
     'activity.heading': 'Activité',
     'activity.hint':
-      'Valeurs que DAM a vues passer récemment et qui ne sont pas dans votre portefeuille. Ajoutez-les pour les gérer comme les autres, ou autorisez-les une fois pour l’acteur qui a demandé.',
+      'Valeurs que DAM a vues passer récemment. Ajoutez une valeur pour la gérer dans le portefeuille.',
     'activity.empty': 'rien à signaler',
     'activity.tryAgain': 'réessayer',
     'activity.loadingReason': 'lecture de l’activité',
-    'activity.from': 'de la part de',
     'activity.add': 'ajouter',
-    'activity.allowOnce': 'autoriser une fois',
-    'activity.actionParked':
-      'cette action sera disponible quand le scanneur DAM diffusera ses valeurs.',
+    'activity.adding': 'ajout…',
+    'activity.added': 'ajouté',
+    'activity.factsAria': 'faits de l’activité',
+    'activity.outcome': 'résultat',
+    'activity.type': 'type',
+    'activity.profile': 'profil',
+    'activity.valueUnavailable': 'valeur non stockée',
     'activity.error.unknown':
       'lecture de l’activité impossible pour l’instant. Réessayez.',
+    'activity.error.addFailed':
+      'ajout au portefeuille impossible. Réessayez.',
     'activity.searchAria': 'filtrer l’activité',
-    'activity.searchPlaceholder': 'acteur, type, valeur…',
+    'activity.searchPlaceholder': 'profil, type, valeur…',
     'activity.decisionAria': 'décision',
     'activity.sinceAria': 'plage de temps',
     'activity.decision.all': 'tout',
     'activity.decision.granted': 'autorisés',
     'activity.decision.sealed': 'scellés',
     'activity.decision.denied': 'refusés',
+    'activity.since.1h': '1 h',
     'activity.since.today': 'aujourd’hui',
     'activity.since.7d': '7 j',
     'activity.since.30d': '30 j',

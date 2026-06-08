@@ -4,7 +4,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Button,
   ConsentRequestCard,
-  ConnectMark,
   EmptyTile,
   ErrorTile,
   RedactionLoader,
@@ -13,12 +12,11 @@ import {
 } from '@rpblc/design'
 
 import { ApiError, api, apiPost } from '@/lib/api/client'
-import { useI18n } from '@/lib/i18n'
+import { useI18n, type MessageKey } from '@/lib/i18n'
 import { resolveSurface } from '@/lib/surface'
 import {
   errorMessageKey,
   stateMessageKey,
-  stepActionKey,
   stepHintKey,
   stepLabelKey,
 } from './connect-copy'
@@ -90,7 +88,7 @@ export function ConnectPage() {
  * redirects `/connect?notice=DAM connected` (success) or
  * `/connect?error=Action required: …` (failure / NE-needs-reboot etc.).
  * Without this banner the user sees only a flicker after clicking
- * `[CONNECT:DAM]` and can't tell what happened.
+ * `Connect : DAM` and can't tell what happened.
  *
  * The param is consumed at mount: we lift it into state, then strip it
  * from the URL via `replaceState` so refresh / back-navigate doesn't
@@ -270,16 +268,19 @@ function DisconnectedState({
     <div className="dam-connect__intro">
       <p className="dam-connect__lede">{t('connect.disconnectedLede')}</p>
       <p className="dam-connect__fine">{t('connect.disconnectedFine')}</p>
-      <ConnectMark
-        className="dam-connect__mark"
-        target="DAM"
-        size={32}
-        caption={t('connect.connectCaption')}
+      <Button
+        className="dam-connect__connect-button"
+        variant="primary"
+        size="lg"
+        bracketed
+        type="button"
         aria-label={t('connect.connectAria')}
-        aria-disabled={pending ? true : undefined}
+        disabled={pending}
         data-tray-connect={isTray ? 'dam' : undefined}
-        onClick={isTray || pending ? undefined : onConnect}
-      />
+        onClick={isTray ? undefined : onConnect}
+      >
+        {t('connect.connectDam')}
+      </Button>
     </div>
   )
 }
@@ -472,7 +473,7 @@ function renderSetupCta({
   isTray: boolean
   pending: boolean
   onAction: (stepId: string) => void
-  t: (key: ReturnType<typeof stepActionKey>) => string
+  t: (key: MessageKey) => string
 }) {
   if (currentId === 'launch_at_login') {
     return isTray ? (
@@ -485,7 +486,7 @@ function renderSetupCta({
           type="button"
           data-tray-register-login="dam"
         >
-          {t(stepActionKey(currentId))}
+          {t('connect.connectDam')}
         </Button>
         <Button
           className="dam-connect__choice-skip"
@@ -508,7 +509,7 @@ function renderSetupCta({
         type="button"
         data-tray-restart="dam"
       >
-        {t(stepActionKey(currentId))}
+        {t('connect.connectDam')}
       </Button>
     ) : null
   }
@@ -522,7 +523,7 @@ function renderSetupCta({
       data-tray-connect={isTray ? 'dam' : undefined}
       onClick={isTray ? undefined : () => onAction(currentId)}
     >
-      {t(stepActionKey(currentId))}
+      {t('connect.connectDam')}
     </Button>
   )
 }
@@ -540,12 +541,6 @@ function ActionState({
   const surface = resolveSurface()
   const isTray = surface === 'tray'
   const actionId = currentActionId(view)
-  const label =
-    view.state === 'protected'
-      ? t('connect.pauseProtection')
-      : view.state === 'paused'
-        ? t('connect.resumeProtection')
-        : t('connect.recoveryAction')
 
   // Pause/resume only flip the on-disk protection flag — both surfaces
   // can drive that through the dam-web HTTP path. Recovery from
@@ -566,7 +561,7 @@ function ActionState({
       data-tray-connect={useTrayBridgeForRecovery ? 'dam' : undefined}
       onClick={useTrayBridgeForRecovery ? undefined : () => onAction(actionId)}
     >
-      {label}
+      {t('connect.connectDam')}
     </Button>
   )
 }
@@ -585,7 +580,8 @@ function CountsRow({
     <ul className="dam-connect__counts" aria-label={t('connect.countsLabel')}>
       <li className="dam-connect__counts-cell--link">
         <Link
-          to="/allowed"
+          to="/wallet"
+          search={{ state: 'allowed' }}
           className="dam-connect__counts-link"
           aria-label={t('connect.grantsAria')}
         >

@@ -4,13 +4,12 @@ import { Link, useRouterState } from '@tanstack/react-router'
 import { BrandActions, BrandStamp } from '@/features/navigation/BrandBar'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 
-type PrimaryRoute = '/insights' | '/wallet' | '/allowed' | '/activity'
+type PrimaryRoute = '/insights' | '/wallet' | '/activity'
 type SecondaryRoute = '/settings' | '/system' | '/health'
 
 const PRIMARY: { path: PrimaryRoute; labelKey: MessageKey }[] = [
   { path: '/insights', labelKey: 'nav.insights' },
   { path: '/wallet', labelKey: 'nav.wallet' },
-  { path: '/allowed', labelKey: 'nav.allowed' },
   { path: '/activity', labelKey: 'nav.activity' },
 ]
 

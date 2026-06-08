@@ -26,7 +26,7 @@ public final class DAMTransparentProxyProvider: NETransparentProxyProvider, @unc
         logger.notice("Starting DAM transparent proxy provider for \(self.runtimeConfiguration.protectedHosts.count, privacy: .public) protected hosts")
 
         let settings = NETransparentProxyNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
-        settings.includedNetworkRules = Self.includedNetworkRules()
+        settings.includedNetworkRules = Self.includedNetworkRules(for: runtimeConfiguration)
 
         setTunnelNetworkSettings(settings) { error in
             if let error {
@@ -66,10 +66,31 @@ public final class DAMTransparentProxyProvider: NETransparentProxyProvider, @unc
         ) {
             return false
         }
+        if let udpFlow = flow as? NEAppProxyUDPFlow {
+            switch currentFlowAction() {
+            case .handle:
+                logger.notice("Closing configured UDP/443 flow to force TCP fallback")
+                Self.closeBlocked(udpFlow)
+                return true
+            case .passThrough:
+                logger.notice("Passing configured UDP/443 flow outside DAM because protection is not ready")
+                return false
+            case .block:
+                logger.error("Blocking configured UDP/443 flow because protection is not ready")
+                Self.closeBlocked(udpFlow)
+                return true
+            }
+        }
+
         guard let tcpFlow = flow as? NEAppProxyTCPFlow,
-              let endpoint = FlowEndpoint(tcpFlow: tcpFlow),
-              runtimeConfiguration.shouldProtect(host: endpoint.host)
+            let endpoint = FlowEndpoint(tcpFlow: tcpFlow)
         else {
+            return false
+        }
+
+        let protectsNamedHost = runtimeConfiguration.shouldProtect(host: endpoint.host)
+        let shouldClassifyHostlessTLS = !protectsNamedHost && endpoint.isHostlessTLSCandidate
+        guard protectsNamedHost || shouldClassifyHostlessTLS else {
             return false
         }
 
@@ -168,28 +189,58 @@ public final class DAMTransparentProxyProvider: NETransparentProxyProvider, @unc
         }
     }
 
-    private static func includedNetworkRules() -> [NENetworkRule] {
-        let ports: [UInt16] = [80, 443]
+    static func includedNetworkRules(for configuration: DAMProxyRuntimeConfiguration) -> [NENetworkRule] {
         let networks: [(host: String, prefix: Int)] = [
             ("0.0.0.0", 0),
             ("::", 0),
         ]
-        return networks.flatMap { network in
-            ports.map { port in
-                let endpoint = NWEndpoint.hostPort(
-                    host: NWEndpoint.Host(network.host),
-                    port: NWEndpoint.Port(rawValue: port)!
-                )
-                return NENetworkRule(
-                    remoteNetworkEndpoint: endpoint,
-                    remotePrefix: network.prefix,
-                    localNetworkEndpoint: nil,
-                    localPrefix: 0,
-                    protocol: .TCP,
-                    direction: .outbound
-                )
+        let tcpRules = networks.flatMap { network in
+            [UInt16(80), UInt16(443)].map { port in
+                tcpNetworkRule(host: network.host, port: port, prefix: network.prefix)
             }
         }
+        let udpRules = configuration.protectedHosts.map { host in
+            udpNetworkRule(host: host, port: 443, prefix: 0)
+        }
+        return tcpRules + udpRules
+    }
+
+    private static func tcpNetworkRule(host: String, port: UInt16, prefix: Int) -> NENetworkRule {
+        networkRule(host: host, port: port, prefix: prefix, isUDP: false)
+    }
+
+    private static func udpNetworkRule(host: String, port: UInt16, prefix: Int) -> NENetworkRule {
+        networkRule(host: host, port: port, prefix: prefix, isUDP: true)
+    }
+
+    private static func networkRule(
+        host: String,
+        port: UInt16,
+        prefix: Int,
+        isUDP: Bool
+    ) -> NENetworkRule {
+        let endpoint = NWEndpoint.hostPort(
+            host: NWEndpoint.Host(host),
+            port: NWEndpoint.Port(rawValue: port)!
+        )
+        if isUDP {
+            return NENetworkRule(
+                remoteNetworkEndpoint: endpoint,
+                remotePrefix: prefix,
+                localNetworkEndpoint: nil,
+                localPrefix: 0,
+                protocol: .UDP,
+                direction: .outbound
+            )
+        }
+        return NENetworkRule(
+            remoteNetworkEndpoint: endpoint,
+            remotePrefix: prefix,
+            localNetworkEndpoint: nil,
+            localPrefix: 0,
+            protocol: .TCP,
+            direction: .outbound
+        )
     }
 
     private static func localProxyIsProtected(_ configuration: DAMProxyRuntimeConfiguration) -> Bool {
@@ -308,7 +359,7 @@ public final class DAMTransparentProxyProvider: NETransparentProxyProvider, @unc
         }
     }
 
-    private static func closeBlocked(_ flow: NEAppProxyTCPFlow) {
+    private static func closeBlocked(_ flow: NEAppProxyFlow) {
         let error = NSError(
             domain: "DAMTransparentProxyProvider",
             code: 1,

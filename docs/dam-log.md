@@ -1,12 +1,12 @@
 # dam-log
 
-`dam-log` is the local SQLite operational log implementation.
+`dam-log` is the local SQLite operational and Activity log implementation.
 
 It implements `dam-core::EventSink`.
 
 ## Responsibility
 
-Persist non-sensitive operational events.
+Persist operational events and the local Activity feed facts needed to show what DAM detected and what happened to it. Activity values are separate from Wallet values: they are not token vault entries, do not imply consent, and are not used for provider pass-through decisions.
 
 Current event types:
 
@@ -32,21 +32,25 @@ CREATE TABLE IF NOT EXISTS log_events (
     level TEXT NOT NULL,
     event_type TEXT NOT NULL,
     kind TEXT,
+    value TEXT,
     reference TEXT,
     action TEXT,
     message TEXT NOT NULL
 );
 ```
 
-Existing local databases with older `log_events` schemas are migrated in place. Additive legacy schemas receive missing non-sensitive columns. Legacy schemas that contain `value_preview` are backed up to `log.db.pre-migration-<timestamp>.bak`, rebuilt without raw preview columns, and marked with SQLite `PRAGMA user_version = 2`.
+Existing local databases with older `log_events` schemas are migrated in place. Additive legacy schemas receive missing columns. Legacy schemas that contain `value_preview` are backed up to `log.db.pre-migration-<timestamp>.bak`, rebuilt without legacy preview columns, and marked with SQLite `PRAGMA user_version = 3`.
 
-Legacy `data_type`, `module_name`, `destination`, and `action` context is preserved where available. `value_preview` is never copied into the current schema, `LogEntry`, or current log views.
+Legacy `data_type`, `module_name`, `destination`, and `action` context is preserved where available. Legacy `value_preview` is never copied into the current schema or `LogEntry`; new `value` entries are written only by current detection/redaction/decision events.
 
-## Privacy Rules
+The SQLite reference store keeps indexes on `operation_id`, `event_type`, `timestamp/id`, and `action`. `LogStore::list_query` supports bounded, indexed reads by minimum timestamp, id cursor, event type, action, and limit so UI surfaces such as Activity do not scan the full local log on every refresh.
+
+## Value Rules
 
 Allowed:
 
 - Sensitive kind.
+- Detected value for Activity rows.
 - Operation ID.
 - Generated reference after a successful vault write.
 - Policy action.
@@ -54,9 +58,9 @@ Allowed:
 
 Forbidden:
 
-- Raw detected value.
-- Value preview.
 - Backend error text that echoes sensitive values.
+
+The Activity value is local log data, not Wallet data. Removing a Wallet row does not remove historical Activity events, and adding a Wallet row is never inferred from an Activity value.
 
 ## Failure Behavior
 

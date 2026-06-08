@@ -2,7 +2,7 @@
 //! seen pass through that aren't in the wallet yet, plus per-event
 //! actor context.
 //!
-//! v1 returns a small hardcoded set so the surface renders during
+//! v1 returns a small synthetic set so the surface renders during
 //! development. Real wiring comes when `dam-detect` exposes a streaming
 //! feed of scanned values.
 
@@ -46,28 +46,28 @@ fn seed_items() -> Vec<ActivityItem> {
             ts: now - 90,
             kind: "email".into(),
             value: "alex@gathe.io".into(),
-            actor: Some("anthropic".into()),
+            actor: Some("sample-profile-a".into()),
         },
         ActivityItem {
             id: "scan-2".into(),
             ts: now - 5 * 60,
             kind: "phone".into(),
             value: "+1 415 555 0142".into(),
-            actor: Some("openai".into()),
+            actor: Some("sample-profile-b".into()),
         },
         ActivityItem {
             id: "scan-3".into(),
             ts: now - 12 * 60,
             kind: "card".into(),
             value: "•••• 4291".into(),
-            actor: Some("perplexity".into()),
+            actor: Some("sample-profile-c".into()),
         },
         ActivityItem {
             id: "scan-4".into(),
             ts: now - 47 * 60,
             kind: "address".into(),
             value: "221b Baker St, London".into(),
-            actor: Some("cursor".into()),
+            actor: Some("sample-profile-d".into()),
         },
     ]
 }

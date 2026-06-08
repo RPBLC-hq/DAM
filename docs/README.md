@@ -16,30 +16,29 @@ DAM is designed for macOS, Linux, and Windows. Platform-specific routing, trust,
 - [dam-config](dam-config.md): layered runtime config for defaults, TOML, env, and CLI overrides.
 - [dam-consent](dam-consent.md): canonical-value passthrough grants with TTL and revocation.
 - [dam-daemon](dam-daemon.md): background local proxy lifecycle, pause/resume protection state, state file, and `dam connect/status/disconnect` support.
-- [dam-diagnostics](dam-diagnostics.md): shared local readiness checks for `damctl doctor` and `dam-web /doctor`.
-- [dam-intercept](dam-intercept.md): guarded TLS interception activation contract for transparent AI routes.
+- [dam-diagnostics](dam-diagnostics.md): shared local readiness checks, setup-plan/next-action, repair, rescue, and diagnostics-export contract for CLI, web/API, and MCP.
+- [dam-intercept](dam-intercept.md): guarded TLS interception activation contract for transparent routes.
 - [dam-integrations](dam-integrations.md): JSON local harness profiles, enabled app state, and legacy active profile state for `dam integrations`, `dam profile`, and `dam connect --profile`.
 - [damctl](damctl.md): local status and config diagnostics CLI.
 - [dam-detect](dam-detect.md): pure rule-based sensitive value detection.
 - [dam-e2e](dam-e2e.md): process-level end-to-end tests across the local binaries.
 - [dam-policy](dam-policy.md): maps detections to `tokenize`, `redact`, `allow`, or `block`.
 - [dam-pipeline](dam-pipeline.md): shared text processing orchestration for detect, policy, consent, vault/log events, redaction, and inbound reference resolution.
-- [dam-provider-common](dam-provider-common.md): shared provider adapter utilities for JSON/JSON-lines string-value, raw stream, and provider-aware SSE text-delta transforms.
-- [dam-provider-anthropic](dam-provider-anthropic.md): Anthropic upstream forwarding, `x-api-key` auth/header handling, JSON/JSON-lines response transforms, and SSE text-delta response transforms for proxy flows.
-- [dam-provider-openai](dam-provider-openai.md): OpenAI-compatible upstream forwarding, auth/header handling, JSON/JSON-lines response transforms, and SSE text-delta response transforms for proxy flows.
-- [dam-router](dam-router.md): proxy target selection, provider classification, auth mode, and failure-mode decisions.
+- [dam-http-adapter](dam-http-adapter.md): generic HTTP upstream forwarding, configured auth/header injection, JSON/JSON-lines response transforms, and SSE text-delta response transforms for proxy flows.
+- [dam-provider-common](dam-provider-common.md): shared response transform utilities for JSON/JSON-lines string-value, raw stream, and SSE text-delta transforms.
+- [dam-router](dam-router.md): proxy target selection, matched-route target choice, auth mode, and failure-mode decisions.
 - [dam-vault](dam-vault.md): local SQLite `VaultWriter` and `VaultReader` implementation.
-- [dam-log](dam-log.md): local SQLite `EventSink` implementation.
+- [dam-log](dam-log.md): local SQLite `EventSink` implementation, Activity values, and bounded indexed log queries for UI surfaces.
 - [dam-net](dam-net.md): network capture-mode vocabulary, generic traffic profile contracts, routing readiness, capture backend status, protocol adapter status, and profile-derived host classification.
 - [dam-net-macos](dam-net-macos.md): macOS PAC system-proxy install/remove plus Network Extension capture planning/status for `tun`.
-- [dam-trust](dam-trust.md): TLS trust-mode vocabulary, local CA artifacts, leaf issuance, macOS trust install/remove, readiness contracts, and trusted AI host scope for transparent protection.
+- [dam-trust](dam-trust.md): TLS trust-mode vocabulary, local CA artifacts, leaf issuance, macOS trust install/remove, readiness contracts, and trusted host scope for transparent protection.
 - [dam-redact](dam-redact.md): pure replacement application.
 - [dam-filter](dam-filter.md): CLI pipeline wiring detection, policy, vault, logs, and redaction.
 - [dam-resolve](dam-resolve.md): CLI pipeline for resolving `[kind:id]` references through `VaultReader`.
 - [dam-proxy](dam-proxy.md): generic mediation runtime with MVP LLM HTTP/WebSocket adapters plus daemon-gated HTTP/1.1 CONNECT/TLS for ready profile routes.
-- [dam-web](dam-web.md): local web UI for setup-plan-driven Connect/app controls, Settings, protected values, Allowed values, log events, and diagnostics.
+- [dam-web](dam-web.md): local web UI for setup-plan-driven Connect/app controls, Settings, Wallet value/allow management, bounded Activity, and diagnostics.
 - [dam-tray](dam-tray.md): native desktop shell that hosts the Connect surface from the local web UI.
-- [dam-mcp](dam-mcp.md): MCP tools for agent-managed consent operations.
+- [dam-mcp](dam-mcp.md): MCP tools for agent status/setup inspection and consent operations.
 
 ## Current Pipeline
 
@@ -61,7 +60,7 @@ dam-core also builds non-sensitive log events
   -> dam-log when enabled
 ```
 
-Replacement planning deduplicates repeated equal canonical values by default, and compatible vault writers reuse an existing canonical reference for the same stored value. Current email canonicalization removes detector-supported whitespace inside the address and lowercases the domain before storage/deduplication; domain canonicalization removes detector-supported whitespace around dots and lowercases the domain. Set `policy.deduplicate_replacements = false` to issue a distinct reference per occurrence when repeated-reference equality is too revealing.
+Replacement planning deduplicates repeated equal canonical values by default, and compatible vault writers reuse an existing canonical reference for the same stored value. Current email canonicalization removes detector-supported whitespace inside the address and lowercases the domain before storage/deduplication. Domain-only values are not detected globally; proxy callers can pass email-derived domains back as related context for inbound response redaction. Set `policy.deduplicate_replacements = false` to issue a distinct reference per occurrence when repeated-reference equality is too revealing.
 
 ## Resolve Pipeline
 
@@ -94,11 +93,11 @@ LLM request
   -> dam-vault only for tokenize decisions
   -> dam-redact
   -> dam-log
-  -> dam-provider-openai or dam-provider-anthropic
+  -> dam-http-adapter
   -> upstream provider
 
 provider response
-  -> dam-provider-openai or dam-provider-anthropic
+  -> dam-http-adapter
   -> dam-pipeline
   -> dam-core reference parser
   -> dam-vault through VaultReader
@@ -107,9 +106,9 @@ provider response
   -> LLM client
 ```
 
-Proxy defaults are directional: outbound requests are redacted before the provider sees them. Active consent applies to canonical detected values and, in proxy flows with a vault reader, previously tokenized outbound DAM references for that same allowed value. Agent traffic apps leave known DAM references unresolved in inbound local transcripts, while raw inbound HTTP response redetection/tokenization is explicit per route through traffic profile `inbound.protect_sensitive_data`. JSON-shaped responses are transformed string-by-string, including newline-delimited JSON, when reference restoration or explicit raw inbound protection is active. `text/event-stream` responses are transformed under the same route policy; provider-aware SSE text-delta parsing handles references and opted-in raw values split across adjacent OpenAI-compatible or Anthropic JSON delta events with a bounded event window, while raw streams still use tail-buffered transformation. The Codex ChatGPT-login WebSocket MVP freezes protection state at connection start, strips WebSocket extension negotiation, and protects unfragmented client and server text frames on protected connections; fragmented, binary, or compressed WebSocket frames close the protected connection instead of passing through raw.
+Proxy defaults are directional: profile-matched outbound requests are tokenized before the provider sees them, and those automatic detections create Activity log values and token-vault mappings but do not write to Wallet. Active consent applies to canonical detected values and, in proxy flows with a vault reader, previously tokenized outbound DAM references for that same allowed value. JSON-shaped outbound request bodies are protected string-by-string after JSON decoding so escaped newlines and similar JSON escapes cannot be rewritten into invalid JSON, and changed object keys keep their input order. Agent traffic apps resolve known DAM references in inbound local transcripts when global inbound resolution is enabled, while raw inbound HTTP response redetection/redaction is explicit per route through traffic profile `inbound.protect_sensitive_data` and does not write to Wallet. Domains learned from outbound email detections are retained as request or WebSocket context so opted-in inbound protection can redact the same standalone company domain if a provider repeats it. JSON-shaped responses are transformed string-by-string, including newline-delimited JSON, when reference restoration or explicit raw inbound protection is active. `text/event-stream` responses are transformed under the same route policy; provider-aware SSE text-delta parsing handles references and opted-in raw values split across adjacent OpenAI-compatible or Anthropic JSON delta events with a bounded event window, while raw streams still use tail-buffered transformation. The ChatGPT-login WebSocket MVP freezes protection state at connection start, strips WebSocket extension negotiation, protects unfragmented client and server text frames on protected connections, decodes JSON text frames before rewriting string values, and buffers adjacent outbound text-delta/raw text frames only when needed to complete a partial sensitive value; fragmented, binary, or compressed frames close protected connections instead of passing through raw.
 
-`dam-pipeline`, `dam-provider-common`, `dam-provider-openai`, `dam-provider-anthropic`, and `dam-router` have been extracted from the first compact proxy implementation.
+`dam-pipeline`, `dam-provider-common`, `dam-http-adapter`, and `dam-router` have been extracted from the first compact proxy implementation.
 
 ## Control And Diagnostics
 
@@ -127,6 +126,22 @@ dam status / dam disconnect
 dam logs
   -> local dam-log SQLite store
   -> concise non-sensitive operation summaries or event timelines
+
+dam doctor / dam setup status / dam setup plan / dam setup next-action / dam setup resume / dam setup rescue / dam setup repair / dam setup export-diagnostics
+  -> dam-diagnostics
+  -> machine-readable install/resume/recovery contract
+
+/api/v1/setup/rescue / dam_setup_rescue
+  -> dam-diagnostics setup_rescue
+  -> confirmed local recovery for API/MCP agents
+
+/api/v1/setup/repair / dam_setup_repair
+  -> dam-diagnostics setup_repair
+  -> confirmed local recovery plus a fresh setup plan
+
+/api/v1/setup/diagnostics / dam_setup_export_diagnostics
+  -> dam-diagnostics setup_diagnostics_export
+  -> offline doctor/setup/rescue-preview bundle for support and agents
 
 dam profile
   -> enabled JSON app profile state and legacy active harness profile state
@@ -193,6 +208,14 @@ dam-web /health
   -> dam-diagnostics
   -> dam-proxy /health when enabled
   -> dam-api HealthReport + ProxyReport
+
+dam-web /api/v1/setup/plan and /api/v1/setup/next-action
+  -> dam-diagnostics setup plan
+  -> agent-readable setup state without UI copy dependencies
+
+dam-mcp
+  -> read-only status/setup tools
+  -> gated consent tools
 ```
 
 ## Config Precedence
@@ -209,10 +232,10 @@ Use [../dam.example.toml](../dam.example.toml) as the local starting point.
 ## Verification
 
 ```bash
-scripts/dam-build.sh check
+scripts/dam-build.sh agent-check
 ```
 
-The build/release entrypoint in [build-release.md](build-release.md) wraps local verification, source builds, signed macOS app packaging, notarization, and local deploy steps so local and CI workflows use the same command surface.
+The build/release entrypoint in [build-release.md](build-release.md) wraps local verification, source builds, signed macOS app packaging, notarization, local deploy, installed-app verification, restart, and status steps so local, CI, and agent workflows use the same command surface.
 
 Run only the E2E suite with:
 

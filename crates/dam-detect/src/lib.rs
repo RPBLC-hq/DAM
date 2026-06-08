@@ -2,7 +2,6 @@ pub use dam_core::{Detection, SensitiveType, Span};
 
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::collections::BTreeSet;
 
 static EMAIL_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
@@ -27,13 +26,29 @@ pub fn detect(input: &str) -> Vec<Detection> {
 pub fn detect_with_related_domains(input: &str, related_domains: &[String]) -> Vec<Detection> {
     let mut detections = Vec::new();
 
-    detect_with_regex(input, &EMAIL_RE, SensitiveType::Email, &mut detections);
-    detect_email_derived_domains(input, &mut detections, related_domains);
+    detect_emails(input, &mut detections);
     detect_with_regex(input, &PHONE_RE, SensitiveType::Phone, &mut detections);
     detect_ssns(input, &mut detections);
     detect_credit_cards(input, &mut detections);
+    detect_related_domains(input, related_domains, &mut detections);
 
     dedup_overlaps(detections)
+}
+
+fn detect_emails(input: &str, detections: &mut Vec<Detection>) {
+    detections.extend(
+        EMAIL_RE
+            .find_iter(input)
+            .filter(|m| valid_email_match(m.as_str()))
+            .map(|m| Detection {
+                kind: SensitiveType::Email,
+                span: Span {
+                    start: m.start(),
+                    end: m.end(),
+                },
+                value: m.as_str().to_string(),
+            }),
+    );
 }
 
 fn detect_with_regex(
@@ -50,6 +65,26 @@ fn detect_with_regex(
         },
         value: m.as_str().to_string(),
     }));
+}
+
+fn valid_email_match(value: &str) -> bool {
+    let compact = value
+        .chars()
+        .filter(|character| !matches!(character, ' ' | '\t' | '\r' | '\n'))
+        .collect::<String>();
+    let Some((_local, domain)) = compact.rsplit_once('@') else {
+        return false;
+    };
+    let mut labels = domain.split('.').collect::<Vec<_>>();
+    let Some(top_level) = labels.pop() else {
+        return false;
+    };
+
+    labels.iter().all(|label| !label.is_empty())
+        && top_level.len() >= 2
+        && top_level
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
 }
 
 fn detect_ssns(input: &str, detections: &mut Vec<Detection>) {
@@ -88,93 +123,41 @@ fn detect_credit_cards(input: &str, detections: &mut Vec<Detection>) {
     }));
 }
 
-fn detect_email_derived_domains(
+fn detect_related_domains(
     input: &str,
-    detections: &mut Vec<Detection>,
     related_domains: &[String],
+    detections: &mut Vec<Detection>,
 ) {
-    let mut domains = BTreeSet::new();
-    for detection in detections
-        .iter()
-        .filter(|detection| detection.kind == SensitiveType::Email)
-    {
-        if let Some(domain) = domain_from_email_value(&detection.value) {
-            domains.insert(domain);
-        }
-    }
     for domain in related_domains {
-        if let Some(domain) = normalize_domain_value(domain) {
-            domains.insert(domain);
+        let canonical = dam_core::canonical_sensitive_value(SensitiveType::Domain, domain);
+        if !valid_domain(&canonical) {
+            continue;
         }
-    }
 
-    for domain in domains {
-        let Some(regex) = domain_regex(&domain) else {
+        let pattern = canonical
+            .split('.')
+            .map(regex::escape)
+            .collect::<Vec<_>>()
+            .join(r"[ \t\r\n]*\.[ \t\r\n]*");
+        let Ok(regex) = Regex::new(&format!("(?i){pattern}")) else {
             continue;
         };
-        detections.extend(regex.captures_iter(input).filter_map(|captures| {
-            let domain_match = captures.get(1)?;
+
+        detections.extend(regex.find_iter(input).filter_map(|m| {
+            if !domain_boundary_before(input, m.start()) || !domain_boundary_after(input, m.end()) {
+                return None;
+            }
+
             Some(Detection {
                 kind: SensitiveType::Domain,
                 span: Span {
-                    start: domain_match.start(),
-                    end: domain_match.end(),
+                    start: m.start(),
+                    end: m.end(),
                 },
-                value: domain_match.as_str().to_string(),
+                value: m.as_str().to_string(),
             })
         }));
     }
-}
-
-fn domain_from_email_value(value: &str) -> Option<String> {
-    let compact = value
-        .chars()
-        .filter(|character| !matches!(character, ' ' | '\t' | '\r' | '\n'))
-        .collect::<String>();
-    let (_, domain) = compact.rsplit_once('@')?;
-    normalize_domain_value(domain)
-}
-
-fn normalize_domain_value(value: &str) -> Option<String> {
-    let domain = value
-        .chars()
-        .filter(|character| !matches!(character, ' ' | '\t' | '\r' | '\n'))
-        .collect::<String>()
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
-    if !is_valid_domain(&domain) {
-        return None;
-    }
-    Some(domain)
-}
-
-fn is_valid_domain(domain: &str) -> bool {
-    let labels = domain.split('.').collect::<Vec<_>>();
-    labels.len() >= 2
-        && labels.iter().all(|label| {
-            !label.is_empty()
-                && label.len() <= 63
-                && !label.starts_with('-')
-                && !label.ends_with('-')
-                && label
-                    .chars()
-                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
-        })
-        && labels
-            .last()
-            .is_some_and(|tld| tld.len() >= 2 && tld.chars().all(|ch| ch.is_ascii_alphabetic()))
-}
-
-fn domain_regex(domain: &str) -> Option<Regex> {
-    let pattern = domain
-        .split('.')
-        .map(regex::escape)
-        .collect::<Vec<_>>()
-        .join(r"[ \t\r\n]*\.[ \t\r\n]*");
-    Regex::new(&format!(
-        r"(?i)(?:^|[^A-Za-z0-9@._-])({pattern})(?:$|[^A-Za-z0-9._-])"
-    ))
-    .ok()
 }
 
 fn dedup_overlaps(mut detections: Vec<Detection>) -> Vec<Detection> {
@@ -191,6 +174,64 @@ fn dedup_overlaps(mut detections: Vec<Detection>) -> Vec<Detection> {
     }
 
     kept
+}
+
+fn valid_domain(value: &str) -> bool {
+    let mut labels = value.split('.').collect::<Vec<_>>();
+    let Some(top_level) = labels.pop() else {
+        return false;
+    };
+
+    !labels.is_empty()
+        && labels.iter().all(|label| valid_domain_label(label))
+        && top_level.len() >= 2
+        && top_level
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
+}
+
+fn valid_domain_label(label: &str) -> bool {
+    !label.is_empty()
+        && label
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+}
+
+fn domain_boundary_before(input: &str, start: usize) -> bool {
+    match previous_char(input, start) {
+        Some(character) => !is_domain_neighbor_before(character),
+        None => true,
+    }
+}
+
+fn domain_boundary_after(input: &str, end: usize) -> bool {
+    let Some(character) = next_char(input, end) else {
+        return true;
+    };
+    if matches!(character, '.' | '．') {
+        return match next_char(input, end + character.len_utf8()) {
+            Some(next) => !is_domain_label_character(next),
+            None => true,
+        };
+    }
+
+    !is_domain_label_character(character) && character != '@'
+}
+
+fn is_domain_neighbor_before(character: char) -> bool {
+    is_domain_label_character(character) || matches!(character, '.' | '．' | '@')
+}
+
+fn is_domain_label_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || character == '-'
+}
+
+fn previous_char(input: &str, index: usize) -> Option<char> {
+    input.get(..index)?.chars().next_back()
+}
+
+fn next_char(input: &str, index: usize) -> Option<char> {
+    input.get(index..)?.chars().next()
 }
 
 fn is_valid_ssn_area(digits: &str) -> bool {
@@ -234,151 +275,5 @@ fn luhn(digits: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn detects_email() {
-        let detections = detect("email alice@example.com");
-
-        assert_eq!(detections.len(), 1);
-        assert_eq!(detections[0].kind, SensitiveType::Email);
-        assert_eq!(detections[0].value, "alice@example.com");
-    }
-
-    #[test]
-    fn detects_email_with_space_after_at() {
-        let detections = detect("email alice@ example.com");
-
-        assert_eq!(detections.len(), 1);
-        assert_eq!(detections[0].kind, SensitiveType::Email);
-        assert_eq!(detections[0].value, "alice@ example.com");
-    }
-
-    #[test]
-    fn detects_email_with_space_before_at() {
-        let detections = detect("email alice @example.com");
-
-        assert_eq!(detections.len(), 1);
-        assert_eq!(detections[0].kind, SensitiveType::Email);
-        assert_eq!(detections[0].value, "alice @example.com");
-    }
-
-    #[test]
-    fn detects_email_with_spaces_around_domain_dot() {
-        let detections = detect("email alice@example . com");
-
-        assert_eq!(detections.len(), 1);
-        assert_eq!(detections[0].kind, SensitiveType::Email);
-        assert_eq!(detections[0].value, "alice@example . com");
-    }
-
-    #[test]
-    fn detects_email_without_absorbing_following_sentence() {
-        let detections = detect("email alice@example.com. What domain?");
-
-        assert_eq!(detections.len(), 1);
-        assert_eq!(detections[0].kind, SensitiveType::Email);
-        assert_eq!(detections[0].value, "alice@example.com");
-    }
-
-    #[test]
-    fn detects_email_derived_domain_repeated_standalone() {
-        let detections = detect("email alice@example.com domain example.com");
-
-        assert_eq!(detections.len(), 2);
-        assert_eq!(detections[0].kind, SensitiveType::Email);
-        assert_eq!(detections[1].kind, SensitiveType::Domain);
-        assert_eq!(detections[1].value, "example.com");
-    }
-
-    #[test]
-    fn detects_email_derived_hyphenated_domain_repeated_standalone() {
-        let detections = detect("email alice@corp-example.com domain corp-example.com");
-
-        assert_eq!(detections.len(), 2);
-        assert_eq!(detections[0].kind, SensitiveType::Email);
-        assert_eq!(detections[1].kind, SensitiveType::Domain);
-        assert_eq!(detections[1].value, "corp-example.com");
-    }
-
-    #[test]
-    fn detects_email_derived_domain_with_spaced_dot() {
-        let detections = detect("email alice@example.com domain example . com");
-
-        assert_eq!(detections.len(), 2);
-        assert_eq!(detections[1].kind, SensitiveType::Domain);
-        assert_eq!(detections[1].value, "example . com");
-    }
-
-    #[test]
-    fn detects_related_domain_without_email_in_input() {
-        let detections = detect_with_related_domains(
-            "provider answered example.com",
-            &["example.com".to_string()],
-        );
-
-        assert_eq!(detections.len(), 1);
-        assert_eq!(detections[0].kind, SensitiveType::Domain);
-        assert_eq!(detections[0].value, "example.com");
-    }
-
-    #[test]
-    fn does_not_detect_domain_inside_email_only() {
-        let detections = detect("email alice@example.com");
-
-        assert_eq!(detections.len(), 1);
-        assert_eq!(detections[0].kind, SensitiveType::Email);
-    }
-
-    #[test]
-    fn does_not_detect_email_domain_inside_subdomain() {
-        let detections = detect("email alice@example.com route api.example.com");
-
-        assert_eq!(detections.len(), 1);
-        assert_eq!(detections[0].kind, SensitiveType::Email);
-    }
-
-    #[test]
-    fn detects_phone() {
-        let detections = detect("call +14155551234");
-
-        assert_eq!(detections.len(), 1);
-        assert_eq!(detections[0].kind, SensitiveType::Phone);
-    }
-
-    #[test]
-    fn detects_valid_ssn() {
-        let detections = detect("ssn 123-45-6789");
-
-        assert_eq!(detections.len(), 1);
-        assert_eq!(detections[0].kind, SensitiveType::Ssn);
-    }
-
-    #[test]
-    fn rejects_invalid_ssn_area() {
-        assert!(detect("ssn 666-45-6789").is_empty());
-    }
-
-    #[test]
-    fn detects_valid_credit_card() {
-        let detections = detect("card 4111-1111-1111-1111");
-
-        assert_eq!(detections.len(), 1);
-        assert_eq!(detections[0].kind, SensitiveType::CreditCard);
-    }
-
-    #[test]
-    fn rejects_invalid_credit_card() {
-        assert!(detect("card 4111-1111-1111-1112").is_empty());
-    }
-
-    #[test]
-    fn returns_detections_in_text_order() {
-        let detections = detect("ssn 123-45-6789 email alice@example.com");
-
-        assert_eq!(detections.len(), 2);
-        assert_eq!(detections[0].kind, SensitiveType::Ssn);
-        assert_eq!(detections[1].kind, SensitiveType::Email);
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;
