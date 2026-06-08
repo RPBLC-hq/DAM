@@ -23,13 +23,14 @@ pub fn detect(input: &str) -> Vec<Detection> {
     detect_with_related_domains(input, &[])
 }
 
-pub fn detect_with_related_domains(input: &str, _related_domains: &[String]) -> Vec<Detection> {
+pub fn detect_with_related_domains(input: &str, related_domains: &[String]) -> Vec<Detection> {
     let mut detections = Vec::new();
 
     detect_emails(input, &mut detections);
     detect_with_regex(input, &PHONE_RE, SensitiveType::Phone, &mut detections);
     detect_ssns(input, &mut detections);
     detect_credit_cards(input, &mut detections);
+    detect_related_domains(input, related_domains, &mut detections);
 
     dedup_overlaps(detections)
 }
@@ -122,6 +123,43 @@ fn detect_credit_cards(input: &str, detections: &mut Vec<Detection>) {
     }));
 }
 
+fn detect_related_domains(
+    input: &str,
+    related_domains: &[String],
+    detections: &mut Vec<Detection>,
+) {
+    for domain in related_domains {
+        let canonical = dam_core::canonical_sensitive_value(SensitiveType::Domain, domain);
+        if !valid_domain(&canonical) {
+            continue;
+        }
+
+        let pattern = canonical
+            .split('.')
+            .map(regex::escape)
+            .collect::<Vec<_>>()
+            .join(r"[ \t\r\n]*\.[ \t\r\n]*");
+        let Ok(regex) = Regex::new(&format!("(?i){pattern}")) else {
+            continue;
+        };
+
+        detections.extend(regex.find_iter(input).filter_map(|m| {
+            if !domain_boundary_before(input, m.start()) || !domain_boundary_after(input, m.end()) {
+                return None;
+            }
+
+            Some(Detection {
+                kind: SensitiveType::Domain,
+                span: Span {
+                    start: m.start(),
+                    end: m.end(),
+                },
+                value: m.as_str().to_string(),
+            })
+        }));
+    }
+}
+
 fn dedup_overlaps(mut detections: Vec<Detection>) -> Vec<Detection> {
     detections.sort_by_key(|d| d.span.start);
 
@@ -136,6 +174,64 @@ fn dedup_overlaps(mut detections: Vec<Detection>) -> Vec<Detection> {
     }
 
     kept
+}
+
+fn valid_domain(value: &str) -> bool {
+    let mut labels = value.split('.').collect::<Vec<_>>();
+    let Some(top_level) = labels.pop() else {
+        return false;
+    };
+
+    !labels.is_empty()
+        && labels.iter().all(|label| valid_domain_label(label))
+        && top_level.len() >= 2
+        && top_level
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
+}
+
+fn valid_domain_label(label: &str) -> bool {
+    !label.is_empty()
+        && label
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+}
+
+fn domain_boundary_before(input: &str, start: usize) -> bool {
+    match previous_char(input, start) {
+        Some(character) => !is_domain_neighbor_before(character),
+        None => true,
+    }
+}
+
+fn domain_boundary_after(input: &str, end: usize) -> bool {
+    let Some(character) = next_char(input, end) else {
+        return true;
+    };
+    if matches!(character, '.' | '．') {
+        return match next_char(input, end + character.len_utf8()) {
+            Some(next) => !is_domain_label_character(next),
+            None => true,
+        };
+    }
+
+    !is_domain_label_character(character) && character != '@'
+}
+
+fn is_domain_neighbor_before(character: char) -> bool {
+    is_domain_label_character(character) || matches!(character, '.' | '．' | '@')
+}
+
+fn is_domain_label_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || character == '-'
+}
+
+fn previous_char(input: &str, index: usize) -> Option<char> {
+    input.get(..index)?.chars().next_back()
+}
+
+fn next_char(input: &str, index: usize) -> Option<char> {
+    input.get(index..)?.chars().next()
 }
 
 fn is_valid_ssn_area(digits: &str) -> bool {

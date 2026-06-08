@@ -316,7 +316,7 @@ fn protect_text_expands_allowed_references_for_matching_scope() {
 }
 
 #[test]
-fn protect_text_does_not_tokenize_related_domain_without_email_in_input() {
+fn protect_text_tokenizes_related_domain_from_context_without_email_in_input() {
     let vault = RecordingVault::default();
     let policy = dam_policy::StaticPolicy::new(PolicyAction::Tokenize);
     let related_domains = vec!["example.com".to_string()];
@@ -335,9 +335,10 @@ fn protect_text_does_not_tokenize_related_domain_without_email_in_input() {
     .unwrap();
 
     let output = result.output.unwrap();
-    assert_eq!(output, "domain example.com");
-    assert!(result.detections.is_empty());
-    assert!(vault.records.lock().unwrap().is_empty());
+    assert!(output.starts_with("domain [domain:"));
+    assert_eq!(result.detections.len(), 1);
+    assert_eq!(result.detections[0].kind, SensitiveType::Domain);
+    assert_eq!(vault.records.lock().unwrap().len(), 1);
 }
 
 #[test]

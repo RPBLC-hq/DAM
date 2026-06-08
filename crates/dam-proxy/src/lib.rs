@@ -450,23 +450,28 @@ async fn handle_raw_connect_request(
     let traffic_route =
         dam_net::classify_traffic_host_with_routes(&authority.host, &interception.routes);
     let protection_paused = !state.protection_enabled();
-    if traffic_route.is_none() || protection_paused {
-        let bypass_reason = if traffic_route.is_some() && protection_paused {
-            ConnectBypassReason::ProtectionPaused
-        } else {
-            ConnectBypassReason::UnmatchedRoute
-        };
+    let Some(traffic_route) = traffic_route else {
         return handle_raw_connect_tunnel(
             state,
             operation_id,
             authority,
-            bypass_reason,
+            ConnectBypassReason::UnmatchedRoute,
             stream,
-            traffic_route.is_some() && protection_paused,
+            false,
+        )
+        .await;
+    };
+    if protection_paused {
+        return handle_raw_connect_tunnel(
+            state,
+            operation_id,
+            authority,
+            ConnectBypassReason::ProtectionPaused,
+            stream,
+            true,
         )
         .await;
     }
-    let traffic_route = traffic_route.unwrap();
     let route = state
         .routes
         .decide_for_traffic_route(&request.headers, &traffic_route);
@@ -593,24 +598,30 @@ async fn handle_connect_request(
     let traffic_route =
         dam_net::classify_traffic_host_with_routes(&authority.host, &interception.routes);
     let protection_paused = !state.protection_enabled();
-    if traffic_route.is_none() || protection_paused {
-        let bypass_reason = if traffic_route.is_some() && protection_paused {
-            ConnectBypassReason::ProtectionPaused
-        } else {
-            ConnectBypassReason::UnmatchedRoute
-        };
+    let Some(traffic_route) = traffic_route else {
         return handle_connect_tunnel_request(
             state,
             route,
             operation_id,
             authority,
-            bypass_reason,
+            ConnectBypassReason::UnmatchedRoute,
             request,
-            traffic_route.is_some() && protection_paused,
+            false,
+        )
+        .await;
+    };
+    if protection_paused {
+        return handle_connect_tunnel_request(
+            state,
+            route,
+            operation_id,
+            authority,
+            ConnectBypassReason::ProtectionPaused,
+            request,
+            true,
         )
         .await;
     }
-    let traffic_route = traffic_route.unwrap();
 
     let route = state
         .routes
@@ -1095,8 +1106,50 @@ async fn proxy_http_request(
     .await
 }
 
-fn related_domains_from_detections(_detections: &[dam_core::Detection]) -> Vec<String> {
-    Vec::new()
+fn related_domains_from_detections(detections: &[dam_core::Detection]) -> Vec<String> {
+    let mut related_domains = Vec::new();
+    for detection in detections
+        .iter()
+        .filter(|detection| detection.kind == dam_core::SensitiveType::Email)
+    {
+        let Some(domain) = related_domain_from_email(&detection.value) else {
+            continue;
+        };
+        if !related_domains.contains(&domain) {
+            related_domains.push(domain);
+        }
+    }
+
+    related_domains
+}
+
+fn related_domain_from_email(value: &str) -> Option<String> {
+    let compact = value
+        .chars()
+        .filter(|character| !matches!(character, ' ' | '\t' | '\r' | '\n'))
+        .collect::<String>();
+    let (_, domain) = compact.rsplit_once('@')?;
+    let canonical = dam_core::canonical_sensitive_value(dam_core::SensitiveType::Domain, domain);
+    valid_related_domain(&canonical).then_some(canonical)
+}
+
+fn valid_related_domain(value: &str) -> bool {
+    let mut labels = value.split('.').collect::<Vec<_>>();
+    let Some(top_level) = labels.pop() else {
+        return false;
+    };
+
+    !labels.is_empty()
+        && labels.iter().all(|label| {
+            !label.is_empty()
+                && label
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        })
+        && top_level.len() >= 2
+        && top_level
+            .chars()
+            .all(|character| character.is_ascii_alphabetic())
 }
 
 async fn handle_upgraded_connect(

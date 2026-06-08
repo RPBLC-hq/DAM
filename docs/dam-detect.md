@@ -7,11 +7,12 @@ It receives text and returns sensitive spans. It does not redact, write to vault
 ## Current Coverage
 
 - Email, including whitespace around separators such as `alice@ example.com` or `alice @example.com`.
+- Caller-supplied related domains, for context-aware response protection only.
 - NANP phone numbers in dashed form, e.g. `415-555-2671`.
 - SSN with basic area validation.
 - Credit card numbers with Luhn validation.
 
-Domain-only values are not detected or redacted. Email addresses are still detected as whole values, but their domains are not emitted as separate `domain` detections.
+Domain-only values are not detected by the default `detect()` path. `detect_with_related_domains()` can emit exact `domain` detections for domains supplied by the caller, such as domains learned from outbound email detections, while still avoiding the same domain inside an email address or subdomain. Email addresses are still detected as whole values, but their domains are not emitted as separate `domain` detections unless passed back as related context.
 
 Known current limitation: formats like `+1 (415) 555-2671` and zero-width-character obfuscation are not detected yet.
 

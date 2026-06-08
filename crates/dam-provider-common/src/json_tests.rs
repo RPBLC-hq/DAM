@@ -37,6 +37,23 @@ fn transforms_all_nested_json_string_values() {
 }
 
 #[test]
+fn preserves_object_key_order_when_json_changes() {
+    let body = Bytes::from_static(br#"{"z":"safe","a":"\\[email:abc123\\]","m":"safe"}"#);
+
+    let output = transform_json_string_body(body, |chunk| {
+        let text = String::from_utf8(chunk.to_vec()).unwrap();
+        Bytes::from(text.replace(r"\[email:abc123\]", "banana@example.test"))
+    })
+    .unwrap();
+    let output = String::from_utf8(output.to_vec()).unwrap();
+
+    assert_eq!(
+        output,
+        r#"{"z":"safe","a":"banana@example.test","m":"safe"}"#
+    );
+}
+
+#[test]
 fn transforms_line_delimited_json_string_values() {
     let body = Bytes::from_static(
         br#"{"type":"delta","text":"\\[email:abc123\\]"}

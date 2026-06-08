@@ -77,18 +77,21 @@ fn does_not_detect_email_derived_domain_with_spaced_dot() {
 }
 
 #[test]
-fn does_not_detect_related_domain_without_email_in_input() {
+fn detects_supplied_related_domain_without_email_in_input() {
     let detections = detect_with_related_domains(
         "provider answered example.com",
         &["example.com".to_string()],
     );
 
-    assert!(detections.is_empty());
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::Domain);
+    assert_eq!(detections[0].value, "example.com");
 }
 
 #[test]
 fn does_not_detect_domain_inside_email_only() {
-    let detections = detect("email alice@example.com");
+    let detections =
+        detect_with_related_domains("email alice@example.com", &["example.com".to_string()]);
 
     assert_eq!(detections.len(), 1);
     assert_eq!(detections[0].kind, SensitiveType::Email);
@@ -96,10 +99,35 @@ fn does_not_detect_domain_inside_email_only() {
 
 #[test]
 fn does_not_detect_email_domain_inside_subdomain() {
-    let detections = detect("email alice@example.com route api.example.com");
+    let detections = detect_with_related_domains(
+        "email alice@example.com route api.example.com",
+        &["example.com".to_string()],
+    );
 
     assert_eq!(detections.len(), 1);
     assert_eq!(detections[0].kind, SensitiveType::Email);
+}
+
+#[test]
+fn detects_supplied_related_domain_case_insensitively_with_spaced_dot() {
+    let detections = detect_with_related_domains(
+        "provider answered Example .COM.",
+        &["example.com".to_string()],
+    );
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::Domain);
+    assert_eq!(detections[0].value, "Example .COM");
+}
+
+#[test]
+fn does_not_detect_related_domain_inside_longer_domain() {
+    let detections = detect_with_related_domains(
+        "provider answered example.company and example.com.au",
+        &["example.com".to_string()],
+    );
+
+    assert!(detections.is_empty());
 }
 
 #[test]

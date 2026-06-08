@@ -136,6 +136,32 @@ fn websocket_protection(enabled: bool, inbound_plan: InboundTransformPlan) -> We
     }
 }
 
+#[test]
+fn extracts_related_domains_from_email_detections() {
+    let detections = vec![
+        dam_core::Detection {
+            kind: dam_core::SensitiveType::Email,
+            span: dam_core::Span { start: 0, end: 17 },
+            value: "alice@Example.COM".to_string(),
+        },
+        dam_core::Detection {
+            kind: dam_core::SensitiveType::Email,
+            span: dam_core::Span { start: 18, end: 36 },
+            value: "bob@example .com".to_string(),
+        },
+        dam_core::Detection {
+            kind: dam_core::SensitiveType::Phone,
+            span: dam_core::Span { start: 37, end: 49 },
+            value: "415-555-1212".to_string(),
+        },
+    ];
+
+    assert_eq!(
+        related_domains_from_detections(&detections),
+        vec!["example.com".to_string()]
+    );
+}
+
 async fn spawn_app(app: Router) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -205,7 +231,7 @@ async fn websocket_response_text_frames_are_redacted_without_wallet_write_before
 }
 
 #[tokio::test]
-async fn websocket_response_does_not_tokenize_related_domains_from_request_context() {
+async fn websocket_response_redacts_related_domains_from_request_context() {
     let state = build_state(proxy_config("https://chatgpt.com".to_string()), None).unwrap();
     let mut upstream = Vec::new();
     websocket::write_unmasked_frame(
@@ -239,7 +265,8 @@ async fn websocket_response_does_not_tokenize_related_domains_from_request_conte
         .unwrap()
         .unwrap();
     let body = String::from_utf8(frame.payload).unwrap();
-    assert!(body.contains("wolol3o22.com"));
+    assert!(!body.contains("wolol3o22.com"));
+    assert!(body.contains("[domain]"));
     assert!(!body.contains("[domain:"));
 }
 
@@ -2708,7 +2735,7 @@ async fn redacts_raw_sensitive_inbound_response_without_wallet_write_when_route_
 }
 
 #[tokio::test]
-async fn leaves_raw_email_domain_in_inbound_response_from_request_context() {
+async fn redacts_email_domain_in_inbound_response_from_request_context() {
     let upstream_seen = Arc::new(Mutex::new(None::<String>));
     let upstream = spawn_raw_domain_response_upstream(upstream_seen.clone()).await;
     let mut config = proxy_config(upstream);
@@ -2725,7 +2752,8 @@ async fn leaves_raw_email_domain_in_inbound_response_from_request_context() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.text().await.unwrap();
-    assert!(body.contains("leak.example"));
+    assert!(!body.contains("leak.example"));
+    assert!(body.contains("[domain]"));
     assert!(!body.contains("[domain:"));
 
     let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
@@ -2733,18 +2761,21 @@ async fn leaves_raw_email_domain_in_inbound_response_from_request_context() {
     assert!(upstream_body.contains("[email:"));
 
     let logs = dam_log::LogStore::open(log_path).unwrap().list().unwrap();
-    assert!(!logs.iter().any(|entry| {
+    assert!(logs.iter().any(|entry| {
         entry.event_type == "proxy_forward" && entry.action.as_deref() == Some("inbound_protection")
     }));
-    assert!(!logs.iter().any(|entry| {
+    assert!(logs.iter().any(|entry| {
         entry.kind.as_deref() == Some("domain")
             && entry.event_type == "redaction"
-            && entry.action.as_deref() == Some("tokenized")
+            && entry.action.as_deref() == Some("redacted")
+    }));
+    assert!(!logs.iter().any(|entry| {
+        entry.kind.as_deref() == Some("domain") && entry.action.as_deref() == Some("tokenized")
     }));
 }
 
 #[tokio::test]
-async fn leaves_raw_email_domain_in_anthropic_stream_from_request_context() {
+async fn redacts_email_domain_in_anthropic_stream_from_request_context() {
     let upstream_seen = Arc::new(Mutex::new(None::<String>));
     let upstream = spawn_anthropic_sse_raw_domain_upstream(upstream_seen.clone()).await;
     let mut config = anthropic_proxy_config(upstream);
@@ -2769,7 +2800,8 @@ async fn leaves_raw_email_domain_in_anthropic_stream_from_request_context() {
         Some("text/event-stream")
     );
     let body = response.text().await.unwrap();
-    assert!(body.contains("splonk.io"));
+    assert!(!body.contains("splonk.io"));
+    assert!(body.contains("[domain]"));
     assert!(!body.contains("[domain:"));
 
     let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
@@ -2783,13 +2815,16 @@ async fn leaves_raw_email_domain_in_anthropic_stream_from_request_context() {
     assert!(logs.iter().any(|entry| {
         entry.event_type == "resolve" && entry.action.as_deref() == Some("resolve_attempt")
     }));
-    assert!(!logs.iter().any(|entry| {
+    assert!(logs.iter().any(|entry| {
         entry.event_type == "proxy_forward" && entry.action.as_deref() == Some("inbound_protection")
     }));
-    assert!(!logs.iter().any(|entry| {
+    assert!(logs.iter().any(|entry| {
         entry.kind.as_deref() == Some("domain")
             && entry.event_type == "redaction"
-            && entry.action.as_deref() == Some("tokenized")
+            && entry.action.as_deref() == Some("redacted")
+    }));
+    assert!(!logs.iter().any(|entry| {
+        entry.kind.as_deref() == Some("domain") && entry.action.as_deref() == Some("tokenized")
     }));
 }
 
