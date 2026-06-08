@@ -1038,8 +1038,66 @@ fn validate(config: &DamConfig) -> Result<(), ConfigError> {
                     field: "proxy.targets.upstream",
                 });
             }
+            validate_proxy_target_upstream(&target.upstream)?;
             validate_upstream_auth(&target.auth)?;
         }
+    }
+
+    Ok(())
+}
+
+fn validate_proxy_target_upstream(upstream: &str) -> Result<(), ConfigError> {
+    if upstream.trim() != upstream {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "must not contain leading or trailing whitespace",
+        ));
+    }
+
+    let Some((scheme, remainder)) = upstream.split_once("://") else {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "must be an absolute http(s) URL",
+        ));
+    };
+    if !matches!(scheme, "http" | "https") {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "scheme must be http or https",
+        ));
+    }
+
+    let authority = remainder
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    let authority_host = authority
+        .rsplit_once('@')
+        .map(|(_, host)| host)
+        .unwrap_or(authority);
+    let host = authority_host
+        .strip_prefix('[')
+        .and_then(|value| value.split_once(']').map(|(host, _)| host))
+        .unwrap_or_else(|| {
+            authority_host
+                .rsplit_once(':')
+                .map(|(host, _)| host)
+                .unwrap_or(authority_host)
+        });
+    if authority.is_empty()
+        || authority.starts_with('@')
+        || authority.ends_with('@')
+        || host.trim().is_empty()
+        || authority.chars().any(char::is_whitespace)
+    {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "host is required",
+        ));
     }
 
     Ok(())
