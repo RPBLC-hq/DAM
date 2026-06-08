@@ -139,6 +139,72 @@ fn route_registry_includes_hosts_from_url_match_rules() {
 }
 
 #[test]
+fn route_registry_includes_hosts_from_host_prefixed_url_match_rules() {
+    let profile = traffic_profile_from_json_str(
+        r#"
+        {
+          "apps": [
+            {
+              "id": "private-anthropic",
+              "match": {
+                "urls": ["gateway.example.test/v1/messages"]
+              },
+              "action": "inspect",
+              "adapter": "http",
+              "provider": "anthropic-compatible",
+              "target_name": "private-anthropic",
+              "upstream": "https://gateway.example.test"
+            }
+          ]
+        }
+        "#,
+    )
+    .unwrap();
+
+    let routes = traffic_routes_from_profile(&profile);
+
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].host, "gateway.example.test");
+}
+
+#[test]
+fn route_registry_ignores_url_match_rules_without_concrete_hosts() {
+    let profile = traffic_profile_from_json_str(
+        r#"
+        {
+          "apps": [
+            {
+              "id": "path-only",
+              "match": {
+                "urls": ["/v1/chat/completions"]
+              },
+              "action": "inspect",
+              "adapter": "http",
+              "provider": "openai-compatible",
+              "target_name": "path-only",
+              "upstream": "https://gateway.example.test"
+            },
+            {
+              "id": "wildcard-host",
+              "match": {
+                "urls": ["https://*.example.test/v1/messages"]
+              },
+              "action": "inspect",
+              "adapter": "http",
+              "provider": "anthropic-compatible",
+              "target_name": "wildcard-host",
+              "upstream": "https://gateway.example.test"
+            }
+          ]
+        }
+        "#,
+    )
+    .unwrap();
+
+    assert!(traffic_routes_from_profile(&profile).is_empty());
+}
+
+#[test]
 fn invalid_inspect_app_requires_match_and_upstream_contract() {
     let error = traffic_profile_from_json_str(
         r#"
