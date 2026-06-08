@@ -349,6 +349,10 @@ fn enabled_proxy_rejects_non_http_target_upstreams() {
         ("ftp://api.example.test", "http or https"),
         ("https:///missing-host", "host"),
         ("https://:443", "host"),
+        ("https://api.example.test:", "port"),
+        ("https://api.example.test:abc", "port"),
+        ("https://api.example.test:70000", "port"),
+        ("https://[::1", "IPv6"),
         ("https://api.example.test ", "whitespace"),
     ];
 

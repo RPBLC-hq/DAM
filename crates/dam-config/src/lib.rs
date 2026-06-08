@@ -1078,25 +1078,77 @@ fn validate_proxy_target_upstream(upstream: &str) -> Result<(), ConfigError> {
         .rsplit_once('@')
         .map(|(_, host)| host)
         .unwrap_or(authority);
-    let host = authority_host
-        .strip_prefix('[')
-        .and_then(|value| value.split_once(']').map(|(host, _)| host))
-        .unwrap_or_else(|| {
-            authority_host
-                .rsplit_once(':')
-                .map(|(host, _)| host)
-                .unwrap_or(authority_host)
-        });
     if authority.is_empty()
         || authority.starts_with('@')
         || authority.ends_with('@')
-        || host.trim().is_empty()
         || authority.chars().any(char::is_whitespace)
     {
         return Err(ConfigError::invalid_value(
             "proxy.targets.upstream",
             upstream,
             "host is required",
+        ));
+    }
+
+    if let Some(remainder) = authority_host.strip_prefix('[') {
+        let Some((host, port_suffix)) = remainder.split_once(']') else {
+            return Err(ConfigError::invalid_value(
+                "proxy.targets.upstream",
+                upstream,
+                "IPv6 hosts must be enclosed in brackets",
+            ));
+        };
+        if host.trim().is_empty() {
+            return Err(ConfigError::invalid_value(
+                "proxy.targets.upstream",
+                upstream,
+                "host is required",
+            ));
+        }
+        if !port_suffix.is_empty() {
+            let Some(port) = port_suffix.strip_prefix(':') else {
+                return Err(ConfigError::invalid_value(
+                    "proxy.targets.upstream",
+                    upstream,
+                    "IPv6 hosts must be enclosed in brackets",
+                ));
+            };
+            validate_proxy_target_port(upstream, port)?;
+        }
+        return Ok(());
+    }
+
+    let (host, port) = authority_host
+        .rsplit_once(':')
+        .map(|(host, port)| (host, Some(port)))
+        .unwrap_or((authority_host, None));
+    if host.trim().is_empty() {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "host is required",
+        ));
+    }
+    if host.contains(':') {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "IPv6 hosts must be enclosed in brackets",
+        ));
+    }
+    if let Some(port) = port {
+        validate_proxy_target_port(upstream, port)?;
+    }
+
+    Ok(())
+}
+
+fn validate_proxy_target_port(upstream: &str, port: &str) -> Result<(), ConfigError> {
+    if port.is_empty() || port.parse::<u16>().is_err() {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "port must be a valid numeric TCP port",
         ));
     }
 
