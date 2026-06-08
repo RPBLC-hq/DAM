@@ -354,6 +354,7 @@ fn enabled_proxy_rejects_non_http_target_upstreams() {
         ("https://api.example.test:70000", "port"),
         ("https://[::1", "IPv6"),
         ("https://api.example.test ", "whitespace"),
+        ("https://user:pass@api.example.test", "userinfo"),
     ];
 
     for (upstream, expected_message) in invalid_values {

@@ -1074,15 +1074,15 @@ fn validate_proxy_target_upstream(upstream: &str) -> Result<(), ConfigError> {
         .split(['/', '?', '#'])
         .next()
         .unwrap_or_default();
-    let authority_host = authority
-        .rsplit_once('@')
-        .map(|(_, host)| host)
-        .unwrap_or(authority);
-    if authority.is_empty()
-        || authority.starts_with('@')
-        || authority.ends_with('@')
-        || authority.chars().any(char::is_whitespace)
-    {
+    if authority.contains('@') {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "userinfo is not allowed",
+        ));
+    }
+    let authority_host = authority;
+    if authority.is_empty() || authority.chars().any(char::is_whitespace) {
         return Err(ConfigError::invalid_value(
             "proxy.targets.upstream",
             upstream,
