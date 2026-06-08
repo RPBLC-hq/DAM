@@ -110,11 +110,12 @@ def assert_exact_echo_resolved(text: str) -> None:
 
 
 def assert_transformed_token_only(text: str) -> None:
-    compact_text = text.replace(" ", "")
+    compact_text = "".join(text.split())
     leaks = [value for value in (SYNTHETIC_EMAIL, SYNTHETIC_SSN) if value in compact_text]
     if leaks:
         raise AssertionError(f"transformed-token response leaked raw synthetic values {leaks}: {text!r}")
-    if "[ " not in text and "[" not in compact_text:
+    compact_lower = compact_text.lower()
+    if "[email:" not in compact_lower and "[ssn:" not in compact_lower:
         raise AssertionError(f"model did not appear to transform a DAM token: {text!r}")
 
 

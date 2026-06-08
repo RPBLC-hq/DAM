@@ -83,12 +83,20 @@ where
             *text = transformed_text;
             true
         }
-        Value::Array(values) => values.iter_mut().fold(false, |changed, value| {
-            transform_json_strings(value, transform) || changed
-        }),
-        Value::Object(values) => values.values_mut().fold(false, |changed, value| {
-            transform_json_strings(value, transform) || changed
-        }),
+        Value::Array(values) => {
+            let mut changed = false;
+            for value in values {
+                changed = transform_json_strings(value, transform) || changed;
+            }
+            changed
+        }
+        Value::Object(values) => {
+            let mut changed = false;
+            for value in values.values_mut() {
+                changed = transform_json_strings(value, transform) || changed;
+            }
+            changed
+        }
         _ => false,
     }
 }

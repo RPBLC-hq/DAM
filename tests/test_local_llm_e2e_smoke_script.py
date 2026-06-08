@@ -101,6 +101,25 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "raw synthetic values"):
             smoke.assert_transformed_token_only(f"leaked {smoke.SYNTHETIC_EMAIL}")
 
+    def test_transformed_token_assertion_rejects_whitespace_obfuscated_raw_values(self):
+        smoke = load_module()
+
+        obfuscated_email = " \n ".join(smoke.SYNTHETIC_EMAIL)
+        obfuscated_ssn = "\t".join(smoke.SYNTHETIC_SSN)
+
+        with self.assertRaisesRegex(AssertionError, "raw synthetic values"):
+            smoke.assert_transformed_token_only(obfuscated_email)
+        with self.assertRaisesRegex(AssertionError, "raw synthetic values"):
+            smoke.assert_transformed_token_only(obfuscated_ssn)
+
+    def test_transformed_token_assertion_requires_dam_reference_kind(self):
+        smoke = load_module()
+
+        smoke.assert_transformed_token_only("model saw [ e m a i l : a b c 1 2 3 ]")
+
+        with self.assertRaisesRegex(AssertionError, "DAM token"):
+            smoke.assert_transformed_token_only("model saw [ not-a-dam-reference ]")
+
 
 if __name__ == "__main__":
     unittest.main()

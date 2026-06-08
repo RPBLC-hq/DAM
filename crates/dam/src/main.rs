@@ -3457,7 +3457,7 @@ fn render_local_ca_system_trust_result(
             "unchanged"
         }
     ));
-    if !approved && plan.can_execute {
+    if !approved && plan.requires_user_consent {
         output.push_str("approval: rerun with --yes to apply this local trust change\n");
     }
     output

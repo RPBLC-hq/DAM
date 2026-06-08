@@ -1,3 +1,5 @@
+#![cfg_attr(not(target_os = "macos"), allow(dead_code))]
+
 use std::{
     env,
     net::{SocketAddr, TcpListener, TcpStream},
@@ -180,11 +182,12 @@ fn data_paths(cli: &CliArgs) -> Result<DataPaths, String> {
     })
 }
 
+#[allow(clippy::collapsible_if)]
 fn state_dir() -> Result<PathBuf, String> {
-    if let Some(value) = env::var_os(DAM_STATE_DIR_ENV)
-        && !value.is_empty()
-    {
-        return Ok(PathBuf::from(value));
+    if let Some(value) = env::var_os(DAM_STATE_DIR_ENV) {
+        if !value.is_empty() {
+            return Ok(PathBuf::from(value));
+        }
     }
 
     env::var_os("HOME")
@@ -198,19 +201,20 @@ fn connect_url(addr: &str) -> String {
     format!("http://{addr}/connect")
 }
 
+#[allow(clippy::collapsible_if)]
 fn sibling_or_path(explicit: Option<PathBuf>, env_name: &str, binary_name: &str) -> PathBuf {
     if let Some(path) = explicit {
         return path;
     }
-    if let Some(path) = env::var_os(env_name)
-        && !path.is_empty()
-    {
-        return PathBuf::from(path);
+    if let Some(path) = env::var_os(env_name) {
+        if !path.is_empty() {
+            return PathBuf::from(path);
+        }
     }
-    if let Some(path) = sibling_binary(binary_name)
-        && path.is_file()
-    {
-        return path;
+    if let Some(path) = sibling_binary(binary_name) {
+        if path.is_file() {
+            return path;
+        }
     }
     PathBuf::from(binary_name)
 }

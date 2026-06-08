@@ -62,6 +62,7 @@ fn builds_connect_url() {
     );
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn hex_encode_uses_lowercase_pairs() {
     assert_eq!(macos::hex_encode(&[0x00, 0x0f, 0xa5, 0xff]), "000fa5ff");

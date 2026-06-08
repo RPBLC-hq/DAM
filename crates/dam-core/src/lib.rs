@@ -551,7 +551,7 @@ pub fn build_resolve_plan(input: &str, vault: &(impl VaultReader + ?Sized)) -> R
 pub fn apply_resolve_plan(input: &str, plan: &ResolvePlan) -> String {
     let mut output = input.to_string();
     let mut sorted = plan.replacements.iter().collect::<Vec<_>>();
-    sorted.sort_by(|a, b| b.span.start.cmp(&a.span.start));
+    sorted.sort_by_key(|detection| std::cmp::Reverse(detection.span.start));
 
     for replacement in sorted {
         if replacement.span.start <= output.len()
