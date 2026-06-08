@@ -1074,6 +1074,13 @@ fn validate_proxy_target_upstream(upstream: &str) -> Result<(), ConfigError> {
         .split(['/', '?', '#'])
         .next()
         .unwrap_or_default();
+    if authority.len() != remainder.len() {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "must be an origin URL without path, query, or fragment",
+        ));
+    }
     if authority.contains('@') {
         return Err(ConfigError::invalid_value(
             "proxy.targets.upstream",
