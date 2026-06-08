@@ -110,6 +110,35 @@ fn route_registry_is_derived_from_inspect_apps() {
 }
 
 #[test]
+fn route_registry_includes_hosts_from_url_match_rules() {
+    let profile = traffic_profile_from_json_str(
+        r#"
+        {
+          "apps": [
+            {
+              "id": "private-openai",
+              "match": {
+                "urls": ["https://gateway.example.test/v1/chat/completions"]
+              },
+              "action": "inspect",
+              "adapter": "http",
+              "provider": "openai-compatible",
+              "target_name": "private-openai",
+              "upstream": "https://gateway.example.test"
+            }
+          ]
+        }
+        "#,
+    )
+    .unwrap();
+
+    let routes = traffic_routes_from_profile(&profile);
+
+    assert_eq!(routes.len(), 1);
+    assert_eq!(routes[0].host, "gateway.example.test");
+}
+
+#[test]
 fn invalid_inspect_app_requires_match_and_upstream_contract() {
     let error = traffic_profile_from_json_str(
         r#"
