@@ -1038,8 +1038,125 @@ fn validate(config: &DamConfig) -> Result<(), ConfigError> {
                     field: "proxy.targets.upstream",
                 });
             }
+            validate_proxy_target_upstream(&target.upstream)?;
             validate_upstream_auth(&target.auth)?;
         }
+    }
+
+    Ok(())
+}
+
+fn validate_proxy_target_upstream(upstream: &str) -> Result<(), ConfigError> {
+    if upstream.trim() != upstream {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "must not contain leading or trailing whitespace",
+        ));
+    }
+
+    let Some((scheme, remainder)) = upstream.split_once("://") else {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "must be an absolute http(s) URL",
+        ));
+    };
+    if !matches!(scheme, "http" | "https") {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "scheme must be http or https",
+        ));
+    }
+
+    let authority = remainder
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    if authority.len() != remainder.len() {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "must be an origin URL without path, query, or fragment",
+        ));
+    }
+    if authority.contains('@') {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "userinfo is not allowed",
+        ));
+    }
+    let authority_host = authority;
+    if authority.is_empty() || authority.chars().any(char::is_whitespace) {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "host is required",
+        ));
+    }
+
+    if let Some(remainder) = authority_host.strip_prefix('[') {
+        let Some((host, port_suffix)) = remainder.split_once(']') else {
+            return Err(ConfigError::invalid_value(
+                "proxy.targets.upstream",
+                upstream,
+                "IPv6 hosts must be enclosed in brackets",
+            ));
+        };
+        if host.trim().is_empty() {
+            return Err(ConfigError::invalid_value(
+                "proxy.targets.upstream",
+                upstream,
+                "host is required",
+            ));
+        }
+        if !port_suffix.is_empty() {
+            let Some(port) = port_suffix.strip_prefix(':') else {
+                return Err(ConfigError::invalid_value(
+                    "proxy.targets.upstream",
+                    upstream,
+                    "IPv6 hosts must be enclosed in brackets",
+                ));
+            };
+            validate_proxy_target_port(upstream, port)?;
+        }
+        return Ok(());
+    }
+
+    let (host, port) = authority_host
+        .rsplit_once(':')
+        .map(|(host, port)| (host, Some(port)))
+        .unwrap_or((authority_host, None));
+    if host.trim().is_empty() {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "host is required",
+        ));
+    }
+    if host.contains(':') {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "IPv6 hosts must be enclosed in brackets",
+        ));
+    }
+    if let Some(port) = port {
+        validate_proxy_target_port(upstream, port)?;
+    }
+
+    Ok(())
+}
+
+fn validate_proxy_target_port(upstream: &str, port: &str) -> Result<(), ConfigError> {
+    if port.is_empty() || port.parse::<u16>().is_err() {
+        return Err(ConfigError::invalid_value(
+            "proxy.targets.upstream",
+            upstream,
+            "port must be a valid numeric TCP port",
+        ));
     }
 
     Ok(())

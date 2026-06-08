@@ -343,6 +343,48 @@ fn enabled_proxy_requires_target_upstream() {
 }
 
 #[test]
+fn enabled_proxy_rejects_non_http_target_upstreams() {
+    let invalid_values = [
+        ("api.example.test", "absolute http(s) URL"),
+        ("ftp://api.example.test", "http or https"),
+        ("https:///missing-host", "host"),
+        ("https://:443", "host"),
+        ("https://api.example.test:", "port"),
+        ("https://api.example.test:abc", "port"),
+        ("https://api.example.test:70000", "port"),
+        ("https://api.example.test/v1", "origin"),
+        ("https://api.example.test?region=us", "origin"),
+        ("https://api.example.test#fragment", "origin"),
+        ("https://[::1", "IPv6"),
+        ("https://api.example.test ", "whitespace"),
+        ("https://user:pass@api.example.test", "userinfo"),
+    ];
+
+    for (upstream, expected_message) in invalid_values {
+        let error = load_with_env(
+            &ConfigOverrides::default(),
+            env(&[
+                ("DAM_PROXY_ENABLED", "true"),
+                ("DAM_PROXY_TARGET_UPSTREAM", upstream),
+            ]),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigError::InvalidValue {
+                field: "proxy.targets.upstream",
+                ..
+            }
+        ));
+        assert!(
+            error.to_string().contains(expected_message),
+            "error {error} did not mention {expected_message}"
+        );
+    }
+}
+
+#[test]
 fn local_web_and_proxy_addresses_must_be_loopback() {
     let web_error = load_with_env(
         &ConfigOverrides {
