@@ -3,7 +3,7 @@ use dam_core::Replacement;
 pub fn redact(input: &str, replacements: &[Replacement]) -> String {
     let mut output = input.to_string();
     let mut sorted = replacements.iter().collect::<Vec<_>>();
-    sorted.sort_by(|a, b| b.span.start.cmp(&a.span.start));
+    sorted.sort_by_key(|detection| std::cmp::Reverse(detection.span.start));
 
     for replacement in sorted {
         if replacement.span.start <= output.len()

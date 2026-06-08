@@ -551,7 +551,7 @@ pub fn build_resolve_plan(input: &str, vault: &(impl VaultReader + ?Sized)) -> R
 pub fn apply_resolve_plan(input: &str, plan: &ResolvePlan) -> String {
     let mut output = input.to_string();
     let mut sorted = plan.replacements.iter().collect::<Vec<_>>();
-    sorted.sort_by(|a, b| b.span.start.cmp(&a.span.start));
+    sorted.sort_by_key(|detection| std::cmp::Reverse(detection.span.start));
 
     for replacement in sorted {
         if replacement.span.start <= output.len()
@@ -840,7 +840,6 @@ pub fn build_filter_log_events_from_decisions(
                 ),
             )
             .with_kind(detection.kind)
-            .with_value(canonical_sensitive_value(detection.kind, &detection.value))
             .with_action("detected"),
         );
 
@@ -852,7 +851,6 @@ pub fn build_filter_log_events_from_decisions(
                 "policy decision applied",
             )
             .with_kind(detection.kind)
-            .with_value(canonical_sensitive_value(detection.kind, &detection.value))
             .with_action(decision.action.tag()),
         );
     }
@@ -864,8 +862,6 @@ pub fn build_filter_log_events_from_decisions(
             .as_ref()
             .map(|reference| reference.kind)
             .or_else(|| detection.map(|detection| detection.kind));
-        let value =
-            detection.map(|detection| canonical_sensitive_value(detection.kind, &detection.value));
         match replacement.mode {
             ReplacementMode::Tokenized => {
                 let reference = replacement
@@ -898,9 +894,6 @@ pub fn build_filter_log_events_from_decisions(
                 if let Some(kind) = kind {
                     redaction_event = redaction_event.with_kind(kind);
                 }
-                if let Some(value) = value.clone() {
-                    redaction_event = redaction_event.with_value(value);
-                }
                 events.push(redaction_event);
             }
             ReplacementMode::Redacted => {
@@ -914,9 +907,6 @@ pub fn build_filter_log_events_from_decisions(
                 if let Some(kind) = kind {
                     redaction_event = redaction_event.with_kind(kind);
                 }
-                if let Some(value) = value.clone() {
-                    redaction_event = redaction_event.with_value(value);
-                }
                 events.push(redaction_event);
             }
             ReplacementMode::RedactOnlyFallback => {
@@ -929,9 +919,6 @@ pub fn build_filter_log_events_from_decisions(
                 .with_action("fallback_redacted");
                 if let Some(kind) = kind {
                     redaction_event = redaction_event.with_kind(kind);
-                }
-                if let Some(value) = value.clone() {
-                    redaction_event = redaction_event.with_value(value);
                 }
                 events.push(redaction_event);
             }

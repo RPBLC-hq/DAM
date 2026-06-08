@@ -1070,10 +1070,7 @@ fn validate_proxy_target_upstream(upstream: &str) -> Result<(), ConfigError> {
         ));
     }
 
-    let authority = remainder
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default();
+    let authority = remainder.split(['/', '?', '#']).next().unwrap_or_default();
     if authority.len() != remainder.len() {
         return Err(ConfigError::invalid_value(
             "proxy.targets.upstream",

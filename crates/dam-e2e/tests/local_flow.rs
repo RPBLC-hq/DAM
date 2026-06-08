@@ -990,9 +990,8 @@ async fn web_api_reads_vault_and_activity_populated_by_filter() {
     assert!(activity_json.contains("\"ok\":true"));
     assert!(activity_json.contains("sealed"));
     assert!(activity_json.contains("\"profile\""));
-    assert!(activity_json.contains("\"value\""));
-    assert!(activity_json.contains("alice@example.com"));
-    assert!(activity_json.contains("123-45-6789"));
+    assert!(!activity_json.contains("alice@example.com"));
+    assert!(!activity_json.contains("123-45-6789"));
 
     let health_json = reqwest::get(format!("{base}/api/v1/health"))
         .await
