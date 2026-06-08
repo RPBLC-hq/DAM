@@ -556,7 +556,7 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
         .spawn()
         .map_err(|error| format!("failed to start DAM daemon: {error}"))?;
 
-    let state = wait_for_daemon_ready(Duration::from_secs(8)).await?;
+    let state = wait_for_daemon_ready(Duration::from_secs(30)).await?;
     finish_connect(
         &args,
         ConnectResultView {

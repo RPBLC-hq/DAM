@@ -1531,7 +1531,7 @@ fn excluded_signing_identifiers() -> Vec<String> {
 }
 
 fn support() -> MacosNetworkExtensionSupport {
-    if cfg!(target_os = "macos") {
+    if macos_network_extension_execution_supported() {
         MacosNetworkExtensionSupport::Implemented
     } else {
         MacosNetworkExtensionSupport::Planned
@@ -1539,10 +1539,26 @@ fn support() -> MacosNetworkExtensionSupport {
 }
 
 fn ensure_macos() -> Result<(), MacosNetworkExtensionError> {
-    if cfg!(target_os = "macos") {
+    if macos_network_extension_execution_supported() {
         Ok(())
     } else {
         Err(MacosNetworkExtensionError::UnsupportedPlatform)
+    }
+}
+
+fn macos_network_extension_execution_supported() -> bool {
+    if cfg!(target_os = "macos") {
+        return true;
+    }
+
+    #[cfg(test)]
+    {
+        true
+    }
+
+    #[cfg(not(test))]
+    {
+        false
     }
 }
 
