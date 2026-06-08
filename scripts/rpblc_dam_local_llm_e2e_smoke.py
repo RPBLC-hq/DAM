@@ -78,16 +78,16 @@ def chat_request(prompt: str, *, max_tokens: int = 96) -> dict[str, Any]:
 
 def exact_echo_prompt() -> str:
     return (
-        "Reply with exactly this protected text and nothing else: "
-        f"email={SYNTHETIC_EMAIL}; ssn={SYNTHETIC_SSN}"
+        "For a local synthetic test, reply with exactly this text and nothing else: "
+        f"alpha={SYNTHETIC_EMAIL}; beta={SYNTHETIC_SSN}"
     )
 
 
 def transform_token_prompt() -> str:
     return (
-        "Take the exact protected text below, output every character separated "
-        "by a single space, and output nothing else: "
-        f"email={SYNTHETIC_EMAIL}; ssn={SYNTHETIC_SSN}"
+        "For a local synthetic test, take the exact text below, output every "
+        "character separated by a single space, and output nothing else: "
+        f"alpha={SYNTHETIC_EMAIL}; beta={SYNTHETIC_SSN}"
     )
 
 
@@ -172,6 +172,15 @@ def raw_values_in_file(path: Path) -> list[str]:
     return [value for value in (SYNTHETIC_EMAIL, SYNTHETIC_SSN) if value.encode() in data]
 
 
+def assert_no_raw_values_in_activity_log(log_db: Path) -> None:
+    leaked_values = raw_values_in_file(log_db)
+    if leaked_values:
+        raise AssertionError(
+            "activity log leaked raw synthetic values outside the vault: "
+            f"{', '.join(leaked_values)}"
+        )
+
+
 def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     upstream = args.upstream.rstrip("/")
     if not upstream_available(upstream, timeout=args.http_timeout):
@@ -229,6 +238,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         )
         assert_transformed_token_only(transformed_text)
 
+        assert_no_raw_values_in_activity_log(log_db)
         raw_in_log = raw_values_in_file(log_db)
 
         return {

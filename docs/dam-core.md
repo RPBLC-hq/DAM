@@ -84,8 +84,8 @@ Known references become replacements with the stored value. Missing references a
 
 ## Log Value Rules
 
-- Detection, policy-decision, and redaction events may carry the canonical detected value so Activity can show what was detected without reading Wallet.
-- Activity values are local log facts only: they do not create Wallet rows, imply consent, or affect provider pass-through decisions.
+- Detection, policy-decision, and redaction events do not carry raw or canonical sensitive values in `value`; Activity must rely on kind, action, reference, counts, and non-sensitive messages unless it is reading an intentional Wallet/vault reveal surface.
+- Activity values are local log facts only when explicitly supplied by a caller for non-sensitive data; they do not create Wallet rows, imply consent, or affect provider pass-through decisions.
 - References may be logged after successful vault writes.
 - Backend error text must not echo sensitive values.
 

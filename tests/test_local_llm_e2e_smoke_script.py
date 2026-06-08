@@ -87,6 +87,16 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
 
             self.assertEqual(smoke.count_log_rows(db_path), 3)
 
+    def test_activity_log_assertion_fails_closed_on_raw_synthetic_values(self):
+        smoke = load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "activity.sqlite"
+            db_path.write_text(f"raw {smoke.SYNTHETIC_EMAIL}", encoding="utf-8")
+
+            with self.assertRaisesRegex(AssertionError, "activity log leaked raw synthetic values"):
+                smoke.assert_no_raw_values_in_activity_log(db_path)
+
     def test_assertions_distinguish_resolved_and_transformed_token_outputs(self):
         smoke = load_module()
 

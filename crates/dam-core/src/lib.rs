@@ -840,7 +840,6 @@ pub fn build_filter_log_events_from_decisions(
                 ),
             )
             .with_kind(detection.kind)
-            .with_value(canonical_sensitive_value(detection.kind, &detection.value))
             .with_action("detected"),
         );
 
@@ -852,7 +851,6 @@ pub fn build_filter_log_events_from_decisions(
                 "policy decision applied",
             )
             .with_kind(detection.kind)
-            .with_value(canonical_sensitive_value(detection.kind, &detection.value))
             .with_action(decision.action.tag()),
         );
     }
@@ -864,8 +862,6 @@ pub fn build_filter_log_events_from_decisions(
             .as_ref()
             .map(|reference| reference.kind)
             .or_else(|| detection.map(|detection| detection.kind));
-        let value =
-            detection.map(|detection| canonical_sensitive_value(detection.kind, &detection.value));
         match replacement.mode {
             ReplacementMode::Tokenized => {
                 let reference = replacement
@@ -898,9 +894,6 @@ pub fn build_filter_log_events_from_decisions(
                 if let Some(kind) = kind {
                     redaction_event = redaction_event.with_kind(kind);
                 }
-                if let Some(value) = value.clone() {
-                    redaction_event = redaction_event.with_value(value);
-                }
                 events.push(redaction_event);
             }
             ReplacementMode::Redacted => {
@@ -914,9 +907,6 @@ pub fn build_filter_log_events_from_decisions(
                 if let Some(kind) = kind {
                     redaction_event = redaction_event.with_kind(kind);
                 }
-                if let Some(value) = value.clone() {
-                    redaction_event = redaction_event.with_value(value);
-                }
                 events.push(redaction_event);
             }
             ReplacementMode::RedactOnlyFallback => {
@@ -929,9 +919,6 @@ pub fn build_filter_log_events_from_decisions(
                 .with_action("fallback_redacted");
                 if let Some(kind) = kind {
                     redaction_event = redaction_event.with_kind(kind);
-                }
-                if let Some(value) = value.clone() {
-                    redaction_event = redaction_event.with_value(value);
                 }
                 events.push(redaction_event);
             }
