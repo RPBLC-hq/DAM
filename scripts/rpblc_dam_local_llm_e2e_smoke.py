@@ -145,10 +145,28 @@ def upstream_available(upstream: str, *, timeout: float) -> bool:
         return False
 
 
-def wait_for_proxy(base_url: str, *, timeout: float) -> dict[str, Any]:
+def process_exit_summary(process: subprocess.Popen[str]) -> str:
+    stdout, stderr = process.communicate(timeout=0.1)
+    lines = []
+    if stderr.strip():
+        lines.append(f"stderr: {stderr.strip()[-500:]}")
+    if stdout.strip():
+        lines.append(f"stdout: {stdout.strip()[-500:]}")
+    output = "; ".join(lines) if lines else "no captured output"
+    return f"dam-proxy exited early with code {process.returncode}; {output}"
+
+
+def wait_for_proxy(
+    base_url: str,
+    *,
+    timeout: float,
+    process: subprocess.Popen[str] | None = None,
+) -> dict[str, Any]:
     deadline = time.time() + timeout
     last_error: BaseException | None = None
     while time.time() < deadline:
+        if process is not None and process.poll() is not None:
+            raise SmokeBlocked(process_exit_summary(process))
         try:
             return get_json(f"{base_url}/health", timeout=1)
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
@@ -219,7 +237,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         start_new_session=True,
     )
     try:
-        health = wait_for_proxy(base_url, timeout=args.startup_timeout)
+        health = wait_for_proxy(base_url, timeout=args.startup_timeout, process=process)
         exact_prompt = exact_echo_prompt()
         exact_text = response_text(
             post_json(
