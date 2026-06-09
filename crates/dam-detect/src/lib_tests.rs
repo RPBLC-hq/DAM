@@ -240,6 +240,25 @@ fn detects_google_api_keys_without_assignment_labels() {
 }
 
 #[test]
+fn detects_sendgrid_api_keys_without_assignment_labels() {
+    let token = format!("SG.{}.{}", "A".repeat(22), "b".repeat(43));
+    let detections = detect(&format!("sendgrid token {token}"));
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::ApiKey);
+    assert_eq!(detections[0].value, token);
+}
+
+#[test]
+fn does_not_detect_short_sendgrid_like_tokens() {
+    assert!(
+        detect("sendgrid token SG.short.too_short")
+            .iter()
+            .all(|detection| detection.kind != SensitiveType::ApiKey)
+    );
+}
+
+#[test]
 fn detects_aws_access_key_ids_without_assignment_labels() {
     let token = "AKIAIOSFODNN7EXAMPLE";
     let detections = detect(&format!("aws key {token}"));

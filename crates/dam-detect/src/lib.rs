@@ -63,6 +63,9 @@ static TEAMS_WEBHOOK_URL_RE: Lazy<Regex> = Lazy::new(|| {
 static GOOGLE_API_KEY_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\bAIza[0-9A-Za-z\-_]{35,40}\b").unwrap());
 
+static SENDGRID_API_KEY_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b").unwrap());
+
 static AWS_ACCESS_KEY_ID_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b").unwrap());
 
@@ -230,6 +233,12 @@ fn detect_api_keys(input: &str, detections: &mut Vec<Detection>) {
         detections,
     );
     detect_with_regex(input, &GOOGLE_API_KEY_RE, SensitiveType::ApiKey, detections);
+    detect_with_regex(
+        input,
+        &SENDGRID_API_KEY_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
     detect_with_regex(
         input,
         &AWS_ACCESS_KEY_ID_RE,
