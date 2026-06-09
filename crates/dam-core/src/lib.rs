@@ -14,6 +14,7 @@ pub enum SensitiveType {
     Phone,
     Ssn,
     CreditCard,
+    ApiKey,
 }
 
 impl SensitiveType {
@@ -24,6 +25,7 @@ impl SensitiveType {
             Self::Phone => "phone",
             Self::Ssn => "ssn",
             Self::CreditCard => "cc",
+            Self::ApiKey => "api_key",
         }
     }
 
@@ -34,6 +36,7 @@ impl SensitiveType {
             "phone" => Some(Self::Phone),
             "ssn" => Some(Self::Ssn),
             "cc" | "credit_card" | "credit-card" => Some(Self::CreditCard),
+            "api_key" | "api-key" => Some(Self::ApiKey),
             _ => None,
         }
     }

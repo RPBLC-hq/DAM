@@ -61,7 +61,9 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
         serialized = smoke.json.dumps([exact_prompt, transform_prompt, request])
         self.assertIn(smoke.SYNTHETIC_EMAIL, serialized)
         self.assertIn(smoke.SYNTHETIC_SSN, serialized)
-        self.assertIn("every character separated", transform_prompt)
+        self.assertIn("one space after the opening bracket", transform_prompt)
+        self.assertIn("[ email:abc]", transform_prompt)
+        self.assertNotIn("every character separated", transform_prompt)
         self.assertNotIn("api.openai.com", serialized)
 
     def test_response_text_extracts_openai_compatible_content(self):

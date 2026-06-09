@@ -19,6 +19,80 @@ static SSN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").u
 static CREDIT_CARD_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\b(?:\d{4}[\s\-]?){3}\d{4}\b").unwrap());
 
+static API_KEY_ASSIGNMENT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r#"(?ix)\b[A-Za-z0-9_]*(?:api[_-]?key|secret[_-]?key|access[_-]?token|secret[_-]?access[_-]?key|client[_-]?secret|webhook[_-]?secret|signing[_-]?secret)\b\s*[:=]\s*["']?([A-Za-z0-9][A-Za-z0-9._+/=\-]{19,})"#,
+    )
+    .unwrap()
+});
+
+static OPENAI_API_KEY_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bsk-(?:proj-|svcacct-)?[A-Za-z0-9]{20,}\b").unwrap());
+
+static ANTHROPIC_API_KEY_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bsk-ant-(?:api\d{2}-)?[A-Za-z0-9\-_]{20,}\b").unwrap());
+
+static GITHUB_TOKEN_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b").unwrap());
+
+static STRIPE_API_KEY_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b").unwrap());
+
+static STRIPE_WEBHOOK_SECRET_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bwhsec_[A-Za-z0-9]{16,}\b").unwrap());
+
+static SLACK_WEBHOOK_URL_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"https://hooks\.slack(?:-gov)?\.com/services/[A-Z0-9]{8,}/[A-Z0-9]{8,}/[A-Za-z0-9]{20,}",
+    )
+    .unwrap()
+});
+
+static SLACK_APP_TOKEN_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b").unwrap());
+
+static DISCORD_WEBHOOK_URL_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"https://(?:discord(?:app)?\.com)/api/webhooks/\d{17,20}/[A-Za-z0-9_-]{48,}")
+        .unwrap()
+});
+
+static TEAMS_WEBHOOK_URL_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"https://[A-Za-z0-9.-]+\.webhook\.office\.com/webhookb2/[0-9A-Fa-f-]{36}@[0-9A-Fa-f-]{36}/IncomingWebhook/[A-Za-z0-9_-]{20,}/[0-9A-Fa-f-]{36}",
+    )
+    .unwrap()
+});
+
+static GOOGLE_API_KEY_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bAIza[0-9A-Za-z\-_]{35,40}\b").unwrap());
+
+static SENDGRID_API_KEY_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b").unwrap());
+
+static MAILGUN_API_KEY_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bkey-[0-9a-z]{32}\b").unwrap());
+
+static AWS_ACCESS_KEY_ID_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b").unwrap());
+
+static PEM_PRIVATE_KEY_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?s)-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----\r?\n[A-Za-z0-9+/=\r\n]+-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",
+    )
+    .unwrap()
+});
+
+static DATABASE_CONNECTION_URL_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r#"(?i)\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss)://[^\s:@/]+:[^\s:@/]{8,}@[^\s"'<>)]*"#,
+    )
+    .unwrap()
+});
+
+static BEARER_JWT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\bBearer\s+([A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b")
+        .unwrap()
+});
+
 pub fn detect(input: &str) -> Vec<Detection> {
     detect_with_related_domains(input, &[])
 }
@@ -30,6 +104,7 @@ pub fn detect_with_related_domains(input: &str, related_domains: &[String]) -> V
     detect_with_regex(input, &PHONE_RE, SensitiveType::Phone, &mut detections);
     detect_ssns(input, &mut detections);
     detect_credit_cards(input, &mut detections);
+    detect_api_keys(input, &mut detections);
     detect_related_domains(input, related_domains, &mut detections);
 
     dedup_overlaps(detections)
@@ -121,6 +196,105 @@ fn detect_credit_cards(input: &str, detections: &mut Vec<Detection>) {
             None
         }
     }));
+}
+
+fn detect_api_keys(input: &str, detections: &mut Vec<Detection>) {
+    detections.extend(
+        API_KEY_ASSIGNMENT_RE
+            .captures_iter(input)
+            .filter_map(|captures| detection_from_capture(&captures, 1, SensitiveType::ApiKey)),
+    );
+    detect_with_regex(input, &OPENAI_API_KEY_RE, SensitiveType::ApiKey, detections);
+    detect_with_regex(
+        input,
+        &ANTHROPIC_API_KEY_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(input, &GITHUB_TOKEN_RE, SensitiveType::ApiKey, detections);
+    detect_with_regex(input, &STRIPE_API_KEY_RE, SensitiveType::ApiKey, detections);
+    detect_with_regex(
+        input,
+        &STRIPE_WEBHOOK_SECRET_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(
+        input,
+        &SLACK_WEBHOOK_URL_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(
+        input,
+        &SLACK_APP_TOKEN_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(
+        input,
+        &DISCORD_WEBHOOK_URL_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(
+        input,
+        &TEAMS_WEBHOOK_URL_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(input, &GOOGLE_API_KEY_RE, SensitiveType::ApiKey, detections);
+    detect_with_regex(
+        input,
+        &SENDGRID_API_KEY_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(
+        input,
+        &MAILGUN_API_KEY_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(
+        input,
+        &AWS_ACCESS_KEY_ID_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(
+        input,
+        &PEM_PRIVATE_KEY_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(
+        input,
+        &DATABASE_CONNECTION_URL_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detections.extend(
+        BEARER_JWT_RE
+            .captures_iter(input)
+            .filter_map(|captures| detection_from_capture(&captures, 1, SensitiveType::ApiKey)),
+    );
+}
+
+fn detection_from_capture(
+    captures: &regex::Captures<'_>,
+    group: usize,
+    kind: SensitiveType,
+) -> Option<Detection> {
+    let m = captures.get(group)?;
+    Some(Detection {
+        kind,
+        span: Span {
+            start: m.start(),
+            end: m.end(),
+        },
+        value: m.as_str().to_string(),
+    })
 }
 
 fn detect_related_domains(

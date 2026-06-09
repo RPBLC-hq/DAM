@@ -101,3 +101,11 @@ fn credit_card_kind_serializes_as_reference_tag() {
 
     assert_eq!(json, r#""cc""#);
 }
+
+#[test]
+fn api_key_kind_serializes_as_snake_case() {
+    let json =
+        serde_json::to_string(&SensitiveKind::from(dam_core::SensitiveType::ApiKey)).unwrap();
+
+    assert_eq!(json, r#""api_key""#);
+}

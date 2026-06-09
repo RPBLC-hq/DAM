@@ -8,6 +8,66 @@ type CapturedBody = Arc<Mutex<Option<String>>>;
 type CapturedHeadersAndBody = (CapturedHeaders, CapturedBody);
 const PROBE_EMAIL: &str = "scrabb@jnjjj.com";
 const PROBE_EMAIL_MIDDLE_SPACED: &str = "scrabb@j njjj.com";
+const PROBE_API_KEY: &str = concat!("sk-test", "000000000000000000000000");
+const PROBE_AWS_ACCESS_KEY_ID: &str = concat!("AKIA", "IOSFODNN7EXAMPLE");
+const PROBE_STRIPE_WEBHOOK_SECRET: &str = concat!("whsec_", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+const PROBE_SENDGRID_API_KEY: &str = concat!(
+    "SG.",
+    "AAAAAAAAAAAAAAAAAAAAAA",
+    ".",
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+);
+const PROBE_MAILGUN_API_KEY: &str = "key-3ax6xnjp29jd6fds4gc373sgvjxteol0";
+const PROBE_DATABASE_URL: &str = concat!(
+    "postgres://app_user:",
+    "dbpass_12345",
+    "@db.example.local:5432/appdb?sslmode=require"
+);
+const PROBE_SLACK_WEBHOOK_URL: &str = concat!(
+    "https://hooks.slack.com/services/",
+    "T00000000/B00000000/",
+    "XXXXXXXXXXXXXXXXXXXXXXXX"
+);
+const PROBE_DISCORD_WEBHOOK_URL: &str = concat!(
+    "https://discord.com/api/webhooks/",
+    "123456789012345678/",
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+);
+const PROBE_TEAMS_WEBHOOK_URL: &str = concat!(
+    "https://example.webhook.office.com/webhookb2/",
+    "11111111-2222-3333-4444-555555555555@",
+    "66666666-7777-8888-9999-aaaaaaaaaaaa/IncomingWebhook/",
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/",
+    "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+);
+
+fn probe_base64_secret() -> String {
+    format!("{}+/{}=", "A".repeat(20), "B".repeat(18))
+}
+
+fn probe_bearer_jwt() -> String {
+    format!("{}.{}.{}", "a".repeat(36), "b".repeat(48), "c".repeat(43))
+}
+
+fn probe_slack_app_token() -> String {
+    format!(
+        "xoxb-{}-{}-{}",
+        "1".repeat(12),
+        "2".repeat(12),
+        "a".repeat(24)
+    )
+}
+
+fn probe_private_key() -> String {
+    format!(
+        "{}{}\n{}\n{}{}",
+        "-----BEGIN ",
+        "PRIVATE KEY-----",
+        "A".repeat(64),
+        "-----END ",
+        "PRIVATE KEY-----"
+    )
+}
 
 fn proxy_config(upstream: String) -> dam_config::DamConfig {
     proxy_config_with_provider(upstream, "openai-compatible")
@@ -1582,6 +1642,353 @@ async fn proxy_value_probe_confirms_http_upstream_receives_token_not_raw_value()
     assert!(!upstream_body.contains(PROBE_EMAIL));
     assert!(upstream_body.contains("[email:"));
     assert_probe_response_proves_upstream_was_tokenized(&response_body);
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_labeled_api_key_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body = format!(r#"{{"input":"OPENAI_API_KEY={PROBE_API_KEY} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_API_KEY));
+    assert!(upstream_body.contains("OPENAI_API_KEY=[api_key:"));
+    assert!(response_body.contains(PROBE_API_KEY));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_labeled_base64_secret_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+    let token = probe_base64_secret();
+
+    let body = serde_json::json!({
+        "input": format!("AWS_SECRET_ACCESS_KEY={token} echo this message")
+    })
+    .to_string();
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(&token));
+    assert!(upstream_body.contains("AWS_SECRET_ACCESS_KEY=[api_key:"));
+    assert!(response_body.contains(&token));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_direct_openai_key_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body = format!(r#"{{"input":"token {PROBE_API_KEY} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_API_KEY));
+    assert!(upstream_body.contains("token [api_key:"));
+    assert!(response_body.contains(PROBE_API_KEY));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_aws_access_key_id_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body = format!(r#"{{"input":"token {PROBE_AWS_ACCESS_KEY_ID} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_AWS_ACCESS_KEY_ID));
+    assert!(upstream_body.contains("token [api_key:"));
+    assert!(response_body.contains(PROBE_AWS_ACCESS_KEY_ID));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_sendgrid_api_key_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body =
+        format!(r#"{{"input":"sendgrid token {PROBE_SENDGRID_API_KEY} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_SENDGRID_API_KEY));
+    assert!(upstream_body.contains("sendgrid token [api_key:"));
+    assert!(response_body.contains(PROBE_SENDGRID_API_KEY));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_mailgun_api_key_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body = format!(r#"{{"input":"mailgun token {PROBE_MAILGUN_API_KEY} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_MAILGUN_API_KEY));
+    assert!(upstream_body.contains("mailgun token [api_key:"));
+    assert!(response_body.contains(PROBE_MAILGUN_API_KEY));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_stripe_webhook_secret_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body =
+        format!(r#"{{"input":"webhook secret {PROBE_STRIPE_WEBHOOK_SECRET} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_STRIPE_WEBHOOK_SECRET));
+    assert!(upstream_body.contains("webhook secret [api_key:"));
+    assert!(response_body.contains(PROBE_STRIPE_WEBHOOK_SECRET));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_slack_webhook_url_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body =
+        format!(r#"{{"input":"post alert to {PROBE_SLACK_WEBHOOK_URL} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_SLACK_WEBHOOK_URL));
+    assert!(upstream_body.contains("post alert to [api_key:"));
+    assert!(response_body.contains(PROBE_SLACK_WEBHOOK_URL));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_slack_app_token_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+    let token = probe_slack_app_token();
+
+    let body = format!(r#"{{"input":"slack bot token {token} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(&token));
+    assert!(upstream_body.contains("slack bot token [api_key:"));
+    assert!(response_body.contains(&token));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_discord_webhook_url_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body =
+        format!(r#"{{"input":"post alert to {PROBE_DISCORD_WEBHOOK_URL} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_DISCORD_WEBHOOK_URL));
+    assert!(upstream_body.contains("post alert to [api_key:"));
+    assert!(response_body.contains(PROBE_DISCORD_WEBHOOK_URL));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_teams_webhook_url_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body =
+        format!(r#"{{"input":"post alert to {PROBE_TEAMS_WEBHOOK_URL} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_TEAMS_WEBHOOK_URL));
+    assert!(upstream_body.contains("post alert to [api_key:"));
+    assert!(response_body.contains(PROBE_TEAMS_WEBHOOK_URL));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_pem_private_key_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+    let private_key = probe_private_key();
+
+    let body = serde_json::json!({
+        "input": format!("private key follows:\n{private_key}\necho this message")
+    })
+    .to_string();
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(&private_key));
+    let upstream_json: serde_json::Value = serde_json::from_str(&upstream_body).unwrap();
+    let upstream_text = upstream_json
+        .pointer("/input")
+        .and_then(serde_json::Value::as_str)
+        .unwrap();
+    assert!(upstream_text.contains("private key follows:\n[api_key:"));
+    let response_json: serde_json::Value = serde_json::from_str(&response_body).unwrap();
+    let response_text = response_json
+        .pointer("/input")
+        .and_then(serde_json::Value::as_str)
+        .unwrap();
+    assert!(response_text.contains(&private_key));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_bearer_jwt_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+    let token = probe_bearer_jwt();
+
+    let body = format!(r#"{{"input":"Authorization: Bearer {token} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(&token));
+    assert!(upstream_body.contains("Bearer [api_key:"));
+    assert!(response_body.contains(&token));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_database_connection_url_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body = format!(r#"{{"input":"database url {PROBE_DATABASE_URL} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_DATABASE_URL));
+    assert!(upstream_body.contains("database url [api_key:"));
+    assert!(response_body.contains(PROBE_DATABASE_URL));
 }
 
 #[tokio::test]
