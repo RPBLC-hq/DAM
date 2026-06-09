@@ -8,6 +8,7 @@ type CapturedBody = Arc<Mutex<Option<String>>>;
 type CapturedHeadersAndBody = (CapturedHeaders, CapturedBody);
 const PROBE_EMAIL: &str = "scrabb@jnjjj.com";
 const PROBE_EMAIL_MIDDLE_SPACED: &str = "scrabb@j njjj.com";
+const PROBE_API_KEY: &str = "sk-test000000000000000000000000";
 
 fn proxy_config(upstream: String) -> dam_config::DamConfig {
     proxy_config_with_provider(upstream, "openai-compatible")
@@ -1582,6 +1583,29 @@ async fn proxy_value_probe_confirms_http_upstream_receives_token_not_raw_value()
     assert!(!upstream_body.contains(PROBE_EMAIL));
     assert!(upstream_body.contains("[email:"));
     assert_probe_response_proves_upstream_was_tokenized(&response_body);
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_labeled_api_key_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body = format!(r#"{{"input":"OPENAI_API_KEY={PROBE_API_KEY} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_API_KEY));
+    assert!(upstream_body.contains("OPENAI_API_KEY=[api_key:"));
+    assert!(response_body.contains(PROBE_API_KEY));
 }
 
 #[tokio::test]
