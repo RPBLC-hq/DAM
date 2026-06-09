@@ -53,6 +53,13 @@ static DISCORD_WEBHOOK_URL_RE: Lazy<Regex> = Lazy::new(|| {
         .unwrap()
 });
 
+static TEAMS_WEBHOOK_URL_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"https://[A-Za-z0-9.-]+\.webhook\.office\.com/webhookb2/[0-9A-Fa-f-]{36}@[0-9A-Fa-f-]{36}/IncomingWebhook/[A-Za-z0-9_-]{20,}/[0-9A-Fa-f-]{36}",
+    )
+    .unwrap()
+});
+
 static GOOGLE_API_KEY_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\bAIza[0-9A-Za-z\-_]{35,40}\b").unwrap());
 
@@ -213,6 +220,12 @@ fn detect_api_keys(input: &str, detections: &mut Vec<Detection>) {
     detect_with_regex(
         input,
         &DISCORD_WEBHOOK_URL_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(
+        input,
+        &TEAMS_WEBHOOK_URL_RE,
         SensitiveType::ApiKey,
         detections,
     );

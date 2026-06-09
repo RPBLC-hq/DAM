@@ -160,8 +160,8 @@ Full pipeline, resolve path, and control/diagnostics flows are in
   packaging land in staged slices. Partial or delayed behavior is tracked in
   [docs/parking-lot.md](docs/parking-lot.md).
 - **Detection is intentionally narrow.** Email, NANP phone, US SSN, Luhn-validated
-  cards, common API-key assignment labels, direct OpenAI/Anthropic/GitHub/Stripe/Slack/Discord/Google/AWS
-  API-key families, Stripe webhook signing secrets, Slack and Discord incoming webhook URLs, PEM private key blocks, database connection URLs, and `Bearer`-labeled JWTs today. Names, addresses, unlabeled
+  cards, common API-key assignment labels, direct OpenAI/Anthropic/GitHub/Stripe/Slack/Discord/Microsoft Teams/Google/AWS
+  API-key families, Stripe webhook signing secrets, Slack, Discord, and Microsoft Teams incoming webhook URLs, PEM private key blocks, database connection URLs, and `Bearer`-labeled JWTs today. Names, addresses, unlabeled
   bearer tokens, IBANs, and IPs are not covered yet.
 - **Local stores.** Vault, log, and consent are local SQLite. The web UI shows vault
   values in clear text — treat it as a local control surface, not a public app.

@@ -288,6 +288,41 @@ fn detects_discord_webhook_urls_without_assignment_labels() {
 }
 
 #[test]
+fn detects_teams_webhook_urls_without_assignment_labels() {
+    let url = concat!(
+        "https://example.webhook.office.com/webhookb2/",
+        "11111111-2222-3333-4444-555555555555@",
+        "66666666-7777-8888-9999-aaaaaaaaaaaa/IncomingWebhook/",
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/",
+        "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+    );
+    let detections = detect(&format!("post alert to {url}"));
+    let api_key_detections = detections
+        .iter()
+        .filter(|detection| detection.kind == SensitiveType::ApiKey)
+        .collect::<Vec<_>>();
+
+    assert_eq!(api_key_detections.len(), 1);
+    assert_eq!(api_key_detections[0].value, url);
+}
+
+#[test]
+fn does_not_detect_short_teams_webhook_like_urls() {
+    let short_url = concat!(
+        "https://example.webhook.office.com/webhookb2/",
+        "11111111-2222-3333-4444-555555555555@",
+        "66666666-7777-8888-9999-aaaaaaaaaaaa/IncomingWebhook/short/",
+        "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+    );
+
+    assert!(
+        detect(&format!("post alert to {short_url}"))
+            .iter()
+            .all(|detection| detection.kind != SensitiveType::ApiKey)
+    );
+}
+
+#[test]
 fn detects_pem_private_keys_without_assignment_labels() {
     let key = format!(
         "{}{}\n{}\n{}{}",
