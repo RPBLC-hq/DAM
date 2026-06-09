@@ -166,14 +166,22 @@ fn rejects_invalid_credit_card() {
 
 #[test]
 fn detects_common_api_key_assignments() {
-    let detections = detect("OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz123456 echo this");
+    let token = format!("sk-proj-{}", "a".repeat(32));
+    let detections = detect(&format!("OPENAI_API_KEY={token} echo this"));
 
     assert_eq!(detections.len(), 1);
     assert_eq!(detections[0].kind, SensitiveType::ApiKey);
-    assert_eq!(
-        detections[0].value,
-        "sk-proj-abcdefghijklmnopqrstuvwxyz123456"
-    );
+    assert_eq!(detections[0].value, token);
+}
+
+#[test]
+fn detects_labeled_base64_secret_assignments() {
+    let token = format!("{}+/{}=", "A".repeat(20), "B".repeat(18));
+    let detections = detect(&format!("AWS_SECRET_ACCESS_KEY={token} rotate this"));
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::ApiKey);
+    assert_eq!(detections[0].value, token);
 }
 
 #[test]

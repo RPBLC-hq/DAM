@@ -21,7 +21,7 @@ static CREDIT_CARD_RE: Lazy<Regex> =
 
 static API_KEY_ASSIGNMENT_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
-        r#"(?ix)\b[A-Za-z0-9_]*(?:api[_-]?key|secret[_-]?key|access[_-]?token)\b\s*[:=]\s*["']?([A-Za-z0-9][A-Za-z0-9._\-]{19,})"#,
+        r#"(?ix)\b[A-Za-z0-9_]*(?:api[_-]?key|secret[_-]?key|access[_-]?token|secret[_-]?access[_-]?key|client[_-]?secret|webhook[_-]?secret|signing[_-]?secret)\b\s*[:=]\s*["']?([A-Za-z0-9][A-Za-z0-9._+/=\-]{19,})"#,
     )
     .unwrap()
 });
