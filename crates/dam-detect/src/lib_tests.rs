@@ -223,14 +223,26 @@ fn detects_stripe_secret_keys_without_assignment_labels() {
 
 #[test]
 fn detects_google_api_keys_without_assignment_labels() {
-    let detections = detect("token AIzaSyD1234567890abcdefghijklmnopqrstuvw");
+    let token = format!("AIza{}", "A".repeat(36));
+    let detections = detect(&format!("token {token}"));
 
     assert_eq!(detections.len(), 1);
     assert_eq!(detections[0].kind, SensitiveType::ApiKey);
-    assert_eq!(
-        detections[0].value,
-        "AIzaSyD1234567890abcdefghijklmnopqrstuvw"
+    assert_eq!(detections[0].value, token);
+}
+
+#[test]
+fn detects_bearer_jwts_as_api_keys() {
+    let token = concat!(
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.",
+        "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkFsZXgifQ.",
+        "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
     );
+    let detections = detect(&format!("Authorization: Bearer {token}"));
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::ApiKey);
+    assert_eq!(detections[0].value, token);
 }
 
 #[test]
@@ -239,6 +251,7 @@ fn does_not_detect_short_api_key_like_values() {
     assert!(detect("token ghp_short").is_empty());
     assert!(detect("token sk-ant...hort").is_empty());
     assert!(detect("token AIza_short").is_empty());
+    assert!(detect("Authorization: Bearer short.jwt.parts").is_empty());
     assert!(detect("token ***").is_empty());
 }
 
