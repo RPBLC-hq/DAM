@@ -12,11 +12,11 @@ It receives text and returns sensitive spans. It does not redact, write to vault
 - SSN with basic area validation.
 - Credit card numbers with Luhn validation.
 - API-key/secret assignments using common key names such as `*_API_KEY`, `secret_key`, or `access_token`; the detected span is the assigned secret value, not the variable name.
-- Direct high-value secret families without assignment labels for the current MVP slice: OpenAI `sk-...` / `sk-proj-...` / `sk-svcacct-...`, Anthropic `sk-ant-...`, GitHub `ghp_` / `gho_` / `ghu_` / `ghs_` / `ghr_`, Stripe API keys (`sk_live_...` / `sk_test_...` / `rk_live_...` / `rk_test_...`) and webhook signing secrets (`whsec_...`), Google API keys beginning with `AIza`, AWS access key IDs beginning with `AKIA` or `ASIA`, PEM private key blocks, and `Bearer`-labeled JWTs.
+- Direct high-value secret families without assignment labels for the current MVP slice: OpenAI `sk-...` / `sk-proj-...` / `sk-svcacct-...`, Anthropic `sk-ant-...`, GitHub `ghp_` / `gho_` / `ghu_` / `ghs_` / `ghr_`, Stripe API keys (`sk_live_...` / `sk_test_...` / `rk_live_...` / `rk_test_...`) and webhook signing secrets (`whsec_...`), Google API keys beginning with `AIza`, AWS access key IDs beginning with `AKIA` or `ASIA`, PEM private key blocks, database connection URLs with embedded passwords for common database schemes, and `Bearer`-labeled JWTs.
 
 Domain-only values are not detected by the default `detect()` path. `detect_with_related_domains()` can emit exact `domain` detections for domains supplied by the caller, such as domains learned from outbound email detections, while still avoiding the same domain inside an email address or subdomain. Email addresses are still detected as whole values, but their domains are not emitted as separate `domain` detections unless passed back as related context.
 
-Known current limitation: formats like `+1 (415) 555-2671`, zero-width-character obfuscation, and still-parked secret families such as unlabeled bearer tokens, non-Stripe webhook secrets, and other provider-specific formats not yet covered by the current regex set.
+Known current limitation: formats like `+1 (415) 555-2671`, zero-width-character obfuscation, and still-parked secret families such as unlabeled bearer tokens, non-Stripe webhook secrets, database URLs without embedded passwords, and other provider-specific formats not yet covered by the current regex set.
 
 ## Output
 

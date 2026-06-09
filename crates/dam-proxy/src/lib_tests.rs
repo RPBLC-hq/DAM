@@ -11,6 +11,8 @@ const PROBE_EMAIL_MIDDLE_SPACED: &str = "scrabb@j njjj.com";
 const PROBE_API_KEY: &str = concat!("sk-test", "000000000000000000000000");
 const PROBE_AWS_ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
 const PROBE_STRIPE_WEBHOOK_SECRET: &str = concat!("whsec_", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+const PROBE_DATABASE_URL: &str =
+    "postgres://app_user:dbpass_12345@db.example.local:5432/appdb?sslmode=require";
 
 fn probe_bearer_jwt() -> String {
     format!("{}.{}.{}", "a".repeat(36), "b".repeat(48), "c".repeat(43))
@@ -1754,6 +1756,29 @@ async fn proxy_http_request_tokenizes_bearer_jwt_before_upstream() {
     assert!(!upstream_body.contains(&token));
     assert!(upstream_body.contains("Bearer [api_key:"));
     assert!(response_body.contains(&token));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_database_connection_url_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body = format!(r#"{{"input":"database url {PROBE_DATABASE_URL} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_DATABASE_URL));
+    assert!(upstream_body.contains("database url [api_key:"));
+    assert!(response_body.contains(PROBE_DATABASE_URL));
 }
 
 #[tokio::test]

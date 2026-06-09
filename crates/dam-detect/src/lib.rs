@@ -54,6 +54,13 @@ static PEM_PRIVATE_KEY_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
+static DATABASE_CONNECTION_URL_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r#"(?i)\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss)://[^\s:@/]+:[^\s:@/]{8,}@[^\s"'<>)]*"#,
+    )
+    .unwrap()
+});
+
 static BEARER_JWT_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\bBearer\s+([A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b")
         .unwrap()
@@ -195,6 +202,12 @@ fn detect_api_keys(input: &str, detections: &mut Vec<Detection>) {
     detect_with_regex(
         input,
         &PEM_PRIVATE_KEY_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(
+        input,
+        &DATABASE_CONNECTION_URL_RE,
         SensitiveType::ApiKey,
         detections,
     );

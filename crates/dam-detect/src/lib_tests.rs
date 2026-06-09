@@ -293,6 +293,30 @@ fn does_not_detect_public_key_or_incomplete_pem_blocks_as_private_keys() {
 }
 
 #[test]
+fn detects_database_connection_urls_without_assignment_labels() {
+    let url = "postgres://app_user:dbpass_12345@db.example.local:5432/appdb?sslmode=require";
+    let detections = detect(&format!("database url {url} should be protected"));
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::ApiKey);
+    assert_eq!(detections[0].value, url);
+}
+
+#[test]
+fn does_not_detect_database_urls_without_embedded_passwords_as_api_keys() {
+    assert!(
+        detect("postgres://db.example.local:5432/appdb")
+            .iter()
+            .all(|detection| detection.kind != SensitiveType::ApiKey)
+    );
+    assert!(
+        detect("postgres://app_user@db.example.local:5432/appdb")
+            .iter()
+            .all(|detection| detection.kind != SensitiveType::ApiKey)
+    );
+}
+
+#[test]
 fn detects_bearer_jwts_as_api_keys() {
     let token = concat!(
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.",
