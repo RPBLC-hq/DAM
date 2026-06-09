@@ -69,7 +69,7 @@ static GOOGLE_API_KEY_RE: Lazy<Regex> =
 static SENDGRID_API_KEY_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b").unwrap());
 
-static MAILGUN_API_KEY_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bkey-[0-9a-f]{32}\b").unwrap());
+static MAILGUN_API_KEY_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\bkey-[0-9a-z]{32}\b").unwrap());
 
 static AWS_ACCESS_KEY_ID_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b").unwrap());

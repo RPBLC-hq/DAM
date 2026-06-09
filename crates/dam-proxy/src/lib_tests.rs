@@ -17,7 +17,7 @@ const PROBE_SENDGRID_API_KEY: &str = concat!(
     ".",
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 );
-const PROBE_MAILGUN_API_KEY: &str = concat!("key-", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+const PROBE_MAILGUN_API_KEY: &str = "key-3ax6xnjp29jd6fds4gc373sgvjxteol0";
 const PROBE_DATABASE_URL: &str = concat!(
     "postgres://app_user:",
     "dbpass_12345",

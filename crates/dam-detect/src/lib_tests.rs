@@ -260,7 +260,7 @@ fn does_not_detect_short_sendgrid_like_tokens() {
 
 #[test]
 fn detects_mailgun_api_keys_without_assignment_labels() {
-    let token = format!("key-{}", "a".repeat(32));
+    let token = "key-3ax6xnjp29jd6fds4gc373sgvjxteol0";
     let detections = detect(&format!("mailgun token {token}"));
 
     assert_eq!(detections.len(), 1);
