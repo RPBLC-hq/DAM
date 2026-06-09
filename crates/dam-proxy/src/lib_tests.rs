@@ -49,6 +49,15 @@ fn probe_bearer_jwt() -> String {
     format!("{}.{}.{}", "a".repeat(36), "b".repeat(48), "c".repeat(43))
 }
 
+fn probe_slack_app_token() -> String {
+    format!(
+        "xoxb-{}-{}-{}",
+        "1".repeat(12),
+        "2".repeat(12),
+        "a".repeat(24)
+    )
+}
+
 fn probe_private_key() -> String {
     format!(
         "{}{}\n{}\n{}{}",
@@ -1824,6 +1833,30 @@ async fn proxy_http_request_tokenizes_slack_webhook_url_before_upstream() {
     assert!(!upstream_body.contains(PROBE_SLACK_WEBHOOK_URL));
     assert!(upstream_body.contains("post alert to [api_key:"));
     assert!(response_body.contains(PROBE_SLACK_WEBHOOK_URL));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_slack_app_token_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+    let token = probe_slack_app_token();
+
+    let body = format!(r#"{{"input":"slack bot token {token} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(&token));
+    assert!(upstream_body.contains("slack bot token [api_key:"));
+    assert!(response_body.contains(&token));
 }
 
 #[tokio::test]

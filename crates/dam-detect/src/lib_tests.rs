@@ -312,6 +312,30 @@ fn detects_slack_webhook_urls_without_assignment_labels() {
 }
 
 #[test]
+fn detects_slack_app_tokens_without_assignment_labels() {
+    let token = format!(
+        "xoxb-{}-{}-{}",
+        "1".repeat(12),
+        "2".repeat(12),
+        "a".repeat(24)
+    );
+    let detections = detect(&format!("slack bot token {token}"));
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::ApiKey);
+    assert_eq!(detections[0].value, token);
+}
+
+#[test]
+fn does_not_detect_short_slack_app_token_like_values() {
+    assert!(
+        detect("slack bot token xoxb-short")
+            .iter()
+            .all(|detection| detection.kind != SensitiveType::ApiKey)
+    );
+}
+
+#[test]
 fn detects_discord_webhook_urls_without_assignment_labels() {
     let url = concat!(
         "https://discord.com/api/webhooks/",
