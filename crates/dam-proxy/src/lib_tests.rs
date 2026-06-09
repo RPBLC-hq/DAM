@@ -13,6 +13,11 @@ const PROBE_AWS_ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
 const PROBE_STRIPE_WEBHOOK_SECRET: &str = concat!("whsec_", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 const PROBE_DATABASE_URL: &str =
     "postgres://app_user:dbpass_12345@db.example.local:5432/appdb?sslmode=require";
+const PROBE_SLACK_WEBHOOK_URL: &str = concat!(
+    "https://hooks.slack.com/services/",
+    "T00000000/B00000000/",
+    "XXXXXXXXXXXXXXXXXXXXXXXX"
+);
 
 fn probe_base64_secret() -> String {
     format!("{}+/{}=", "A".repeat(20), "B".repeat(18))
@@ -1726,6 +1731,30 @@ async fn proxy_http_request_tokenizes_stripe_webhook_secret_before_upstream() {
     assert!(!upstream_body.contains(PROBE_STRIPE_WEBHOOK_SECRET));
     assert!(upstream_body.contains("webhook secret [api_key:"));
     assert!(response_body.contains(PROBE_STRIPE_WEBHOOK_SECRET));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_slack_webhook_url_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body =
+        format!(r#"{{"input":"post alert to {PROBE_SLACK_WEBHOOK_URL} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_SLACK_WEBHOOK_URL));
+    assert!(upstream_body.contains("post alert to [api_key:"));
+    assert!(response_body.contains(PROBE_SLACK_WEBHOOK_URL));
 }
 
 #[tokio::test]

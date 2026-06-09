@@ -41,6 +41,13 @@ static STRIPE_API_KEY_RE: Lazy<Regex> =
 static STRIPE_WEBHOOK_SECRET_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\bwhsec_[A-Za-z0-9]{16,}\b").unwrap());
 
+static SLACK_WEBHOOK_URL_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"https://hooks\.slack(?:-gov)?\.com/services/[A-Z0-9]{8,}/[A-Z0-9]{8,}/[A-Za-z0-9]{20,}",
+    )
+    .unwrap()
+});
+
 static GOOGLE_API_KEY_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\bAIza[0-9A-Za-z\-_]{35,40}\b").unwrap());
 
@@ -189,6 +196,12 @@ fn detect_api_keys(input: &str, detections: &mut Vec<Detection>) {
     detect_with_regex(
         input,
         &STRIPE_WEBHOOK_SECRET_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(
+        input,
+        &SLACK_WEBHOOK_URL_RE,
         SensitiveType::ApiKey,
         detections,
     );
