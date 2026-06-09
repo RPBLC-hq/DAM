@@ -89,6 +89,23 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
 
             self.assertEqual(smoke.count_log_rows(db_path), 3)
 
+    def test_wait_for_proxy_reports_early_process_exit_stderr(self):
+        smoke = load_module()
+        process = smoke.subprocess.Popen(
+            [
+                smoke.sys.executable,
+                "-c",
+                "import sys; print('bind failed: address in use', file=sys.stderr); sys.exit(42)",
+            ],
+            stdout=smoke.subprocess.PIPE,
+            stderr=smoke.subprocess.PIPE,
+            text=True,
+        )
+        process.wait(timeout=5)
+
+        with self.assertRaisesRegex(smoke.SmokeBlocked, "address in use"):
+            smoke.wait_for_proxy("http://127.0.0.1:1", timeout=1, process=process)
+
     def test_activity_log_assertion_fails_closed_on_raw_synthetic_values(self):
         smoke = load_module()
 
