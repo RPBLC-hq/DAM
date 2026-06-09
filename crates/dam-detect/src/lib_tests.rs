@@ -274,6 +274,20 @@ fn detects_slack_webhook_urls_without_assignment_labels() {
 }
 
 #[test]
+fn detects_discord_webhook_urls_without_assignment_labels() {
+    let url = concat!(
+        "https://discord.com/api/webhooks/",
+        "123456789012345678/",
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+    );
+    let detections = detect(&format!("post alert to {url}"));
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::ApiKey);
+    assert_eq!(detections[0].value, url);
+}
+
+#[test]
 fn detects_pem_private_keys_without_assignment_labels() {
     let key = format!(
         "{}{}\n{}\n{}{}",
@@ -361,6 +375,7 @@ fn does_not_detect_short_api_key_like_values() {
     assert!(detect("token AKIA_SHORT").is_empty());
     assert!(detect("token whsec_short").is_empty());
     assert!(detect("https://hooks.slack.com/services/T000/B000/short").is_empty());
+    assert!(detect("https://discord.com/api/webhooks/1234/short").is_empty());
     assert!(detect("Authorization: Bearer short.jwt.parts").is_empty());
     assert!(detect("token ***").is_empty());
 }

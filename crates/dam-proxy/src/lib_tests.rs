@@ -18,6 +18,11 @@ const PROBE_SLACK_WEBHOOK_URL: &str = concat!(
     "T00000000/B00000000/",
     "XXXXXXXXXXXXXXXXXXXXXXXX"
 );
+const PROBE_DISCORD_WEBHOOK_URL: &str = concat!(
+    "https://discord.com/api/webhooks/",
+    "123456789012345678/",
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+);
 
 fn probe_base64_secret() -> String {
     format!("{}+/{}=", "A".repeat(20), "B".repeat(18))
@@ -1755,6 +1760,30 @@ async fn proxy_http_request_tokenizes_slack_webhook_url_before_upstream() {
     assert!(!upstream_body.contains(PROBE_SLACK_WEBHOOK_URL));
     assert!(upstream_body.contains("post alert to [api_key:"));
     assert!(response_body.contains(PROBE_SLACK_WEBHOOK_URL));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_discord_webhook_url_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body =
+        format!(r#"{{"input":"post alert to {PROBE_DISCORD_WEBHOOK_URL} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_DISCORD_WEBHOOK_URL));
+    assert!(upstream_body.contains("post alert to [api_key:"));
+    assert!(response_body.contains(PROBE_DISCORD_WEBHOOK_URL));
 }
 
 #[tokio::test]

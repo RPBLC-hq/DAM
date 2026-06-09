@@ -48,6 +48,11 @@ static SLACK_WEBHOOK_URL_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
+static DISCORD_WEBHOOK_URL_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"https://(?:discord(?:app)?\.com)/api/webhooks/\d{17,20}/[A-Za-z0-9_-]{48,}")
+        .unwrap()
+});
+
 static GOOGLE_API_KEY_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\bAIza[0-9A-Za-z\-_]{35,40}\b").unwrap());
 
@@ -202,6 +207,12 @@ fn detect_api_keys(input: &str, detections: &mut Vec<Detection>) {
     detect_with_regex(
         input,
         &SLACK_WEBHOOK_URL_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(
+        input,
+        &DISCORD_WEBHOOK_URL_RE,
         SensitiveType::ApiKey,
         detections,
     );
