@@ -9,6 +9,7 @@ pub enum SensitiveKind {
     Ssn,
     #[serde(rename = "cc", alias = "credit_card")]
     CreditCard,
+    ApiKey,
 }
 
 impl From<dam_core::SensitiveType> for SensitiveKind {
@@ -19,6 +20,7 @@ impl From<dam_core::SensitiveType> for SensitiveKind {
             dam_core::SensitiveType::Phone => Self::Phone,
             dam_core::SensitiveType::Ssn => Self::Ssn,
             dam_core::SensitiveType::CreditCard => Self::CreditCard,
+            dam_core::SensitiveType::ApiKey => Self::ApiKey,
         }
     }
 }

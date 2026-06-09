@@ -36,7 +36,7 @@ Current canonicalization is intentionally narrow:
 - Email values have detector-supported spaces, tabs, and newlines removed from inside the address, and the domain is lowercased before storage and deduplication.
 - Replacement spans still cover the exact detected input text.
 - Resolving an email token returns the stored canonical email value.
-- Phone, SSN, and credit-card values are stored exactly as detected for now.
+- Phone, SSN, credit-card, and API-key values are stored exactly as detected for now.
 
 Vault write failure while tokenizing uses redact-only fallback:
 

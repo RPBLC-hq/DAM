@@ -361,6 +361,22 @@ fn reference_parse_round_trips_generated_reference() {
 }
 
 #[test]
+fn api_key_reference_tag_is_stable_and_parseable() {
+    let reference = Reference::generate(SensitiveType::ApiKey);
+
+    assert_eq!(SensitiveType::ApiKey.tag(), "api_key");
+    assert_eq!(
+        SensitiveType::from_tag("api_key"),
+        Some(SensitiveType::ApiKey)
+    );
+    assert_eq!(
+        SensitiveType::from_tag("api-key"),
+        Some(SensitiveType::ApiKey)
+    );
+    assert_eq!(Reference::parse_key(&reference.key()), Some(reference));
+}
+
+#[test]
 fn reference_parse_rejects_redact_only_and_malformed_values() {
     assert_eq!(Reference::parse_display("[email]"), None);
     assert_eq!(

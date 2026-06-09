@@ -165,6 +165,23 @@ fn rejects_invalid_credit_card() {
 }
 
 #[test]
+fn detects_common_api_key_assignments() {
+    let detections = detect("OPENAI_API_KEY=sk-proj-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::ApiKey);
+    assert_eq!(
+        detections[0].value,
+        "sk-proj-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    );
+}
+
+#[test]
+fn does_not_detect_short_api_key_like_values() {
+    assert!(detect("OPENAI_API_KEY=sk-test").is_empty());
+}
+
+#[test]
 fn returns_detections_in_text_order() {
     let detections = detect("ssn 123-45-6789 email alice@example.com");
 

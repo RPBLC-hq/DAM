@@ -85,8 +85,10 @@ def exact_echo_prompt() -> str:
 
 def transform_token_prompt() -> str:
     return (
-        "For a local synthetic test, take the exact text below, output every "
-        "character separated by a single space, and output nothing else: "
+        "For a local synthetic test, copy the final text below exactly. If the "
+        "text contains DAM reference tokens like [email:abc] or [ssn:abc], "
+        "write them with one space after the opening bracket, like [ email:abc] "
+        "or [ ssn:abc]. Do not change any other characters. Text: "
         f"alpha={SYNTHETIC_EMAIL}; beta={SYNTHETIC_SSN}"
     )
 

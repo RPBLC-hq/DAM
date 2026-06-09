@@ -11,10 +11,11 @@ It receives text and returns sensitive spans. It does not redact, write to vault
 - NANP phone numbers in dashed form, e.g. `415-555-2671`.
 - SSN with basic area validation.
 - Credit card numbers with Luhn validation.
+- API-key/secret assignments using common key names such as `*_API_KEY`, `secret_key`, or `access_token`; the detected span is the assigned secret value, not the variable name.
 
 Domain-only values are not detected by the default `detect()` path. `detect_with_related_domains()` can emit exact `domain` detections for domains supplied by the caller, such as domains learned from outbound email detections, while still avoiding the same domain inside an email address or subdomain. Email addresses are still detected as whole values, but their domains are not emitted as separate `domain` detections unless passed back as related context.
 
-Known current limitation: formats like `+1 (415) 555-2671` and zero-width-character obfuscation are not detected yet.
+Known current limitation: formats like `+1 (415) 555-2671`, zero-width-character obfuscation, and provider-specific token families without an assignment label are not detected yet.
 
 ## Output
 

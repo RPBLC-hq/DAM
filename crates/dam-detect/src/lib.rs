@@ -19,6 +19,13 @@ static SSN_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").u
 static CREDIT_CARD_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\b(?:\d{4}[\s\-]?){3}\d{4}\b").unwrap());
 
+static API_KEY_ASSIGNMENT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r#"(?ix)\b[A-Za-z0-9_]*(?:api[_-]?key|secret[_-]?key|access[_-]?token)\b\s*[:=]\s*["']?([A-Za-z0-9][A-Za-z0-9._\-]{19,})"#,
+    )
+    .unwrap()
+});
+
 pub fn detect(input: &str) -> Vec<Detection> {
     detect_with_related_domains(input, &[])
 }
@@ -30,6 +37,7 @@ pub fn detect_with_related_domains(input: &str, related_domains: &[String]) -> V
     detect_with_regex(input, &PHONE_RE, SensitiveType::Phone, &mut detections);
     detect_ssns(input, &mut detections);
     detect_credit_cards(input, &mut detections);
+    detect_api_keys(input, &mut detections);
     detect_related_domains(input, related_domains, &mut detections);
 
     dedup_overlaps(detections)
@@ -121,6 +129,24 @@ fn detect_credit_cards(input: &str, detections: &mut Vec<Detection>) {
             None
         }
     }));
+}
+
+fn detect_api_keys(input: &str, detections: &mut Vec<Detection>) {
+    detections.extend(
+        API_KEY_ASSIGNMENT_RE
+            .captures_iter(input)
+            .filter_map(|captures| {
+                let m = captures.get(1)?;
+                Some(Detection {
+                    kind: SensitiveType::ApiKey,
+                    span: Span {
+                        start: m.start(),
+                        end: m.end(),
+                    },
+                    value: m.as_str().to_string(),
+                })
+            }),
+    );
 }
 
 fn detect_related_domains(

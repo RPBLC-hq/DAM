@@ -4,7 +4,10 @@ pub fn canonical_sensitive_value(kind: SensitiveType, value: &str) -> String {
     match kind {
         SensitiveType::Email => canonical_email_value(value),
         SensitiveType::Domain => canonical_domain_value(value),
-        SensitiveType::Phone | SensitiveType::Ssn | SensitiveType::CreditCard => value.to_string(),
+        SensitiveType::Phone
+        | SensitiveType::Ssn
+        | SensitiveType::CreditCard
+        | SensitiveType::ApiKey => value.to_string(),
     }
 }
 
