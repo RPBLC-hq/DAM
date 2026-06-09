@@ -252,6 +252,47 @@ fn detects_stripe_webhook_signing_secrets_without_assignment_labels() {
 }
 
 #[test]
+fn detects_pem_private_keys_without_assignment_labels() {
+    let key = format!(
+        "{}{}\n{}\n{}{}",
+        "-----BEGIN ",
+        "PRIVATE KEY-----",
+        "A".repeat(64),
+        "-----END ",
+        "PRIVATE KEY-----"
+    );
+    let detections = detect(&format!("private key follows:\n{key}\nplease protect it"));
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::ApiKey);
+    assert_eq!(detections[0].value, key);
+}
+
+#[test]
+fn does_not_detect_public_key_or_incomplete_pem_blocks_as_private_keys() {
+    assert!(
+        detect(&format!(
+            "{}{}\n{}\n{}{}",
+            "-----BEGIN ",
+            "PUBLIC KEY-----",
+            "A".repeat(64),
+            "-----END ",
+            "PUBLIC KEY-----"
+        ))
+        .is_empty()
+    );
+    assert!(
+        detect(&format!(
+            "{}{}\n{}",
+            "-----BEGIN ",
+            "PRIVATE KEY-----",
+            "A".repeat(64)
+        ))
+        .is_empty()
+    );
+}
+
+#[test]
 fn detects_bearer_jwts_as_api_keys() {
     let token = concat!(
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.",

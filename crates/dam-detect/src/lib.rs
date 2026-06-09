@@ -47,6 +47,13 @@ static GOOGLE_API_KEY_RE: Lazy<Regex> =
 static AWS_ACCESS_KEY_ID_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b").unwrap());
 
+static PEM_PRIVATE_KEY_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(
+        r"(?s)-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----\r?\n[A-Za-z0-9+/=\r\n]+-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----",
+    )
+    .unwrap()
+});
+
 static BEARER_JWT_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\bBearer\s+([A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b")
         .unwrap()
@@ -182,6 +189,12 @@ fn detect_api_keys(input: &str, detections: &mut Vec<Detection>) {
     detect_with_regex(
         input,
         &AWS_ACCESS_KEY_ID_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(
+        input,
+        &PEM_PRIVATE_KEY_RE,
         SensitiveType::ApiKey,
         detections,
     );

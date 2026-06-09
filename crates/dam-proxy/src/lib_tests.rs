@@ -16,6 +16,17 @@ fn probe_bearer_jwt() -> String {
     format!("{}.{}.{}", "a".repeat(36), "b".repeat(48), "c".repeat(43))
 }
 
+fn probe_private_key() -> String {
+    format!(
+        "{}{}\n{}\n{}{}",
+        "-----BEGIN ",
+        "PRIVATE KEY-----",
+        "A".repeat(64),
+        "-----END ",
+        "PRIVATE KEY-----"
+    )
+}
+
 fn proxy_config(upstream: String) -> dam_config::DamConfig {
     proxy_config_with_provider(upstream, "openai-compatible")
 }
@@ -1682,6 +1693,43 @@ async fn proxy_http_request_tokenizes_stripe_webhook_secret_before_upstream() {
     assert!(!upstream_body.contains(PROBE_STRIPE_WEBHOOK_SECRET));
     assert!(upstream_body.contains("webhook secret [api_key:"));
     assert!(response_body.contains(PROBE_STRIPE_WEBHOOK_SECRET));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_pem_private_key_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+    let private_key = probe_private_key();
+
+    let body = serde_json::json!({
+        "input": format!("private key follows:\n{private_key}\necho this message")
+    })
+    .to_string();
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(&private_key));
+    let upstream_json: serde_json::Value = serde_json::from_str(&upstream_body).unwrap();
+    let upstream_text = upstream_json
+        .pointer("/input")
+        .and_then(serde_json::Value::as_str)
+        .unwrap();
+    assert!(upstream_text.contains("private key follows:\n[api_key:"));
+    let response_json: serde_json::Value = serde_json::from_str(&response_body).unwrap();
+    let response_text = response_json
+        .pointer("/input")
+        .and_then(serde_json::Value::as_str)
+        .unwrap();
+    assert!(response_text.contains(&private_key));
 }
 
 #[tokio::test]
