@@ -17,6 +17,7 @@ const PROBE_SENDGRID_API_KEY: &str = concat!(
     ".",
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 );
+const PROBE_MAILGUN_API_KEY: &str = concat!("key-", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
 const PROBE_DATABASE_URL: &str = concat!(
     "postgres://app_user:",
     "dbpass_12345",
@@ -1752,6 +1753,29 @@ async fn proxy_http_request_tokenizes_sendgrid_api_key_before_upstream() {
     assert!(!upstream_body.contains(PROBE_SENDGRID_API_KEY));
     assert!(upstream_body.contains("sendgrid token [api_key:"));
     assert!(response_body.contains(PROBE_SENDGRID_API_KEY));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_mailgun_api_key_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body = format!(r#"{{"input":"mailgun token {PROBE_MAILGUN_API_KEY} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_MAILGUN_API_KEY));
+    assert!(upstream_body.contains("mailgun token [api_key:"));
+    assert!(response_body.contains(PROBE_MAILGUN_API_KEY));
 }
 
 #[tokio::test]
