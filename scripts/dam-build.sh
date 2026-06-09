@@ -17,6 +17,9 @@ AGENT_E2E_LISTEN="${DAM_AGENT_E2E_LISTEN:-127.0.0.1:7831}"
 AGENT_E2E_STARTUP_TIMEOUT="${DAM_AGENT_E2E_STARTUP_TIMEOUT:-30}"
 AGENT_E2E_HTTP_TIMEOUT="${DAM_AGENT_E2E_HTTP_TIMEOUT:-60}"
 AGENT_E2E_SMOKE_SCRIPT="${DAM_AGENT_E2E_SMOKE_SCRIPT:-$ROOT/scripts/rpblc_dam_local_llm_e2e_smoke.py}"
+AGENT_E2E_BINARY="${DAM_AGENT_E2E_BINARY:-$ROOT/target/debug/dam-proxy}"
+AGENT_E2E_BUILD="${DAM_AGENT_E2E_BUILD:-1}"
+AGENT_E2E_KEEP_TEMP="${DAM_AGENT_E2E_KEEP_TEMP:-0}"
 MACOS_NE_BUNDLE_ID="${DAM_MACOS_NE_BUNDLE_ID:-com.rpblc.dam.network-extension}"
 
 usage() {
@@ -74,6 +77,9 @@ Environment:
                            Smoke request timeout, currently $AGENT_E2E_HTTP_TIMEOUT
   DAM_AGENT_E2E_SMOKE_SCRIPT
                            Smoke verifier script, currently $AGENT_E2E_SMOKE_SCRIPT
+  DAM_AGENT_E2E_BINARY     dam-proxy binary path for smoke, currently $AGENT_E2E_BINARY
+  DAM_AGENT_E2E_BUILD      Set to 0 to reuse the binary without cargo build, currently $AGENT_E2E_BUILD
+  DAM_AGENT_E2E_KEEP_TEMP  Set to 1 to keep smoke temp vault/log files, currently $AGENT_E2E_KEEP_TEMP
 EOF
 }
 
@@ -260,11 +266,21 @@ cmd_agent_protection_smoke() {
     echo "missing local protection smoke script: $AGENT_E2E_SMOKE_SCRIPT" >&2
     exit 1
   fi
-  run python3 "$AGENT_E2E_SMOKE_SCRIPT" \
-    --upstream "$AGENT_E2E_UPSTREAM" \
-    --listen "$AGENT_E2E_LISTEN" \
-    --startup-timeout "$AGENT_E2E_STARTUP_TIMEOUT" \
+  local smoke_args=(
+    "$AGENT_E2E_SMOKE_SCRIPT"
+    --upstream "$AGENT_E2E_UPSTREAM"
+    --listen "$AGENT_E2E_LISTEN"
+    --startup-timeout "$AGENT_E2E_STARTUP_TIMEOUT"
     --http-timeout "$AGENT_E2E_HTTP_TIMEOUT"
+    --binary "$AGENT_E2E_BINARY"
+  )
+  if [[ "$AGENT_E2E_BUILD" == "0" ]]; then
+    smoke_args+=(--no-build)
+  fi
+  if [[ "$AGENT_E2E_KEEP_TEMP" == "1" ]]; then
+    smoke_args+=(--keep-temp)
+  fi
+  run python3 "${smoke_args[@]}"
 }
 
 cmd_dev() {
