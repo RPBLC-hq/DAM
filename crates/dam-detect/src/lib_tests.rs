@@ -166,19 +166,80 @@ fn rejects_invalid_credit_card() {
 
 #[test]
 fn detects_common_api_key_assignments() {
-    let detections = detect("OPENAI_API_KEY=sk-proj-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    let detections = detect("OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz123456 echo this");
 
     assert_eq!(detections.len(), 1);
     assert_eq!(detections[0].kind, SensitiveType::ApiKey);
     assert_eq!(
         detections[0].value,
-        "sk-proj-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "sk-proj-abcdefghijklmnopqrstuvwxyz123456"
+    );
+}
+
+#[test]
+fn detects_openai_project_keys_without_assignment_labels() {
+    let detections = detect("token sk-proj-abcdefghijklmnopqrstuvwxyz123456");
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::ApiKey);
+    assert_eq!(
+        detections[0].value,
+        "sk-proj-abcdefghijklmnopqrstuvwxyz123456"
+    );
+}
+
+#[test]
+fn detects_anthropic_keys_without_assignment_labels() {
+    let detections = detect("token sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890");
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::ApiKey);
+    assert_eq!(
+        detections[0].value,
+        "sk-ant-api03-abcdefghijklmnopqrstuvwxyz1234567890"
+    );
+}
+
+#[test]
+fn detects_github_tokens_without_assignment_labels() {
+    let detections = detect("token ghp_abcdefghijklmnopqrstuvwxyzABCDEFGH12");
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::ApiKey);
+    assert_eq!(
+        detections[0].value,
+        "ghp_abcdefghijklmnopqrstuvwxyzABCDEFGH12"
+    );
+}
+
+#[test]
+fn detects_stripe_secret_keys_without_assignment_labels() {
+    let detections = detect("token sk_live_1234567890abcdef");
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::ApiKey);
+    assert_eq!(detections[0].value, "sk_live_1234567890abcdef");
+}
+
+#[test]
+fn detects_google_api_keys_without_assignment_labels() {
+    let detections = detect("token AIzaSyD1234567890abcdefghijklmnopqrstuvw");
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::ApiKey);
+    assert_eq!(
+        detections[0].value,
+        "AIzaSyD1234567890abcdefghijklmnopqrstuvw"
     );
 }
 
 #[test]
 fn does_not_detect_short_api_key_like_values() {
     assert!(detect("OPENAI_API_KEY=sk-test").is_empty());
+    assert!(detect("token ghp_short").is_empty());
+    assert!(detect("token sk-ant...hort").is_empty());
+    assert!(detect("token AIza_short").is_empty());
+    assert!(detect("token ***").is_empty());
 }
 
 #[test]

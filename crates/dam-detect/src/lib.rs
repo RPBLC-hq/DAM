@@ -26,6 +26,21 @@ static API_KEY_ASSIGNMENT_RE: Lazy<Regex> = Lazy::new(|| {
     .unwrap()
 });
 
+static OPENAI_API_KEY_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bsk-(?:proj-|svcacct-)?[A-Za-z0-9]{20,}\b").unwrap());
+
+static ANTHROPIC_API_KEY_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bsk-ant-(?:api\d{2}-)?[A-Za-z0-9\-_]{20,}\b").unwrap());
+
+static GITHUB_TOKEN_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bgh[pousr]_[A-Za-z0-9]{30,}\b").unwrap());
+
+static STRIPE_API_KEY_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}\b").unwrap());
+
+static GOOGLE_API_KEY_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bAIza[0-9A-Za-z\-_]{35,40}\b").unwrap());
+
 pub fn detect(input: &str) -> Vec<Detection> {
     detect_with_related_domains(input, &[])
 }
@@ -135,18 +150,34 @@ fn detect_api_keys(input: &str, detections: &mut Vec<Detection>) {
     detections.extend(
         API_KEY_ASSIGNMENT_RE
             .captures_iter(input)
-            .filter_map(|captures| {
-                let m = captures.get(1)?;
-                Some(Detection {
-                    kind: SensitiveType::ApiKey,
-                    span: Span {
-                        start: m.start(),
-                        end: m.end(),
-                    },
-                    value: m.as_str().to_string(),
-                })
-            }),
+            .filter_map(|captures| detection_from_capture(&captures, 1, SensitiveType::ApiKey)),
     );
+    detect_with_regex(input, &OPENAI_API_KEY_RE, SensitiveType::ApiKey, detections);
+    detect_with_regex(
+        input,
+        &ANTHROPIC_API_KEY_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
+    detect_with_regex(input, &GITHUB_TOKEN_RE, SensitiveType::ApiKey, detections);
+    detect_with_regex(input, &STRIPE_API_KEY_RE, SensitiveType::ApiKey, detections);
+    detect_with_regex(input, &GOOGLE_API_KEY_RE, SensitiveType::ApiKey, detections);
+}
+
+fn detection_from_capture(
+    captures: &regex::Captures<'_>,
+    group: usize,
+    kind: SensitiveType,
+) -> Option<Detection> {
+    let m = captures.get(group)?;
+    Some(Detection {
+        kind,
+        span: Span {
+            start: m.start(),
+            end: m.end(),
+        },
+        value: m.as_str().to_string(),
+    })
 }
 
 fn detect_related_domains(

@@ -159,8 +159,9 @@ Full pipeline, resolve path, and control/diagnostics flows are in
 - **Platforms.** Designed for macOS, Linux, and Windows; platform routing, trust, tray, and
   packaging land in staged slices. Partial or delayed behavior is tracked in
   [docs/parking-lot.md](docs/parking-lot.md).
-- **Detection is intentionally narrow.** Email, NANP phone, US SSN, and Luhn-validated
-  cards today. Names, addresses, keys, JWTs, IBANs, and IPs are not covered yet.
+- **Detection is intentionally narrow.** Email, NANP phone, US SSN, Luhn-validated
+  cards, common API-key assignment labels, and direct OpenAI/Anthropic/GitHub/Stripe/Google
+  API-key families today. Names, addresses, JWTs, IBANs, and IPs are not covered yet.
 - **Local stores.** Vault, log, and consent are local SQLite. The web UI shows vault
   values in clear text — treat it as a local control surface, not a public app.
 
