@@ -9,6 +9,7 @@ type CapturedHeadersAndBody = (CapturedHeaders, CapturedBody);
 const PROBE_EMAIL: &str = "scrabb@jnjjj.com";
 const PROBE_EMAIL_MIDDLE_SPACED: &str = "scrabb@j njjj.com";
 const PROBE_API_KEY: &str = concat!("sk-test", "000000000000000000000000");
+const PROBE_AWS_ACCESS_KEY_ID: &str = "AKIAIOSFODNN7EXAMPLE";
 
 fn probe_bearer_jwt() -> String {
     format!("{}.{}.{}", "a".repeat(36), "b".repeat(48), "c".repeat(43))
@@ -1633,6 +1634,29 @@ async fn proxy_http_request_tokenizes_direct_openai_key_before_upstream() {
     assert!(!upstream_body.contains(PROBE_API_KEY));
     assert!(upstream_body.contains("token [api_key:"));
     assert!(response_body.contains(PROBE_API_KEY));
+}
+
+#[tokio::test]
+async fn proxy_http_request_tokenizes_aws_access_key_id_before_upstream() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let proxy = spawn_app(build_app(proxy_config(upstream)).unwrap()).await;
+
+    let body = format!(r#"{{"input":"token {PROBE_AWS_ACCESS_KEY_ID} echo this message"}}"#);
+    let response_body = reqwest::Client::new()
+        .post(format!("{proxy}/v1/chat/completions"))
+        .body(body)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains(PROBE_AWS_ACCESS_KEY_ID));
+    assert!(upstream_body.contains("token [api_key:"));
+    assert!(response_body.contains(PROBE_AWS_ACCESS_KEY_ID));
 }
 
 #[tokio::test]

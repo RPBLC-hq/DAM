@@ -41,6 +41,9 @@ static STRIPE_API_KEY_RE: Lazy<Regex> =
 static GOOGLE_API_KEY_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\bAIza[0-9A-Za-z\-_]{35,40}\b").unwrap());
 
+static AWS_ACCESS_KEY_ID_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b").unwrap());
+
 static BEARER_JWT_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\bBearer\s+([A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b")
         .unwrap()
@@ -167,6 +170,12 @@ fn detect_api_keys(input: &str, detections: &mut Vec<Detection>) {
     detect_with_regex(input, &GITHUB_TOKEN_RE, SensitiveType::ApiKey, detections);
     detect_with_regex(input, &STRIPE_API_KEY_RE, SensitiveType::ApiKey, detections);
     detect_with_regex(input, &GOOGLE_API_KEY_RE, SensitiveType::ApiKey, detections);
+    detect_with_regex(
+        input,
+        &AWS_ACCESS_KEY_ID_RE,
+        SensitiveType::ApiKey,
+        detections,
+    );
     detections.extend(
         BEARER_JWT_RE
             .captures_iter(input)

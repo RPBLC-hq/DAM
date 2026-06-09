@@ -232,6 +232,16 @@ fn detects_google_api_keys_without_assignment_labels() {
 }
 
 #[test]
+fn detects_aws_access_key_ids_without_assignment_labels() {
+    let token = "AKIAIOSFODNN7EXAMPLE";
+    let detections = detect(&format!("aws key {token}"));
+
+    assert_eq!(detections.len(), 1);
+    assert_eq!(detections[0].kind, SensitiveType::ApiKey);
+    assert_eq!(detections[0].value, token);
+}
+
+#[test]
 fn detects_bearer_jwts_as_api_keys() {
     let token = concat!(
         "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.",
@@ -249,8 +259,9 @@ fn detects_bearer_jwts_as_api_keys() {
 fn does_not_detect_short_api_key_like_values() {
     assert!(detect("OPENAI_API_KEY=sk-test").is_empty());
     assert!(detect("token ghp_short").is_empty());
-    assert!(detect("token sk-ant...hort").is_empty());
+    assert!(detect("token sk-ant-api03-short").is_empty());
     assert!(detect("token AIza_short").is_empty());
+    assert!(detect("token AKIA_SHORT").is_empty());
     assert!(detect("Authorization: Bearer short.jwt.parts").is_empty());
     assert!(detect("token ***").is_empty());
 }
