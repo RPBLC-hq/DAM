@@ -897,7 +897,7 @@ fn platform_capture_planned_step(kind: SetupStepKind, message: &str) -> SetupSte
             "disabled".to_string(),
         ]),
         requires_confirmation: false,
-        changes_system: true,
+        changes_system: false,
     }
 }
 
