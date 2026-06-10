@@ -81,6 +81,60 @@ class DamBuildScriptTests(unittest.TestCase):
                 ],
             )
 
+    def test_agent_status_strict_fails_when_doctor_probe_fails(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            app_dir = temp_path / "DAM.app"
+            dam_bin = app_dir / "Contents" / "MacOS" / "dam"
+            bin_dir.mkdir()
+            dam_bin.parent.mkdir(parents=True)
+
+            for command in ["uname", "pgrep", "codesign", "xcrun", "spctl"]:
+                script = bin_dir / command
+                if command == "uname":
+                    script.write_text("#!/usr/bin/env sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+                elif command == "pgrep":
+                    script.write_text("#!/usr/bin/env sh\nexit 1\n", encoding="utf-8")
+                else:
+                    script.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
+                script.chmod(0o755)
+
+            dam_bin.write_text(
+                textwrap.dedent(
+                    """
+                    #!/usr/bin/env sh
+                    if [ "$1" = "doctor" ]; then
+                      exit 7
+                    fi
+                    exit 0
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            dam_bin.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "DAM_INSTALL_DIR": str(temp_path),
+                    "DAM_SIGN_MODE": "development",
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                }
+            )
+            result = subprocess.run(
+                [str(BUILD_SCRIPT), "agent-status", "--strict-status"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            self.assertIn("status_probe_failures: 1", result.stdout)
+            self.assertIn("doctor", result.stdout)
+
     def test_agent_protection_smoke_passes_debug_options_from_environment(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "argv.txt"

@@ -222,21 +222,6 @@ status_try() {
   return 0
 }
 
-status_observe() {
-  printf '+'
-  printf ' %q' "$@"
-  printf '\n'
-  if "$@"; then
-    return 0
-  else
-    local status=$?
-    printf 'status probe reported non-ready (%s):' "$status"
-    printf ' %q' "$@"
-    printf '\n'
-  fi
-  return 0
-}
-
 cmd_check() {
   if [[ -f "$ROOT/crates/dam-web/ui/package.json" ]]; then
     run npm ci --prefix "$ROOT/crates/dam-web/ui"
@@ -395,7 +380,7 @@ cmd_agent_status() {
     status_try failures xcrun stapler validate "$app"
     status_try failures spctl -a -vvv -t exec "$app"
   fi
-  status_observe "$dam_bin" doctor --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
+  status_try failures "$dam_bin" doctor --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
   status_try failures "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
   status_try failures "$dam_bin" setup next-action --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
   status_try failures "$dam_bin" status --json
