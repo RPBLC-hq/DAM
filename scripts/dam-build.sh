@@ -37,6 +37,8 @@ Commands:
   agent-check   Run the standard verification suite plus repo whitespace checks
   agent-protection-smoke
                 Run local API-through-DAM protection smoke against local upstream
+  agent-recovery-smoke
+                Run read-only installed rescue/repair/diagnostics recovery probes
   agent-install Build, notarize when enabled, install, verify, restart, and status DAM
   agent-status  Print installed app, process, package, doctor, and setup status
 
@@ -391,6 +393,32 @@ cmd_agent_status() {
   fi
 }
 
+cmd_agent_recovery_smoke() {
+  require_macos
+  local app dam_bin
+  app="$(installed_app_path)"
+  printf 'DAM agent recovery smoke\n'
+  printf 'install_dir: %s\n' "$INSTALL_DIR"
+  printf 'app: %s\n' "$app"
+  printf 'setup_probe_network_mode: %s\n' "$AGENT_NETWORK_MODE"
+  printf 'setup_probe_trust_mode: %s\n' "$AGENT_TRUST_MODE"
+
+  if [[ ! -d "$app" ]]; then
+    echo "installed app not found" >&2
+    exit 1
+  fi
+
+  dam_bin="$app/Contents/MacOS/dam"
+  if [[ ! -x "$dam_bin" ]]; then
+    echo "installed dam binary not found: $dam_bin" >&2
+    exit 1
+  fi
+
+  run "$dam_bin" setup rescue --dry-run --json
+  run "$dam_bin" setup repair --dry-run --json
+  run "$dam_bin" setup export-diagnostics --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
+}
+
 cmd_agent_install() {
   require_macos
   if [[ "${SKIP_CHECKS:-0}" != "1" ]]; then
@@ -522,6 +550,7 @@ case "$COMMAND" in
   deploy-local) cmd_deploy_local ;;
   agent-check) cmd_agent_check ;;
   agent-protection-smoke) cmd_agent_protection_smoke ;;
+  agent-recovery-smoke) cmd_agent_recovery_smoke ;;
   agent-install) cmd_agent_install ;;
   agent-status) cmd_agent_status ;;
   *)

@@ -23,6 +23,7 @@ class DamBuildScriptTests(unittest.TestCase):
         )
 
         self.assertIn("agent-protection-smoke", result.stdout)
+        self.assertIn("agent-recovery-smoke", result.stdout)
         self.assertIn("DAM_AGENT_E2E_UPSTREAM", result.stdout)
         self.assertIn("DAM_AGENT_E2E_BINARY", result.stdout)
         self.assertIn("DAM_AGENT_E2E_BUILD", result.stdout)
@@ -134,6 +135,64 @@ class DamBuildScriptTests(unittest.TestCase):
             self.assertEqual(1, result.returncode, result.stdout + result.stderr)
             self.assertIn("status_probe_failures: 1", result.stdout)
             self.assertIn("doctor", result.stdout)
+
+    def test_agent_recovery_smoke_runs_read_only_installed_recovery_probes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            app_dir = temp_path / "DAM.app"
+            dam_bin = app_dir / "Contents" / "MacOS" / "dam"
+            calls_path = temp_path / "dam-calls.txt"
+            bin_dir.mkdir()
+            dam_bin.parent.mkdir(parents=True)
+
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
+            dam_bin.write_text(
+                textwrap.dedent(
+                    f"""
+                    #!/usr/bin/env sh
+                    printf '%s\\n' "$*" >> {str(calls_path)!r}
+                    exit 0
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            dam_bin.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "DAM_INSTALL_DIR": str(temp_path),
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                }
+            )
+            subprocess.run(
+                [
+                    str(BUILD_SCRIPT),
+                    "agent-recovery-smoke",
+                    "--network-mode",
+                    "tun",
+                    "--trust-mode",
+                    "local_ca",
+                ],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            self.assertEqual(
+                calls_path.read_text(encoding="utf-8").splitlines(),
+                [
+                    "setup rescue --dry-run --json",
+                    "setup repair --dry-run --json",
+                    "setup export-diagnostics --network-mode tun --trust-mode local_ca --json",
+                ],
+            )
 
     def test_agent_protection_smoke_passes_debug_options_from_environment(self):
         with tempfile.TemporaryDirectory() as temp_dir:
