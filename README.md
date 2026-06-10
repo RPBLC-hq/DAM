@@ -56,7 +56,11 @@ The other side never receives:
 
 ## Install
 
-DAM is built to install in one command on macOS, Linux, and Windows.
+The current MVP install path is staged around the macOS app and the npm/native shims.
+Linux and Windows are design targets, but their routing, trust, tray, and packaging paths
+are still landing in slices. On those platforms, use source builds and explicit proxy
+experiments only; macOS-specific network mutation commands report `unsupported_platform`
+with fallback guidance instead of changing host networking.
 
 ```bash
 npm install -g @rpblc/dam
