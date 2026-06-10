@@ -12,6 +12,7 @@ RESTART_AFTER_INSTALL="${DAM_RESTART_AFTER_INSTALL:-1}"
 AGENT_STATUS_STRICT="${DAM_AGENT_STATUS_STRICT:-0}"
 AGENT_NETWORK_MODE="${DAM_AGENT_NETWORK_MODE:-tun}"
 AGENT_TRUST_MODE="${DAM_AGENT_TRUST_MODE:-local_ca}"
+AGENT_STATE_DIR="${DAM_AGENT_STATE_DIR:-}"
 AGENT_E2E_UPSTREAM="${DAM_AGENT_E2E_UPSTREAM:-http://127.0.0.1:8080}"
 AGENT_E2E_LISTEN="${DAM_AGENT_E2E_LISTEN:-127.0.0.1:7831}"
 AGENT_E2E_STARTUP_TIMEOUT="${DAM_AGENT_E2E_STARTUP_TIMEOUT:-30}"
@@ -56,6 +57,7 @@ Options:
   --strict-status                  Make agent-status fail when a status probe fails
   --network-mode MODE              Setup mode used by agent-status probes
   --trust-mode MODE                Trust mode used by agent-status probes
+  --state-dir DIR                  State directory used by setup/doctor probes
   -h, --help                       Show this help
 
 Environment:
@@ -71,6 +73,7 @@ Environment:
   DAM_AGENT_STATUS_STRICT   Set to 1 to make agent-status fail on probe errors
   DAM_AGENT_NETWORK_MODE    Setup mode for agent-status, currently tun
   DAM_AGENT_TRUST_MODE      Trust mode for agent-status, currently local_ca
+  DAM_AGENT_STATE_DIR       Optional state directory for setup/doctor probes
   DAM_AGENT_E2E_UPSTREAM    Local OpenAI-compatible smoke upstream, currently $AGENT_E2E_UPSTREAM
   DAM_AGENT_E2E_LISTEN      Loopback listen address for smoke proxy, currently $AGENT_E2E_LISTEN
   DAM_AGENT_E2E_STARTUP_TIMEOUT
@@ -363,6 +366,9 @@ cmd_agent_status() {
   printf 'app: %s\n' "$app"
   printf 'setup_probe_network_mode: %s\n' "$AGENT_NETWORK_MODE"
   printf 'setup_probe_trust_mode: %s\n' "$AGENT_TRUST_MODE"
+  if [[ -n "$AGENT_STATE_DIR" ]]; then
+    printf 'setup_probe_state_dir: %s\n' "$AGENT_STATE_DIR"
+  fi
   if [[ ! -d "$app" ]]; then
     echo "installed app not found"
     exit 1
@@ -382,10 +388,14 @@ cmd_agent_status() {
     status_try failures xcrun stapler validate "$app"
     status_try failures spctl -a -vvv -t exec "$app"
   fi
-  status_try failures "$dam_bin" doctor --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
-  status_try failures "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
-  status_try failures "$dam_bin" setup next-action --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
-  status_try failures "$dam_bin" setup export-diagnostics --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
+  local state_args=()
+  if [[ -n "$AGENT_STATE_DIR" ]]; then
+    state_args=(--state-dir "$AGENT_STATE_DIR")
+  fi
+  status_try failures "$dam_bin" doctor --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
+  status_try failures "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
+  status_try failures "$dam_bin" setup next-action --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
+  status_try failures "$dam_bin" setup export-diagnostics --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
   status_try failures "$dam_bin" status --json
 
   printf 'status_probe_failures: %s\n' "$failures"
@@ -403,6 +413,9 @@ cmd_agent_recovery_smoke() {
   printf 'app: %s\n' "$app"
   printf 'setup_probe_network_mode: %s\n' "$AGENT_NETWORK_MODE"
   printf 'setup_probe_trust_mode: %s\n' "$AGENT_TRUST_MODE"
+  if [[ -n "$AGENT_STATE_DIR" ]]; then
+    printf 'setup_probe_state_dir: %s\n' "$AGENT_STATE_DIR"
+  fi
 
   if [[ ! -d "$app" ]]; then
     echo "installed app not found" >&2
@@ -415,9 +428,13 @@ cmd_agent_recovery_smoke() {
     exit 1
   fi
 
-  run "$dam_bin" setup rescue --dry-run --json
-  run "$dam_bin" setup repair --dry-run --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
-  run "$dam_bin" setup export-diagnostics --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
+  local state_args=()
+  if [[ -n "$AGENT_STATE_DIR" ]]; then
+    state_args=(--state-dir "$AGENT_STATE_DIR")
+  fi
+  run "$dam_bin" setup rescue --dry-run "${state_args[@]}" --json
+  run "$dam_bin" setup repair --dry-run --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
+  run "$dam_bin" setup export-diagnostics --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
 }
 
 cmd_agent_install() {
@@ -517,6 +534,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --trust-mode)
       AGENT_TRUST_MODE="${2:?--trust-mode requires a value}"
+      shift 2
+      ;;
+    --state-dir)
+      AGENT_STATE_DIR="${2:?--state-dir requires a directory}"
       shift 2
       ;;
     -h|--help)

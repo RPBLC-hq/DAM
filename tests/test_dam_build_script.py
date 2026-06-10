@@ -28,6 +28,7 @@ class DamBuildScriptTests(unittest.TestCase):
         self.assertIn("DAM_AGENT_E2E_BINARY", result.stdout)
         self.assertIn("DAM_AGENT_E2E_BUILD", result.stdout)
         self.assertIn("DAM_AGENT_E2E_KEEP_TEMP", result.stdout)
+        self.assertIn("DAM_AGENT_STATE_DIR", result.stdout)
 
     def test_agent_protection_smoke_invokes_local_smoke_script_with_safe_defaults(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -143,6 +144,7 @@ class DamBuildScriptTests(unittest.TestCase):
             app_dir = temp_path / "DAM.app"
             dam_bin = app_dir / "Contents" / "MacOS" / "dam"
             calls_path = temp_path / "dam-calls.txt"
+            state_dir = temp_path / "state"
             bin_dir.mkdir()
             dam_bin.parent.mkdir(parents=True)
 
@@ -173,6 +175,7 @@ class DamBuildScriptTests(unittest.TestCase):
                 {
                     "DAM_INSTALL_DIR": str(temp_path),
                     "DAM_SIGN_MODE": "development",
+                    "DAM_AGENT_STATE_DIR": str(state_dir),
                     "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
                 }
             )
@@ -194,7 +197,7 @@ class DamBuildScriptTests(unittest.TestCase):
             )
 
             self.assertIn(
-                "setup export-diagnostics --network-mode tun --trust-mode local_ca --json",
+                f"setup export-diagnostics --network-mode tun --trust-mode local_ca --state-dir {state_dir} --json",
                 calls_path.read_text(encoding="utf-8").splitlines(),
             )
 
@@ -205,6 +208,7 @@ class DamBuildScriptTests(unittest.TestCase):
             app_dir = temp_path / "DAM.app"
             dam_bin = app_dir / "Contents" / "MacOS" / "dam"
             calls_path = temp_path / "dam-calls.txt"
+            state_dir = temp_path / "state"
             bin_dir.mkdir()
             dam_bin.parent.mkdir(parents=True)
 
@@ -227,6 +231,7 @@ class DamBuildScriptTests(unittest.TestCase):
             env.update(
                 {
                     "DAM_INSTALL_DIR": str(temp_path),
+                    "DAM_AGENT_STATE_DIR": str(state_dir),
                     "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
                 }
             )
@@ -250,9 +255,9 @@ class DamBuildScriptTests(unittest.TestCase):
             self.assertEqual(
                 calls_path.read_text(encoding="utf-8").splitlines(),
                 [
-                    "setup rescue --dry-run --json",
-                    "setup repair --dry-run --network-mode tun --trust-mode local_ca --json",
-                    "setup export-diagnostics --network-mode tun --trust-mode local_ca --json",
+                    f"setup rescue --dry-run --state-dir {state_dir} --json",
+                    f"setup repair --dry-run --network-mode tun --trust-mode local_ca --state-dir {state_dir} --json",
+                    f"setup export-diagnostics --network-mode tun --trust-mode local_ca --state-dir {state_dir} --json",
                 ],
             )
 
