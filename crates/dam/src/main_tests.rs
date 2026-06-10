@@ -191,6 +191,18 @@ fn parses_doctor_and_setup_agent_commands() {
 }
 
 #[test]
+fn setup_plan_usage_is_specific_to_requested_command() {
+    let status = usage_setup_plan("status");
+    assert!(status.starts_with("Usage: dam setup status "));
+    assert!(status.contains("full idempotent setup checklist"));
+    assert!(!status.contains("status|plan|next-action|resume|export-diagnostics"));
+
+    let next_action = usage_setup_plan("next-action");
+    assert!(next_action.starts_with("Usage: dam setup next-action "));
+    assert!(next_action.contains("only the next setup action"));
+}
+
+#[test]
 fn setup_rescue_rejects_dry_run_with_yes() {
     let error = parse_cli([
         "setup".to_string(),

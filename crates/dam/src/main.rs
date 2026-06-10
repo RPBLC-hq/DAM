@@ -2061,16 +2061,28 @@ fn parse_setup_command(args: &[String]) -> Result<Cli, String> {
 
     match args[0].as_str() {
         "status" => Ok(Cli {
-            command: CommandKind::Setup(SetupArgs::Status(parse_setup_plan_args(&args[1..])?)),
+            command: CommandKind::Setup(SetupArgs::Status(parse_setup_plan_args(
+                "status",
+                &args[1..],
+            )?)),
         }),
         "plan" => Ok(Cli {
-            command: CommandKind::Setup(SetupArgs::Plan(parse_setup_plan_args(&args[1..])?)),
+            command: CommandKind::Setup(SetupArgs::Plan(parse_setup_plan_args(
+                "plan",
+                &args[1..],
+            )?)),
         }),
         "next-action" => Ok(Cli {
-            command: CommandKind::Setup(SetupArgs::NextAction(parse_setup_plan_args(&args[1..])?)),
+            command: CommandKind::Setup(SetupArgs::NextAction(parse_setup_plan_args(
+                "next-action",
+                &args[1..],
+            )?)),
         }),
         "resume" => Ok(Cli {
-            command: CommandKind::Setup(SetupArgs::Resume(parse_setup_plan_args(&args[1..])?)),
+            command: CommandKind::Setup(SetupArgs::Resume(parse_setup_plan_args(
+                "resume",
+                &args[1..],
+            )?)),
         }),
         "rescue" => Ok(Cli {
             command: CommandKind::Setup(SetupArgs::Rescue(parse_setup_rescue_args(&args[1..])?)),
@@ -2080,6 +2092,7 @@ fn parse_setup_command(args: &[String]) -> Result<Cli, String> {
         }),
         "export-diagnostics" => Ok(Cli {
             command: CommandKind::Setup(SetupArgs::ExportDiagnostics(parse_setup_plan_args(
+                "export-diagnostics",
                 &args[1..],
             )?)),
         }),
@@ -2087,7 +2100,7 @@ fn parse_setup_command(args: &[String]) -> Result<Cli, String> {
     }
 }
 
-fn parse_setup_plan_args(args: &[String]) -> Result<SetupPlanArgs, String> {
+fn parse_setup_plan_args(command: &str, args: &[String]) -> Result<SetupPlanArgs, String> {
     let mut parsed = SetupPlanArgs::default();
     let mut i = 0;
     while i < args.len() {
@@ -2114,7 +2127,7 @@ fn parse_setup_plan_args(args: &[String]) -> Result<SetupPlanArgs, String> {
                 parsed.trust_mode = required_value(args, i, "--trust-mode")?.parse()?;
             }
             "-h" | "--help" => {
-                println!("{}", usage_setup_plan());
+                println!("{}", usage_setup_plan(command));
                 std::process::exit(0);
             }
             arg => return Err(format!("unknown setup argument: {arg}")),
@@ -2184,7 +2197,7 @@ fn parse_setup_repair_args(args: &[String]) -> Result<SetupRepairArgs, String> {
         return Err("setup repair cannot combine --dry-run and --yes".to_string());
     }
     Ok(SetupRepairArgs {
-        plan: parse_setup_plan_args(&plan_args)?,
+        plan: parse_setup_plan_args("repair", &plan_args)?,
         yes,
     })
 }
@@ -4260,8 +4273,19 @@ fn usage_setup() -> &'static str {
     "Usage: dam setup <command>\n\nCommands:\n  status              Alias for plan; print the full idempotent setup checklist\n  plan                Print the full idempotent setup checklist\n  next-action         Print only the next setup action\n  resume              Alias for next-action after restart or interrupted setup\n  rescue              Preview or apply local setup rescue actions\n  repair              Preview or apply rescue, then print the current setup plan\n  export-diagnostics  Export offline setup diagnostics"
 }
 
-fn usage_setup_plan() -> &'static str {
-    "Usage: dam setup status|plan|next-action|resume|export-diagnostics [--config PATH] [--state-dir PATH] [--proxy-url URL] [--network-mode explicit_proxy|system_proxy|tun] [--trust-mode disabled|local_ca] [--json]"
+fn usage_setup_plan(command: &str) -> String {
+    let description = match command {
+        "status" => "Print the full idempotent setup checklist.",
+        "plan" => "Print the full idempotent setup checklist.",
+        "next-action" => "Print only the next setup action.",
+        "resume" => "Print the next setup action after restart or interrupted setup.",
+        "export-diagnostics" => "Export offline setup diagnostics and next recovery guidance.",
+        "repair" => "Preview repair setup planning options.",
+        _ => "Print setup planning information.",
+    };
+    format!(
+        "Usage: dam setup {command} [--config PATH] [--state-dir PATH] [--proxy-url URL] [--network-mode explicit_proxy|system_proxy|tun] [--trust-mode disabled|local_ca] [--json]\n\n{description}"
+    )
 }
 
 fn usage_setup_rescue() -> &'static str {
