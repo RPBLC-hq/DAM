@@ -29,6 +29,7 @@ Status: implemented first extraction.
   macOS emits System Extension approval, reboot, Network Extension manager configuration, manager enablement, and manager connection as separate steps;
   Linux emits a Linux transparent routing step and currently blocks to explicit proxy mode until that backend lands;
   Windows emits a Windows Filtering Platform step and currently blocks to explicit proxy mode until that backend lands;
+  unsupported-platform fallback commands are marked as non-system-mutating because they switch to explicit-proxy daemon setup rather than installing routing or trust state;
 - local CA trust readiness when requested;
 - daemon lifecycle readiness for the requested network/trust modes.
 

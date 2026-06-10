@@ -575,6 +575,10 @@ fn tun_capture_setup_steps_are_platform_specific_for_linux_and_windows() {
             "disabled".to_string()
         ])
     );
+    assert!(!linux_steps[0].requires_confirmation);
+    assert!(!linux_steps[0].changes_system);
+    assert!(!windows_steps[0].requires_confirmation);
+    assert!(!windows_steps[0].changes_system);
 }
 
 #[cfg(target_os = "macos")]
