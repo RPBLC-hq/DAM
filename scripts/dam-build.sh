@@ -416,7 +416,7 @@ cmd_agent_recovery_smoke() {
   fi
 
   run "$dam_bin" setup rescue --dry-run --json
-  run "$dam_bin" setup repair --dry-run --json
+  run "$dam_bin" setup repair --dry-run --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
   run "$dam_bin" setup export-diagnostics --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
 }
 

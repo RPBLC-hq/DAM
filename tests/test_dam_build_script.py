@@ -251,7 +251,7 @@ class DamBuildScriptTests(unittest.TestCase):
                 calls_path.read_text(encoding="utf-8").splitlines(),
                 [
                     "setup rescue --dry-run --json",
-                    "setup repair --dry-run --json",
+                    "setup repair --dry-run --network-mode tun --trust-mode local_ca --json",
                     "setup export-diagnostics --network-mode tun --trust-mode local_ca --json",
                 ],
             )
