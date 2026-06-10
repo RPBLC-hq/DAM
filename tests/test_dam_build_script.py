@@ -136,6 +136,68 @@ class DamBuildScriptTests(unittest.TestCase):
             self.assertIn("status_probe_failures: 1", result.stdout)
             self.assertIn("doctor", result.stdout)
 
+    def test_agent_status_runs_export_diagnostics_probe(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            app_dir = temp_path / "DAM.app"
+            dam_bin = app_dir / "Contents" / "MacOS" / "dam"
+            calls_path = temp_path / "dam-calls.txt"
+            bin_dir.mkdir()
+            dam_bin.parent.mkdir(parents=True)
+
+            for command in ["uname", "pgrep", "codesign", "xcrun", "spctl"]:
+                script = bin_dir / command
+                if command == "uname":
+                    script.write_text("#!/usr/bin/env sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+                elif command == "pgrep":
+                    script.write_text("#!/usr/bin/env sh\nexit 1\n", encoding="utf-8")
+                else:
+                    script.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
+                script.chmod(0o755)
+
+            dam_bin.write_text(
+                textwrap.dedent(
+                    f"""
+                    #!/usr/bin/env sh
+                    printf '%s\\n' "$*" >> {str(calls_path)!r}
+                    exit 0
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            dam_bin.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "DAM_INSTALL_DIR": str(temp_path),
+                    "DAM_SIGN_MODE": "development",
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                }
+            )
+            subprocess.run(
+                [
+                    str(BUILD_SCRIPT),
+                    "agent-status",
+                    "--network-mode",
+                    "tun",
+                    "--trust-mode",
+                    "local_ca",
+                ],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            self.assertIn(
+                "setup export-diagnostics --network-mode tun --trust-mode local_ca --json",
+                calls_path.read_text(encoding="utf-8").splitlines(),
+            )
+
     def test_agent_recovery_smoke_runs_read_only_installed_recovery_probes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
