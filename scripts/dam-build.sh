@@ -385,6 +385,7 @@ cmd_agent_status() {
   status_try failures "$dam_bin" doctor --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
   status_try failures "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
   status_try failures "$dam_bin" setup next-action --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
+  status_try failures "$dam_bin" setup export-diagnostics --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" --json
   status_try failures "$dam_bin" status --json
 
   printf 'status_probe_failures: %s\n' "$failures"
