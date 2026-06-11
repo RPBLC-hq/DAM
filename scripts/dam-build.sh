@@ -560,6 +560,25 @@ case "$SIGN_MODE" in
     ;;
 esac
 
+mode_errors=0
+case "$AGENT_NETWORK_MODE" in
+  explicit_proxy|system_proxy|tun) ;;
+  *)
+    echo "invalid agent network mode: $AGENT_NETWORK_MODE (expected explicit_proxy, system_proxy, or tun)" >&2
+    mode_errors=1
+    ;;
+esac
+case "$AGENT_TRUST_MODE" in
+  disabled|local_ca) ;;
+  *)
+    echo "invalid agent trust mode: $AGENT_TRUST_MODE (expected disabled or local_ca)" >&2
+    mode_errors=1
+    ;;
+esac
+if [[ "$mode_errors" != "0" ]]; then
+  exit 2
+fi
+
 mkdir -p "$OUT_DIR" "$MACOS_OUT"
 
 case "$COMMAND" in

@@ -83,6 +83,29 @@ class DamBuildScriptTests(unittest.TestCase):
                 ],
             )
 
+    def test_agent_status_rejects_invalid_setup_probe_modes_before_macos_checks(self):
+        result = subprocess.run(
+            [
+                str(BUILD_SCRIPT),
+                "agent-status",
+                "--network-mode",
+                "wireguard",
+                "--trust-mode",
+                "magic_ca",
+            ],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn("invalid agent network mode: wireguard", result.stderr)
+        self.assertIn("expected explicit_proxy, system_proxy, or tun", result.stderr)
+        self.assertIn("invalid agent trust mode: magic_ca", result.stderr)
+        self.assertIn("expected disabled or local_ca", result.stderr)
+        self.assertNotIn("macOS packaging/notarization requires Darwin", result.stderr)
+
     def test_agent_status_strict_fails_when_doctor_probe_fails(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
