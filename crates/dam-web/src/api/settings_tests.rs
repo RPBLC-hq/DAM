@@ -120,7 +120,7 @@ fn capture_scope_preserves_explicit_empty_enabled_profile_state() {
 }
 
 #[test]
-fn settings_apps_include_valid_custom_profile_files() {
+fn settings_apps_hide_custom_profile_files_for_mvp() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
     let integration_dir = state_dir.join("integrations");
@@ -145,13 +145,10 @@ fn settings_apps_include_valid_custom_profile_files() {
     let state = test_state(dir.path());
 
     let apps = app_settings_for_state_dir(&state, &state_dir).unwrap();
-    let custom = apps
-        .iter()
-        .find(|app| app.id == "example-mail")
-        .expect("custom profile should appear in Settings apps");
+    let ids: Vec<_> = apps.iter().map(|app| app.id.as_str()).collect();
 
-    assert_eq!(custom.name, "Example Mail");
-    assert!(custom.enabled);
+    assert_eq!(ids, vec!["claude", "chatgpt"]);
+    assert!(!ids.contains(&"example-mail"));
 }
 
 #[test]

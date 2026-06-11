@@ -17,6 +17,7 @@ use crate::error::{Ok, WebError, WebErrorCode, WebResult};
 use crate::events_bus::EventTopic;
 
 const DAM_STATE_DIR_ENV: &str = "DAM_STATE_DIR";
+const MVP_SETTINGS_PROFILE_IDS: &[&str] = &["claude", "chatgpt"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CaptureScope {
@@ -121,6 +122,7 @@ fn app_settings_for_state_dir(
     dam_integrations::profiles_from_state(&proxy_url, &integration_state_dir)
         .map_err(settings_error)?
         .into_iter()
+        .filter(|profile| MVP_SETTINGS_PROFILE_IDS.contains(&profile.id.as_str()))
         .map(|profile| {
             let target_path =
                 dam_integrations::profile_definition_path(&integration_state_dir, &profile.id);
