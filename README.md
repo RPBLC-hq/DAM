@@ -83,10 +83,11 @@ setup, trust, and routing — no flags to memorize.
 dam-tray
 ```
 
-Click the `[R:]` menu-bar item and hit **Connect**. To confirm DAM is
-mediating:
+Click the `[R:]` menu-bar item and hit **Connect**. To inspect the full
+idempotent setup checklist or the running daemon state:
 
 ```bash
+dam setup status --json
 dam status --json
 ```
 
