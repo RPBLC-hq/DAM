@@ -36,6 +36,8 @@ Commands:
   release-macos Run checks, build signed DAM.app, notarize, staple, and zip it
   deploy-local  Build signed DAM.app and copy it to /Applications or --install-dir
   agent-check   Run the standard verification suite plus repo whitespace checks
+  detector-bench
+                Run the synthetic DAM detector benchmark harness
   agent-protection-smoke
                 Run local API-through-DAM protection smoke against local upstream
   agent-recovery-smoke
@@ -249,6 +251,10 @@ cmd_agent_check() {
   else
     printf 'Skipped git diff --check because %s is not a git checkout.\n' "$ROOT"
   fi
+}
+
+cmd_detector_bench() {
+  run cargo run -q -p dam-detect-bench --
 }
 
 cmd_agent_protection_smoke() {
@@ -590,6 +596,7 @@ case "$COMMAND" in
   release-macos) cmd_release_macos ;;
   deploy-local) cmd_deploy_local ;;
   agent-check) cmd_agent_check ;;
+  detector-bench) cmd_detector_bench ;;
   agent-protection-smoke) cmd_agent_protection_smoke ;;
   agent-recovery-smoke) cmd_agent_recovery_smoke ;;
   agent-install) cmd_agent_install ;;
