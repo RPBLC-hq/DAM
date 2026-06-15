@@ -9,11 +9,15 @@ The app frame is a React shell served from embedded `/assets/bundle.js`, `/asset
 ## Current Routes
 
 ```text
-/                 Connect surface
+/                 smart landing: web redirects to /insights when protected, /connect otherwise; tray stays on /connect
 /connect          Connect surface
+/insights         web privacy-dividend dashboard
+/wallet           local Wallet and allowed-consent roster
 /allowed          compatibility redirect to /wallet?state=allowed
 /activity         dam-log derived activity feed
 /settings         local preferences, integrations, and daemon controls
+/system           web-only operator system log
+/health           web-only doctor/diagnostics health surface
 /*                frame fallback
 ```
 
