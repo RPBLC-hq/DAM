@@ -1,3 +1,5 @@
+use dam_core::SensitiveType;
+
 use super::*;
 
 #[test]
@@ -19,12 +21,12 @@ fn benchmark_contract_baseline_has_no_failures() {
 fn expected_records_resolve_exact_spans_from_case_values() {
     let case = Case {
         name: "email/basic",
-        input: "email alice@example.com",
-        expected: &[ExpectedDetection {
+        input: "email alice@example.com".to_string(),
+        expected: vec![ExpectedDetection {
             kind: SensitiveType::Email,
-            value: "alice@example.com",
+            value: "alice@example.com".to_string(),
         }],
-        related_domains: &[],
+        related_domains: Vec::new(),
     };
 
     let expected = expected_records(&case).expect("expected spans should resolve");
