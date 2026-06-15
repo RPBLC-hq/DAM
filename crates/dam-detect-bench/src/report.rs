@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use crate::metrics::{MetricKind, MetricSummary};
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OutputFormat {
     Text,
     Json,
