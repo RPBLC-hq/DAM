@@ -230,11 +230,7 @@ fn profiles_from_state_loads_valid_custom_profile_files() {
     assert!(profiles.iter().any(|profile| profile.id == "example-mail"));
     assert_eq!(
         runtime_enabled_profile_ids(&state_dir).unwrap(),
-        Some(vec![
-            "claude".to_string(),
-            "chatgpt".to_string(),
-            "example-mail".to_string()
-        ])
+        Some(vec!["claude".to_string(), "chatgpt".to_string()])
     );
 }
 
@@ -547,13 +543,42 @@ fn enabled_integrations_roundtrip_and_fallback_to_active_profile() {
 }
 
 #[test]
-fn runtime_enabled_integrations_default_to_all_profiles() {
+fn runtime_enabled_integrations_default_to_bundled_profiles_only() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("integrations");
 
     assert_eq!(
         runtime_enabled_profile_ids(&state_dir).unwrap(),
         Some(vec!["claude".to_string(), "chatgpt".to_string()])
+    );
+
+    let profiles_dir = profile_definitions_dir(&state_dir);
+    fs::create_dir_all(&profiles_dir).unwrap();
+    fs::write(
+        profiles_dir.join("example-mail.json"),
+        r#"{
+          "id": "example-mail",
+          "name": "Example Mail",
+          "summary": "Route Example Mail traffic through DAM.",
+          "provider": "generic-http",
+          "traffic_app_ids": ["example-mail"],
+          "connect_args": [],
+          "settings": [],
+          "commands": [],
+          "notes": [],
+          "automation": "connect_preset"
+        }"#,
+    )
+    .unwrap();
+    assert_eq!(
+        runtime_enabled_profile_ids(&state_dir).unwrap(),
+        Some(vec!["claude".to_string(), "chatgpt".to_string()])
+    );
+
+    set_active_profile("example-mail", &state_dir).unwrap();
+    assert_eq!(
+        runtime_enabled_profile_ids(&state_dir).unwrap(),
+        Some(vec!["example-mail".to_string()])
     );
 
     set_active_profile("claude", &state_dir).unwrap();

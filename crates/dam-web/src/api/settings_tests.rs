@@ -152,6 +152,48 @@ fn settings_apps_hide_custom_profile_files_for_mvp() {
 }
 
 #[test]
+fn settings_app_toggles_accept_only_mvp_visible_profiles() {
+    assert!(is_mvp_settings_profile("claude"));
+    assert!(is_mvp_settings_profile("chatgpt"));
+    assert!(!is_mvp_settings_profile("example-mail"));
+    assert!(!is_mvp_settings_profile("codex"));
+}
+
+#[test]
+fn settings_app_toggle_rejects_hidden_custom_profile_ids() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+    let integration_dir = state_dir.join("integrations");
+    let profiles_dir = dam_integrations::profile_definitions_dir(&integration_dir);
+    std::fs::create_dir_all(&profiles_dir).unwrap();
+    std::fs::write(
+        profiles_dir.join("example-mail.json"),
+        r#"{
+          "id": "example-mail",
+          "name": "Example Mail",
+          "summary": "Route Example Mail traffic through DAM.",
+          "provider": "generic-http",
+          "traffic_app_ids": ["example-mail"],
+          "connect_args": [],
+          "settings": [],
+          "commands": [],
+          "notes": [],
+          "automation": "connect_preset"
+        }"#,
+    )
+    .unwrap();
+    let state = test_state(dir.path());
+
+    let error = set_app_enabled_in_state_dir(&state, "example-mail", true, &state_dir).unwrap_err();
+
+    assert_eq!(error.code, WebErrorCode::InvalidRequest);
+    assert_eq!(
+        dam_integrations::runtime_enabled_profile_ids(&integration_dir).unwrap(),
+        Some(vec!["claude".to_string(), "chatgpt".to_string()])
+    );
+}
+
+#[test]
 fn pending_network_extension_approval_keeps_profile_toggle_state() {
     assert_eq!(
         network_extension_result_to_reconcile_outcome(

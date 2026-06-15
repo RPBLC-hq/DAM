@@ -24,7 +24,7 @@ cargo run -p dam-daemon -- run
 
 ## Defaults
 
-`dam connect` defaults to every loaded integration profile when no explicit enabled-profile state and no legacy active profile exist. The bundled install starts with the Claude and ChatGPT profiles enabled, which expands to all of their traffic app routes:
+`dam connect` defaults to the bundled Claude and ChatGPT profiles when no explicit enabled-profile state and no legacy active profile exist. Imported/custom profile JSON remains opt-in: it is used only after the user or a headless caller selects/enables it explicitly. The bundled install starts with the Claude and ChatGPT profiles enabled, which expands to all of their traffic app routes:
 
 ```text
 listen: 127.0.0.1:7828
@@ -109,7 +109,7 @@ Daemon options:
 --resolve-inbound    Restore DAM references in inbound responses
 ```
 
-`--profile` and `--apply` are `dam connect` front-end options. They are resolved before daemon startup and are not accepted by the standalone `dam-daemon run` parser. The selected or enabled profile controls the first daemon target for direct app-layer requests and supplies runtime `traffic.enabled_apps` filtering. With no saved app selection, DAM defaults to every loaded integration profile. It then expands the runtime target set with every active bundled traffic profile route, so one daemon can match all configured transparent routes at the same local endpoint. Settings app toggles use the same capture scope: the web layer writes enabled profile state, reinstalls the platform route host list, and reconnects the daemon with explicit `--traffic-app` and `--target` args so the running proxy cannot keep a stale route set. `--apply` additionally ensures selected DAM-owned catalog profile JSON when explicitly requested; Connect onboarding does not require that fallback setup.
+`--profile` and `--apply` are `dam connect` front-end options. They are resolved before daemon startup and are not accepted by the standalone `dam-daemon run` parser. The selected or enabled profile controls the first daemon target for direct app-layer requests and supplies runtime `traffic.enabled_apps` filtering. With no saved app selection, DAM defaults to the bundled Claude and ChatGPT profiles; imported/custom profile JSON is headless and opt-in until explicitly selected or enabled. DAM then expands the runtime target set with every active bundled traffic profile route, so one daemon can match all configured transparent routes at the same local endpoint. Settings app toggles use the same capture scope: the web layer writes enabled profile state, reinstalls the platform route host list, and reconnects the daemon through the common `dam connect` profile expansion path so the running proxy cannot keep a stale route set. `--apply` additionally ensures selected DAM-owned catalog profile JSON when explicitly requested; Connect onboarding does not require that fallback setup.
 
 `dam connect` preflights transparent setup before daemon startup. `system_proxy` mode requires DAM-managed macOS PAC routing to already be installed. `tun` mode requires macOS Network Extension capture to be active. `local_ca` trust mode requires local CA trust readiness. Missing prerequisites are reported with the next explicit `dam network ...` or `dam trust ...` command instead of starting a partially transparent daemon.
 

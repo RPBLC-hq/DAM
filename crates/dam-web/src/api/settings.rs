@@ -19,6 +19,10 @@ use crate::events_bus::EventTopic;
 const DAM_STATE_DIR_ENV: &str = "DAM_STATE_DIR";
 const MVP_SETTINGS_PROFILE_IDS: &[&str] = &["claude", "chatgpt"];
 
+fn is_mvp_settings_profile(profile_id: &str) -> bool {
+    MVP_SETTINGS_PROFILE_IDS.contains(&profile_id)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CaptureScope {
     hosts: Vec<String>,
@@ -242,6 +246,18 @@ pub async fn post_rollback(
 
 fn set_app_enabled(state: &AppState, profile_id: &str, enabled: bool) -> Result<(), WebError> {
     let state_dir = dam_state_dir()?;
+    set_app_enabled_in_state_dir(state, profile_id, enabled, &state_dir)
+}
+
+fn set_app_enabled_in_state_dir(
+    state: &AppState,
+    profile_id: &str,
+    enabled: bool,
+    state_dir: &FsPath,
+) -> Result<(), WebError> {
+    if !is_mvp_settings_profile(profile_id) {
+        return Err(WebError::new(WebErrorCode::InvalidRequest));
+    }
     let integration_state_dir = state_dir.join("integrations");
     dam_integrations::ensure_bundled_profile_files(&integration_state_dir)
         .map_err(settings_error)?;
@@ -252,7 +268,7 @@ fn set_app_enabled(state: &AppState, profile_id: &str, enabled: bool) -> Result<
             .any(|profile| profile.profile_id == profile_id);
     dam_integrations::set_integration_enabled(profile_id, enabled, &integration_state_dir)
         .map_err(settings_error)?;
-    match reconcile_running_capture_scope(state, &state_dir) {
+    match reconcile_running_capture_scope(state, state_dir) {
         Ok(ReconcileOutcome::Reconciled | ReconcileOutcome::SetupPending) => {}
         Err(error) => {
             if previously_enabled != enabled {
@@ -261,7 +277,7 @@ fn set_app_enabled(state: &AppState, profile_id: &str, enabled: bool) -> Result<
                     previously_enabled,
                     &integration_state_dir,
                 );
-                let _ = reconcile_running_capture_scope(state, &state_dir);
+                let _ = reconcile_running_capture_scope(state, state_dir);
             }
             return Err(error);
         }

@@ -389,13 +389,11 @@ fn validate_integration_profile(profile: &IntegrationProfile) -> Result<(), Stri
     Ok(())
 }
 
-fn default_enabled_integrations(integration_state_dir: &Path) -> Vec<EnabledIntegrationState> {
-    let profiles = profiles_from_state(DEFAULT_PROXY_URL, integration_state_dir)
-        .unwrap_or_else(|_| profiles(DEFAULT_PROXY_URL));
-    profiles
+fn default_enabled_integrations(_integration_state_dir: &Path) -> Vec<EnabledIntegrationState> {
+    profile_ids()
         .into_iter()
         .map(|profile_id| EnabledIntegrationState {
-            profile_id: profile_id.id,
+            profile_id,
             enabled_at_unix: 0,
         })
         .collect()
