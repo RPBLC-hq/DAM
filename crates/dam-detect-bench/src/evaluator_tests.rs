@@ -35,3 +35,19 @@ fn expected_records_resolve_exact_spans_from_case_values() {
     assert_eq!(expected[0].start, 6);
     assert_eq!(expected[0].end, 23);
 }
+
+#[test]
+fn expected_records_errors_on_ambiguous_value() {
+    let case = Case {
+        name: "ambiguous/duplicate",
+        input: "alice@example.com and alice@example.com".to_string(),
+        expected: vec![ExpectedDetection {
+            kind: SensitiveType::Email,
+            value: "alice@example.com".to_string(),
+        }],
+        related_domains: Vec::new(),
+    };
+
+    let err = expected_records(&case).expect_err("ambiguous value should fail");
+    assert!(err.contains("ambiguous"), "error should mention ambiguous: {err}");
+}

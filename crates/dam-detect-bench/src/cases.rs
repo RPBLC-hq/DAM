@@ -119,6 +119,11 @@ pub(crate) fn cases() -> Vec<Case> {
             "db postgres://alice@db.example.com:5432/app",
             vec![],
         ),
+        case(
+            "negative/url_authority_bare",
+            "docs at https://user@example.com",
+            vec![],
+        ),
     ]
 }
 

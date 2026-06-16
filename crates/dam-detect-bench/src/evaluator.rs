@@ -113,6 +113,12 @@ fn expected_record(case: &Case, expected: &ExpectedDetection) -> Result<Detectio
             case.name, expected.value
         )
     })?;
+    if case.input[start + expected.value.len()..].contains(expected.value.as_str()) {
+        return Err(format!(
+            "case {} has ambiguous expected value {:?}; each expected value must appear exactly once in the input",
+            case.name, expected.value
+        ));
+    }
     Ok(DetectionRecord {
         kind: expected.kind.into(),
         start,
