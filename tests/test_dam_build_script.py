@@ -24,6 +24,7 @@ class DamBuildScriptTests(unittest.TestCase):
 
         self.assertIn("agent-protection-smoke", result.stdout)
         self.assertIn("agent-recovery-smoke", result.stdout)
+        self.assertIn("agent-repair-smoke", result.stdout)
         self.assertIn("DAM_AGENT_E2E_UPSTREAM", result.stdout)
         self.assertIn("DAM_AGENT_E2E_BINARY", result.stdout)
         self.assertIn("DAM_AGENT_E2E_BUILD", result.stdout)
@@ -281,6 +282,80 @@ class DamBuildScriptTests(unittest.TestCase):
                     f"setup rescue --dry-run --state-dir {state_dir} --json",
                     f"setup repair --dry-run --network-mode tun --trust-mode local_ca --state-dir {state_dir} --json",
                     f"setup export-diagnostics --network-mode tun --trust-mode local_ca --state-dir {state_dir} --json",
+                ],
+            )
+
+    def test_agent_repair_smoke_requires_explicit_mutation_confirmation_before_macos_checks(self):
+        result = subprocess.run(
+            [str(BUILD_SCRIPT), "agent-repair-smoke"],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn("agent-repair-smoke mutates installed DAM setup", result.stderr)
+        self.assertNotIn("macOS packaging/notarization requires Darwin", result.stderr)
+
+    def test_agent_repair_smoke_runs_mutating_installed_recovery_probes_when_confirmed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            app_dir = temp_path / "DAM.app"
+            dam_bin = app_dir / "Contents" / "MacOS" / "dam"
+            calls_path = temp_path / "dam-calls.txt"
+            state_dir = temp_path / "state"
+            bin_dir.mkdir()
+            dam_bin.parent.mkdir(parents=True)
+
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
+            dam_bin.write_text(
+                textwrap.dedent(
+                    f"""
+                    #!/usr/bin/env sh
+                    printf '%s\\n' "$*" >> {str(calls_path)!r}
+                    exit 0
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            dam_bin.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "DAM_INSTALL_DIR": str(temp_path),
+                    "DAM_AGENT_STATE_DIR": str(state_dir),
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                }
+            )
+            subprocess.run(
+                [
+                    str(BUILD_SCRIPT),
+                    "agent-repair-smoke",
+                    "--network-mode",
+                    "tun",
+                    "--trust-mode",
+                    "local_ca",
+                    "--confirm-mutation",
+                ],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            self.assertEqual(
+                calls_path.read_text(encoding="utf-8").splitlines(),
+                [
+                    f"setup rescue --yes --state-dir {state_dir} --json",
+                    f"setup repair --yes --network-mode tun --trust-mode local_ca --state-dir {state_dir} --json",
+                    f"setup status --network-mode tun --trust-mode local_ca --state-dir {state_dir} --json",
                 ],
             )
 

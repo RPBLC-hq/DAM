@@ -21,6 +21,7 @@ AGENT_E2E_SMOKE_SCRIPT="${DAM_AGENT_E2E_SMOKE_SCRIPT:-$ROOT/scripts/rpblc_dam_lo
 AGENT_E2E_BINARY="${DAM_AGENT_E2E_BINARY:-$ROOT/target/debug/dam-proxy}"
 AGENT_E2E_BUILD="${DAM_AGENT_E2E_BUILD:-1}"
 AGENT_E2E_KEEP_TEMP="${DAM_AGENT_E2E_KEEP_TEMP:-0}"
+AGENT_CONFIRM_MUTATION="${DAM_AGENT_CONFIRM_MUTATION:-0}"
 MACOS_NE_BUNDLE_ID="${DAM_MACOS_NE_BUNDLE_ID:-com.rpblc.dam.network-extension}"
 
 usage() {
@@ -40,6 +41,8 @@ Commands:
                 Run local API-through-DAM protection smoke against local upstream
   agent-recovery-smoke
                 Run read-only installed rescue/repair/diagnostics recovery probes
+  agent-repair-smoke
+                Run mutating installed rescue/repair recovery probes with confirmation
   agent-install Build, notarize when enabled, install, verify, restart, and status DAM
   agent-status  Print installed app, process, package, doctor, and setup status
 
@@ -58,6 +61,7 @@ Options:
   --network-mode MODE              Setup mode used by agent-status probes
   --trust-mode MODE                Trust mode used by agent-status probes
   --state-dir DIR                  State directory used by setup/doctor probes
+  --confirm-mutation               Allow mutating agent repair smoke probes
   -h, --help                       Show this help
 
 Environment:
@@ -85,6 +89,8 @@ Environment:
   DAM_AGENT_E2E_BINARY     dam-proxy binary path for smoke, currently $AGENT_E2E_BINARY
   DAM_AGENT_E2E_BUILD      Set to 0 to reuse the binary without cargo build, currently $AGENT_E2E_BUILD
   DAM_AGENT_E2E_KEEP_TEMP  Set to 1 to keep smoke temp vault/log files, currently $AGENT_E2E_KEEP_TEMP
+  DAM_AGENT_CONFIRM_MUTATION
+                           Set to 1 to allow mutating agent repair smoke probes
 EOF
 }
 
@@ -437,6 +443,44 @@ cmd_agent_recovery_smoke() {
   run "$dam_bin" setup export-diagnostics --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
 }
 
+cmd_agent_repair_smoke() {
+  if [[ "$AGENT_CONFIRM_MUTATION" != "1" ]]; then
+    echo "agent-repair-smoke mutates installed DAM setup; pass --confirm-mutation or set DAM_AGENT_CONFIRM_MUTATION=1" >&2
+    exit 2
+  fi
+  require_macos
+
+  local app dam_bin
+  app="$(installed_app_path)"
+  printf 'DAM agent repair smoke\n'
+  printf 'install_dir: %s\n' "$INSTALL_DIR"
+  printf 'app: %s\n' "$app"
+  printf 'setup_probe_network_mode: %s\n' "$AGENT_NETWORK_MODE"
+  printf 'setup_probe_trust_mode: %s\n' "$AGENT_TRUST_MODE"
+  if [[ -n "$AGENT_STATE_DIR" ]]; then
+    printf 'setup_probe_state_dir: %s\n' "$AGENT_STATE_DIR"
+  fi
+
+  if [[ ! -d "$app" ]]; then
+    echo "installed app not found" >&2
+    exit 1
+  fi
+
+  dam_bin="$app/Contents/MacOS/dam"
+  if [[ ! -x "$dam_bin" ]]; then
+    echo "installed dam binary not found: $dam_bin" >&2
+    exit 1
+  fi
+
+  local state_args=()
+  if [[ -n "$AGENT_STATE_DIR" ]]; then
+    state_args=(--state-dir "$AGENT_STATE_DIR")
+  fi
+  run "$dam_bin" setup rescue --yes "${state_args[@]}" --json
+  run "$dam_bin" setup repair --yes --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
+  run "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
+}
+
 cmd_agent_install() {
   require_macos
   if [[ "${SKIP_CHECKS:-0}" != "1" ]]; then
@@ -540,6 +584,10 @@ while [[ $# -gt 0 ]]; do
       AGENT_STATE_DIR="${2:?--state-dir requires a directory}"
       shift 2
       ;;
+    --confirm-mutation)
+      AGENT_CONFIRM_MUTATION=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -592,6 +640,7 @@ case "$COMMAND" in
   agent-check) cmd_agent_check ;;
   agent-protection-smoke) cmd_agent_protection_smoke ;;
   agent-recovery-smoke) cmd_agent_recovery_smoke ;;
+  agent-repair-smoke) cmd_agent_repair_smoke ;;
   agent-install) cmd_agent_install ;;
   agent-status) cmd_agent_status ;;
   *)
