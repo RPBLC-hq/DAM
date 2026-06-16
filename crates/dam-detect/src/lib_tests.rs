@@ -453,12 +453,16 @@ fn does_not_detect_database_urls_without_embedded_passwords_as_api_keys() {
 
 #[test]
 fn does_not_detect_email_in_url_authority_without_trailing_delimiter() {
-    assert!(detect("https://user@example.com")
-        .iter()
-        .all(|detection| detection.kind != SensitiveType::Email));
-    assert!(detect("postgres://alice@db.example.com")
-        .iter()
-        .all(|detection| detection.kind != SensitiveType::Email));
+    assert!(
+        detect("https://user@example.com")
+            .iter()
+            .all(|detection| detection.kind != SensitiveType::Email)
+    );
+    assert!(
+        detect("postgres://alice@db.example.com")
+            .iter()
+            .all(|detection| detection.kind != SensitiveType::Email)
+    );
 }
 
 #[test]

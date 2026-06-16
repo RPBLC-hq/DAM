@@ -105,7 +105,12 @@ fn write_markdown(report: &BenchmarkReport, out: &mut dyn Write) {
     writeln!(out, "# DAM detector benchmark\n").unwrap();
     writeln!(out, "- suite: `{}`", report.suite).unwrap();
     writeln!(out, "- cases: `{}`", report.cases).unwrap();
-    writeln!(out, "- expected detections: `{}`", report.expected_detections).unwrap();
+    writeln!(
+        out,
+        "- expected detections: `{}`",
+        report.expected_detections
+    )
+    .unwrap();
     writeln!(out, "- actual detections: `{}`", report.actual_detections).unwrap();
     writeln!(
         out,

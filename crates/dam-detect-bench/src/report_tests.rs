@@ -42,7 +42,10 @@ fn text_format_contains_suite_name() {
     let mut output = Vec::new();
     print_report_to(&empty_report(), OutputFormat::Text, &mut output);
     let text = String::from_utf8(output).unwrap();
-    assert!(text.contains("test_suite"), "missing suite name in text output");
+    assert!(
+        text.contains("test_suite"),
+        "missing suite name in text output"
+    );
 }
 
 #[test]

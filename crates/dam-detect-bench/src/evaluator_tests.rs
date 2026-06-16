@@ -49,5 +49,8 @@ fn expected_records_errors_on_ambiguous_value() {
     };
 
     let err = expected_records(&case).expect_err("ambiguous value should fail");
-    assert!(err.contains("ambiguous"), "error should mention ambiguous: {err}");
+    assert!(
+        err.contains("ambiguous"),
+        "error should mention ambiguous: {err}"
+    );
 }
