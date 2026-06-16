@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::io::{self, Write};
 
 use serde::Serialize;
 
@@ -33,22 +34,29 @@ pub(crate) struct BenchmarkReport {
 }
 
 pub(crate) fn print_report(report: &BenchmarkReport, format: OutputFormat) {
+    print_report_to(report, format, &mut io::stdout());
+}
+
+pub(crate) fn print_report_to(report: &BenchmarkReport, format: OutputFormat, out: &mut dyn Write) {
     match format {
-        OutputFormat::Json => println!(
+        OutputFormat::Json => writeln!(
+            out,
             "{}",
             serde_json::to_string_pretty(report).expect("report should serialize")
-        ),
-        OutputFormat::Markdown => print_markdown(report),
-        OutputFormat::Text => print_text(report),
+        )
+        .unwrap(),
+        OutputFormat::Markdown => write_markdown(report, out),
+        OutputFormat::Text => write_text(report, out),
     }
 }
 
-fn print_text(report: &BenchmarkReport) {
-    println!("DAM detector benchmark: {}", report.suite);
-    println!("cases: {}", report.cases);
-    println!("expected detections: {}", report.expected_detections);
-    println!("actual detections: {}", report.actual_detections);
-    println!(
+fn write_text(report: &BenchmarkReport, out: &mut dyn Write) {
+    writeln!(out, "DAM detector benchmark: {}", report.suite).unwrap();
+    writeln!(out, "cases: {}", report.cases).unwrap();
+    writeln!(out, "expected detections: {}", report.expected_detections).unwrap();
+    writeln!(out, "actual detections: {}", report.actual_detections).unwrap();
+    writeln!(
+        out,
         "summary: tp={} fp={} fn={} precision={:.3} recall={:.3} f1={:.3}",
         report.summary.true_positives,
         report.summary.false_positives,
@@ -56,10 +64,12 @@ fn print_text(report: &BenchmarkReport) {
         report.summary.precision,
         report.summary.recall,
         report.summary.f1,
-    );
-    println!("per kind:");
+    )
+    .unwrap();
+    writeln!(out, "per kind:").unwrap();
     for (kind, summary) in &report.per_kind {
-        println!(
+        writeln!(
+            out,
             "  {:?}: tp={} fp={} fn={} precision={:.3} recall={:.3} f1={:.3}",
             kind,
             summary.true_positives,
@@ -68,14 +78,16 @@ fn print_text(report: &BenchmarkReport) {
             summary.precision,
             summary.recall,
             summary.f1,
-        );
+        )
+        .unwrap();
     }
     if report.failures.is_empty() {
-        println!("failures: none");
+        writeln!(out, "failures: none").unwrap();
     } else {
-        println!("failures:");
+        writeln!(out, "failures:").unwrap();
         for failure in &report.failures {
-            println!(
+            writeln!(
+                out,
                 "  {} {} {:?} [{}..{}] {}",
                 failure.case,
                 failure.failure,
@@ -83,18 +95,20 @@ fn print_text(report: &BenchmarkReport) {
                 failure.start,
                 failure.end,
                 failure.value
-            );
+            )
+            .unwrap();
         }
     }
 }
 
-fn print_markdown(report: &BenchmarkReport) {
-    println!("# DAM detector benchmark\n");
-    println!("- suite: `{}`", report.suite);
-    println!("- cases: `{}`", report.cases);
-    println!("- expected detections: `{}`", report.expected_detections);
-    println!("- actual detections: `{}`", report.actual_detections);
-    println!(
+fn write_markdown(report: &BenchmarkReport, out: &mut dyn Write) {
+    writeln!(out, "# DAM detector benchmark\n").unwrap();
+    writeln!(out, "- suite: `{}`", report.suite).unwrap();
+    writeln!(out, "- cases: `{}`", report.cases).unwrap();
+    writeln!(out, "- expected detections: `{}`", report.expected_detections).unwrap();
+    writeln!(out, "- actual detections: `{}`", report.actual_detections).unwrap();
+    writeln!(
+        out,
         "- summary: `tp={}` `fp={}` `fn={}` `precision={:.3}` `recall={:.3}` `f1={:.3}`\n",
         report.summary.true_positives,
         report.summary.false_positives,
@@ -102,10 +116,12 @@ fn print_markdown(report: &BenchmarkReport) {
         report.summary.precision,
         report.summary.recall,
         report.summary.f1,
-    );
-    println!("## Per-kind metrics\n");
+    )
+    .unwrap();
+    writeln!(out, "## Per-kind metrics\n").unwrap();
     for (kind, summary) in &report.per_kind {
-        println!(
+        writeln!(
+            out,
             "- `{:?}`: `tp={}` `fp={}` `fn={}` `precision={:.3}` `recall={:.3}` `f1={:.3}`",
             kind,
             summary.true_positives,
@@ -114,15 +130,17 @@ fn print_markdown(report: &BenchmarkReport) {
             summary.precision,
             summary.recall,
             summary.f1,
-        );
+        )
+        .unwrap();
     }
-    println!();
+    writeln!(out).unwrap();
     if report.failures.is_empty() {
-        println!("## Failures\n\n- none");
+        writeln!(out, "## Failures\n\n- none").unwrap();
     } else {
-        println!("## Failures\n");
+        writeln!(out, "## Failures\n").unwrap();
         for failure in &report.failures {
-            println!(
+            writeln!(
+                out,
                 "- `{}` `{}` `{:?}` [{}..{}] `{}`",
                 failure.case,
                 failure.failure,
@@ -130,7 +148,12 @@ fn print_markdown(report: &BenchmarkReport) {
                 failure.start,
                 failure.end,
                 failure.value
-            );
+            )
+            .unwrap();
         }
     }
 }
+
+#[cfg(test)]
+#[path = "report_tests.rs"]
+mod tests;

@@ -180,10 +180,11 @@ fn looks_like_url_authority_email(input: &str, start: usize, end: usize) -> bool
     let relative_end = end - token_start;
 
     token[..relative_start].contains("://")
-        && token[relative_end..]
-            .chars()
-            .next()
-            .is_some_and(|character| matches!(character, ':' | '/' | '?' | '#'))
+        && (token[relative_end..].is_empty()
+            || token[relative_end..]
+                .chars()
+                .next()
+                .is_some_and(|character| matches!(character, ':' | '/' | '?' | '#')))
 }
 
 fn detect_ssns(input: &str, detections: &mut Vec<Detection>) {
