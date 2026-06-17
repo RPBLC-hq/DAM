@@ -14,7 +14,7 @@ fn parses_trust_modes() {
 }
 
 #[test]
-fn trust_action_plans_mark_macos_local_ca_as_implemented() {
+fn trust_action_plans_mark_supported_local_ca_platforms_as_implemented() {
     let inspect =
         TrustActionPlan::for_action(TrustAction::Inspect, PlatformTrustStore::MacosKeychain);
     let install = TrustActionPlan::for_action(
@@ -28,7 +28,7 @@ fn trust_action_plans_mark_macos_local_ca_as_implemented() {
 
     assert_eq!(inspect.support, TrustSupport::Implemented);
     assert_eq!(install.support, TrustSupport::Implemented);
-    assert_eq!(linux.support, TrustSupport::Planned);
+    assert_eq!(linux.support, TrustSupport::Implemented);
     assert!(install.requires_user_consent);
     assert!(install.rollback_required);
 }
@@ -185,6 +185,28 @@ fn local_ca_install_plan_previews_generation_and_system_command() {
 }
 
 #[test]
+fn linux_local_ca_install_plan_previews_trust_anchor_command() {
+    let dir = tempfile::tempdir().unwrap();
+
+    let plan =
+        local_ca_install_plan_for_platform(dir.path(), PlatformTrustStore::LinuxNssOrSystemStore)
+            .unwrap();
+
+    assert_eq!(plan.action, TrustAction::InstallLocalCa);
+    assert_eq!(plan.support, TrustSupport::Implemented);
+    assert!(plan.will_generate_artifact);
+    assert!(plan.can_execute);
+    assert!(plan.requires_admin);
+    assert_eq!(plan.commands.len(), 1);
+    assert_eq!(plan.commands[0].program, LINUX_SUDO);
+    assert_eq!(plan.commands[0].args[0], LINUX_TRUST);
+    assert_eq!(plan.commands[0].args[1], "anchor");
+    assert_eq!(plan.commands[0].args[2], "--store");
+    assert!(plan.commands[0].args[3].ends_with("trust/local-ca/ca.pem"));
+    assert_eq!(plan.system_store, "linux_nss_or_system_store");
+}
+
+#[test]
 fn local_ca_remove_plan_uses_certificate_fingerprint() {
     let dir = tempfile::tempdir().unwrap();
     let artifact = generate_local_ca_artifact_at(dir.path(), 1).unwrap();
@@ -223,6 +245,28 @@ fn macos_install_command_uses_user_login_keychain() {
             .any(|arg| arg.contains("Library/Keychains/login.keychain"))
     );
     assert_eq!(command.args.last().unwrap(), "/tmp/DAM's CA/ca.pem");
+}
+
+#[test]
+fn linux_install_and_remove_commands_use_trust_anchor() {
+    let install = linux_install_command(Path::new("/tmp/dam ca/ca.pem"));
+    assert_eq!(install.program, LINUX_SUDO);
+    assert_eq!(
+        install.args,
+        vec![LINUX_TRUST, "anchor", "--store", "/tmp/dam ca/ca.pem"]
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let artifact = generate_local_ca_artifact_at(dir.path(), 1).unwrap();
+    let remove = linux_remove_command(&artifact).unwrap();
+    assert_eq!(remove.program, LINUX_SUDO);
+    assert_eq!(remove.args[0], LINUX_TRUST);
+    assert_eq!(remove.args[1], "anchor");
+    assert_eq!(remove.args[2], "--remove");
+    assert_eq!(
+        remove.args[3],
+        artifact.paths.certificate_path.display().to_string()
+    );
 }
 
 #[test]

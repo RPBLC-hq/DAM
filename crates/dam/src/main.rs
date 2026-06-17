@@ -2643,6 +2643,7 @@ fn expand_connect_profile_args(
         expanded.extend(["--trust-mode".to_string(), "local_ca".to_string()]);
     }
 
+    normalize_profile_connect_args_for_platform(&mut expanded);
     expanded.extend(remaining);
     let apply_profile_ids = if apply {
         selected_profile_ids.clone()
@@ -2701,6 +2702,17 @@ fn profiles_require_local_ca(
         }
     }
     Ok(false)
+}
+
+fn normalize_profile_connect_args_for_platform(args: &mut [String]) {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        for index in 0..args.len().saturating_sub(1) {
+            if args[index] == "--network-mode" && args[index + 1] == "tun" {
+                args[index + 1] = "explicit_proxy".to_string();
+            }
+        }
+    }
 }
 
 fn required_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str, String> {
@@ -4129,11 +4141,11 @@ fn usage_trust_delete_local_ca() -> &'static str {
 }
 
 fn usage_trust_install_local_ca() -> &'static str {
-    "Usage: dam trust install-local-ca [--dry-run|--yes] [--json]\n\nPreviews the local trust change by default. Use --yes to install the DAM local CA into the macOS user login keychain."
+    "Usage: dam trust install-local-ca [--dry-run|--yes] [--json]\n\nPreviews the local trust change by default. Use --yes to install the DAM local CA into supported local trust stores (macOS login keychain, Linux trust anchor store)."
 }
 
 fn usage_trust_remove_local_ca() -> &'static str {
-    "Usage: dam trust remove-local-ca [--dry-run|--yes] [--json]\n\nPreviews the local trust removal by default. Use --yes to remove the recorded DAM local CA from the macOS user login keychain."
+    "Usage: dam trust remove-local-ca [--dry-run|--yes] [--json]\n\nPreviews the local trust removal by default. Use --yes to remove the recorded DAM local CA from supported local trust stores."
 }
 
 fn usage_network() -> &'static str {

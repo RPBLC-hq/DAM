@@ -3,6 +3,17 @@ use super::*;
 const OPENAI_API_UPSTREAM: &str = "https://api.openai.com";
 const ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
 
+fn expected_profile_network_mode() -> dam_net::CaptureMode {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        dam_net::CaptureMode::ExplicitProxy
+    }
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    {
+        dam_net::CaptureMode::Tun
+    }
+}
+
 fn claude_traffic_app_ids() -> Vec<String> {
     [
         "anthropic-api",
@@ -261,7 +272,7 @@ fn parses_connect_with_integration_profile_defaults() {
             "chatgpt-legacy-web".to_string()
         ])
     );
-    assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
+    assert_eq!(args.proxy.network_mode, expected_profile_network_mode());
     assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
 }
 
@@ -287,7 +298,7 @@ fn parses_connect_profile_apply() {
     assert_eq!(targets[0].provider, "anthropic");
     assert_eq!(targets[0].upstream, ANTHROPIC_UPSTREAM);
     assert_eq!(args.proxy.traffic_app_ids, Some(claude_traffic_app_ids()));
-    assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
+    assert_eq!(args.proxy.network_mode, expected_profile_network_mode());
     assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
 }
 
@@ -347,7 +358,7 @@ fn parses_connect_apply_with_enabled_profile() {
     assert_eq!(targets[0].provider, "anthropic");
     assert_eq!(targets[0].upstream, ANTHROPIC_UPSTREAM);
     assert_eq!(args.proxy.traffic_app_ids, Some(claude_traffic_app_ids()));
-    assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
+    assert_eq!(args.proxy.network_mode, expected_profile_network_mode());
     assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
 }
 
@@ -371,7 +382,7 @@ fn parses_connect_with_enabled_profile_selecting_targets_only() {
     let targets = args.proxy.targets.as_ref().unwrap();
     assert_eq!(targets[0].provider, "anthropic");
     assert_eq!(targets[0].upstream, ANTHROPIC_UPSTREAM);
-    assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
+    assert_eq!(args.proxy.network_mode, expected_profile_network_mode());
     assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
 }
 
@@ -417,7 +428,7 @@ fn connect_with_stale_stored_profile_ignores_legacy_provider_flags() {
     };
     let targets = args.proxy.targets.as_ref().unwrap();
     assert_eq!(targets[0].provider, "anthropic");
-    assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::Tun);
+    assert_eq!(args.proxy.network_mode, expected_profile_network_mode());
     assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::LocalCa);
     assert_eq!(args.proxy.traffic_app_ids, Some(claude_traffic_app_ids()));
 }
@@ -780,11 +791,7 @@ fn connect_preflight_blocks_missing_local_ca_setup() {
             .unwrap_err();
 
     assert!(error.contains("local CA"));
-    if dam_trust::PlatformTrustStore::current() == dam_trust::PlatformTrustStore::MacosKeychain {
-        assert!(error.contains("dam trust install-local-ca"));
-    } else {
-        assert!(error.contains("not implemented"));
-    }
+    assert!(error.contains("dam trust install-local-ca"));
 }
 
 #[test]

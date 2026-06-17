@@ -90,7 +90,7 @@ Parked work:
 - Implement Windows/Linux system proxy routing and VPN/TUN or network-extension routing behind the shared capture backend contracts.
 - Add true full-device capture for UDP and non-HTTP protocols.
 - Replace the current CLI explicit-proxy fallback with process/network-level capture everywhere signed platform capture is available.
-- Install and remove the local DAM CA on Windows/Linux, add CA rotation, and harden interrupted macOS trust mutation recovery.
+- Install and remove the local DAM CA on Windows, harden Linux distro-specific trust-store compatibility, add CA rotation, and harden interrupted trust mutation recovery.
 - Implement native Linux and Windows onboarding actions behind the current platform-specific setup ids (`linux_capture`, `windows_capture`) instead of reusing macOS Network Extension steps.
 - Extend transparent TLS interception beyond the current HTTP/1.1/WebSocket slice: HTTP/2, fragmented/compressed WebSocket payloads, multiple requests per tunnel, and stronger platform coverage.
 - Define fail-open, fail-closed, degraded, bypass, and blocked states for transparent protection across system proxy and `tun` modes, including which states are user/admin configurable.

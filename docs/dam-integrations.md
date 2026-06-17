@@ -65,7 +65,7 @@ dam profile set claude
 dam connect --network-mode tun --trust-mode local_ca
 ```
 
-The tray Connect flow performs the required Network Extension routing and trust setup before starting proxy-routed app protection. Direct CLI use of these profiles also needs `local_ca` readiness because DAM must decrypt selected provider HTTPS/WSS traffic to protect request bodies.
+The tray Connect flow performs the required Network Extension routing and trust setup before starting proxy-routed app protection. On Linux, profile-based connect falls back from `tun` to `explicit_proxy` until the native transparent routing backend lands. Direct CLI use of these profiles also needs `local_ca` readiness because DAM must decrypt selected provider HTTPS/WSS traffic to protect request bodies.
 
 All backup-backed apply callers refuse to overwrite a target that DAM previously applied but that no longer matches DAM's desired content. Use `damctl integrations check <id>` to inspect that state, or `dam integrations rollback <id>` to restore the last DAM-created backup.
 

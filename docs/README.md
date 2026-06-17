@@ -31,7 +31,7 @@ DAM is designed for macOS, Linux, and Windows. Platform-specific routing, trust,
 - [dam-log](dam-log.md): local SQLite `EventSink` implementation, Activity values, and bounded indexed log queries for UI surfaces.
 - [dam-net](dam-net.md): network capture-mode vocabulary, generic traffic profile contracts, routing readiness, capture backend status, protocol adapter status, and profile-derived host classification.
 - [dam-net-macos](dam-net-macos.md): macOS PAC system-proxy install/remove plus Network Extension capture planning/status for `tun`.
-- [dam-trust](dam-trust.md): TLS trust-mode vocabulary, local CA artifacts, leaf issuance, macOS trust install/remove, readiness contracts, and trusted host scope for transparent protection.
+- [dam-trust](dam-trust.md): TLS trust-mode vocabulary, local CA artifacts, leaf issuance, macOS/Linux trust install/remove, readiness contracts, and trusted host scope for transparent protection.
 - [dam-redact](dam-redact.md): pure replacement application.
 - [dam-filter](dam-filter.md): CLI pipeline wiring detection, policy, vault, logs, and redaction.
 - [dam-resolve](dam-resolve.md): CLI pipeline for resolving `[kind:id]` references through `VaultReader`.
@@ -185,7 +185,7 @@ damctl trust inspect
   -> dam-trust readiness and action plans
 
 dam trust generate-local-ca / delete-local-ca / install-local-ca / remove-local-ca
-  -> dam-trust local CA artifacts and explicit macOS system trust changes
+  -> dam-trust local CA artifacts and explicit platform trust changes
 
 damctl integrations check
   -> dam-integrations apply-state inspection
