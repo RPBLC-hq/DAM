@@ -14,7 +14,7 @@ use serde::Serialize;
 mod log_rendering;
 
 use log_rendering::{
-    filtered_log_entries, log_event_view, log_operation_summaries, render_log_events,
+    filtered_log_entries, limited_log_event_views, log_operation_summaries, render_log_events,
     render_log_summaries,
 };
 
@@ -1183,7 +1183,7 @@ fn logs_command(args: LogsArgs) -> Result<i32, String> {
 
     if args.json {
         if args.events || args.operation_id.is_some() {
-            let events = entries.into_iter().map(log_event_view).collect::<Vec<_>>();
+            let events = limited_log_event_views(entries, args.limit);
             println!(
                 "{}",
                 serde_json::to_string_pretty(&events)

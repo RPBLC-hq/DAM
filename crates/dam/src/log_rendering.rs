@@ -54,6 +54,17 @@ pub(crate) fn log_event_view(entry: dam_log::LogEntry) -> LogEventView {
     }
 }
 
+pub(crate) fn limited_log_event_views(
+    entries: Vec<dam_log::LogEntry>,
+    limit: usize,
+) -> Vec<LogEventView> {
+    entries
+        .into_iter()
+        .take(limit)
+        .map(log_event_view)
+        .collect()
+}
+
 pub(crate) fn log_operation_summaries(
     entries: Vec<dam_log::LogEntry>,
     limit: usize,
