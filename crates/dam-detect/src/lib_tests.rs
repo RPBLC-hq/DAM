@@ -437,15 +437,31 @@ fn detects_database_connection_urls_without_assignment_labels() {
 
 #[test]
 fn does_not_detect_database_urls_without_embedded_passwords_as_api_keys() {
+    let detections = detect("postgres://app_user@db.example.local:5432/appdb");
+
     assert!(
-        detect("postgres://db.example.local:5432/appdb")
+        detections
             .iter()
             .all(|detection| detection.kind != SensitiveType::ApiKey)
     );
     assert!(
-        detect("postgres://app_user@db.example.local:5432/appdb")
+        detections
             .iter()
-            .all(|detection| detection.kind != SensitiveType::ApiKey)
+            .all(|detection| detection.kind != SensitiveType::Email)
+    );
+}
+
+#[test]
+fn does_not_detect_email_in_url_authority_without_trailing_delimiter() {
+    assert!(
+        detect("https://user@example.com")
+            .iter()
+            .all(|detection| detection.kind != SensitiveType::Email)
+    );
+    assert!(
+        detect("postgres://alice@db.example.com")
+            .iter()
+            .all(|detection| detection.kind != SensitiveType::Email)
     );
 }
 

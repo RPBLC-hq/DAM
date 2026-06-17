@@ -46,4 +46,9 @@ Future multiple-detector orchestration should happen through the spine/pipeline,
 
 ```bash
 cargo test -p dam-detect
+cargo test -p dam-detect-bench
+scripts/dam-build.sh detector-bench
+cargo run -q -p dam-detect-bench -- --format json
 ```
+
+`dam-detect-bench` is the lightweight executable benchmark harness for the current DAM detector contract. It evaluates synthetic labeled spans against `dam-detect`, reports overall/per-kind precision/recall/F1 plus concrete false-positive/false-negative cases, and exits non-zero when the baseline suite regresses. Its implementation keeps benchmark fixtures in `crates/dam-detect-bench/src/cases.rs`, CLI parsing in `cli.rs`, evaluation in `evaluator.rs`, metric accounting in `metrics.rs`, and report rendering in `report.rs` so detector-contract growth does not turn the harness entrypoint into a mixed-purpose file.

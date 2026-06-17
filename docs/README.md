@@ -20,7 +20,7 @@ DAM is designed for macOS, Linux, and Windows. Platform-specific routing, trust,
 - [dam-intercept](dam-intercept.md): guarded TLS interception activation contract for transparent routes.
 - [dam-integrations](dam-integrations.md): JSON local harness profiles, enabled app state, and legacy active profile state for `dam integrations`, `dam profile`, and `dam connect --profile`.
 - [damctl](damctl.md): local status and config diagnostics CLI.
-- [dam-detect](dam-detect.md): pure rule-based sensitive value detection.
+- [dam-detect](dam-detect.md): pure rule-based sensitive value detection plus the lightweight executable detector benchmark harness.
 - [dam-e2e](dam-e2e.md): process-level end-to-end tests across the local binaries.
 - [dam-policy](dam-policy.md): maps detections to `tokenize`, `redact`, `allow`, or `block`.
 - [dam-pipeline](dam-pipeline.md): shared text processing orchestration for detect, policy, consent, vault/log events, redaction, and inbound reference resolution.

@@ -114,7 +114,10 @@ fn detect_emails(input: &str, detections: &mut Vec<Detection>) {
     detections.extend(
         EMAIL_RE
             .find_iter(input)
-            .filter(|m| valid_email_match(m.as_str()))
+            .filter(|m| {
+                valid_email_match(m.as_str())
+                    && !looks_like_url_authority_email(input, m.start(), m.end())
+            })
             .map(|m| Detection {
                 kind: SensitiveType::Email,
                 span: Span {
@@ -160,6 +163,28 @@ fn valid_email_match(value: &str) -> bool {
         && top_level
             .chars()
             .all(|character| character.is_ascii_alphabetic())
+}
+
+fn looks_like_url_authority_email(input: &str, start: usize, end: usize) -> bool {
+    let token_start = input[..start]
+        .char_indices()
+        .rev()
+        .find(|(_, character)| character.is_ascii_whitespace())
+        .map_or(0, |(index, character)| index + character.len_utf8());
+    let token_end = input[end..]
+        .char_indices()
+        .find(|(_, character)| character.is_ascii_whitespace())
+        .map_or(input.len(), |(index, _)| end + index);
+    let token = &input[token_start..token_end];
+    let relative_start = start - token_start;
+    let relative_end = end - token_start;
+
+    token[..relative_start].contains("://")
+        && (token[relative_end..].is_empty()
+            || token[relative_end..]
+                .chars()
+                .next()
+                .is_some_and(|character| matches!(character, ':' | '/' | '?' | '#')))
 }
 
 fn detect_ssns(input: &str, detections: &mut Vec<Detection>) {

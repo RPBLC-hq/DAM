@@ -12,6 +12,7 @@ members = [
     "crates/dam-mcp",
     "crates/damctl",
     "crates/dam-detect",
+    "crates/dam-detect-bench",
     "crates/dam-e2e",
     "crates/dam-filter",
     "crates/dam-log",

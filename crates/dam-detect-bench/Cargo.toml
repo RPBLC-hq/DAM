@@ -1,0 +1,16 @@
+[package]
+name = "dam-detect-bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "dam-detect-bench"
+path = "src/main.rs"
+
+[dependencies]
+dam-core.workspace = true
+dam-detect.workspace = true
+serde.workspace = true
+serde_json.workspace = true

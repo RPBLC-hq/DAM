@@ -497,6 +497,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "dam-detect-bench"
+version = "0.1.0"
+dependencies = [
+ "dam-core",
+ "dam-detect",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dam-diagnostics"
 version = "0.1.0"
 dependencies = [
