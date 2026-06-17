@@ -1026,6 +1026,54 @@ fn log_summary_collapses_proxy_diagnostics() {
 }
 
 #[test]
+fn json_log_events_respect_limit() {
+    let entries = vec![
+        dam_log::LogEntry {
+            id: 3,
+            timestamp: 3,
+            operation_id: "op-3".to_string(),
+            level: "info".to_string(),
+            event_type: "proxy_forward".to_string(),
+            kind: None,
+            value: None,
+            reference: None,
+            action: Some("provider_response".to_string()),
+            message: "third".to_string(),
+        },
+        dam_log::LogEntry {
+            id: 2,
+            timestamp: 2,
+            operation_id: "op-2".to_string(),
+            level: "info".to_string(),
+            event_type: "proxy_forward".to_string(),
+            kind: None,
+            value: None,
+            reference: None,
+            action: Some("request_protection".to_string()),
+            message: "second".to_string(),
+        },
+        dam_log::LogEntry {
+            id: 1,
+            timestamp: 1,
+            operation_id: "op-1".to_string(),
+            level: "info".to_string(),
+            event_type: "proxy_forward".to_string(),
+            kind: None,
+            value: None,
+            reference: None,
+            action: Some("route_decision".to_string()),
+            message: "first".to_string(),
+        },
+    ];
+
+    let events = limited_log_event_views(entries, 2);
+
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].id, 3);
+    assert_eq!(events[1].id, 2);
+}
+
+#[test]
 fn parses_profile_status_json() {
     let cli = parse_cli([
         "profile".to_string(),
