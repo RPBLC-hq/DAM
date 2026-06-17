@@ -410,19 +410,9 @@ cmd_agent_status() {
   fi
 }
 
-cmd_agent_recovery_smoke() {
-  require_macos
+installed_dam_binary() {
   local app dam_bin
   app="$(installed_app_path)"
-  printf 'DAM agent recovery smoke\n'
-  printf 'install_dir: %s\n' "$INSTALL_DIR"
-  printf 'app: %s\n' "$app"
-  printf 'setup_probe_network_mode: %s\n' "$AGENT_NETWORK_MODE"
-  printf 'setup_probe_trust_mode: %s\n' "$AGENT_TRUST_MODE"
-  if [[ -n "$AGENT_STATE_DIR" ]]; then
-    printf 'setup_probe_state_dir: %s\n' "$AGENT_STATE_DIR"
-  fi
-
   if [[ ! -d "$app" ]]; then
     echo "installed app not found" >&2
     exit 1
@@ -433,6 +423,29 @@ cmd_agent_recovery_smoke() {
     echo "installed dam binary not found: $dam_bin" >&2
     exit 1
   fi
+
+  printf '%s\n' "$dam_bin"
+}
+
+print_agent_setup_probe_header() {
+  local name app
+  name="$1"
+  app="$(installed_app_path)"
+  printf 'DAM %s\n' "$name"
+  printf 'install_dir: %s\n' "$INSTALL_DIR"
+  printf 'app: %s\n' "$app"
+  printf 'setup_probe_network_mode: %s\n' "$AGENT_NETWORK_MODE"
+  printf 'setup_probe_trust_mode: %s\n' "$AGENT_TRUST_MODE"
+  if [[ -n "$AGENT_STATE_DIR" ]]; then
+    printf 'setup_probe_state_dir: %s\n' "$AGENT_STATE_DIR"
+  fi
+}
+
+cmd_agent_recovery_smoke() {
+  require_macos
+  local dam_bin
+  print_agent_setup_probe_header "agent recovery smoke"
+  dam_bin="$(installed_dam_binary)"
 
   local state_args=()
   if [[ -n "$AGENT_STATE_DIR" ]]; then
@@ -450,27 +463,9 @@ cmd_agent_repair_smoke() {
   fi
   require_macos
 
-  local app dam_bin
-  app="$(installed_app_path)"
-  printf 'DAM agent repair smoke\n'
-  printf 'install_dir: %s\n' "$INSTALL_DIR"
-  printf 'app: %s\n' "$app"
-  printf 'setup_probe_network_mode: %s\n' "$AGENT_NETWORK_MODE"
-  printf 'setup_probe_trust_mode: %s\n' "$AGENT_TRUST_MODE"
-  if [[ -n "$AGENT_STATE_DIR" ]]; then
-    printf 'setup_probe_state_dir: %s\n' "$AGENT_STATE_DIR"
-  fi
-
-  if [[ ! -d "$app" ]]; then
-    echo "installed app not found" >&2
-    exit 1
-  fi
-
-  dam_bin="$app/Contents/MacOS/dam"
-  if [[ ! -x "$dam_bin" ]]; then
-    echo "installed dam binary not found: $dam_bin" >&2
-    exit 1
-  fi
+  local dam_bin
+  print_agent_setup_probe_header "agent repair smoke"
+  dam_bin="$(installed_dam_binary)"
 
   local state_args=()
   if [[ -n "$AGENT_STATE_DIR" ]]; then
