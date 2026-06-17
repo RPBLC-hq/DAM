@@ -47,7 +47,7 @@ Parked work:
 
 ## Integration Profile Catalog And Portability
 
-Current state: the visible bundled app profile catalog is intentionally narrow: `claude` and `chatgpt` are available, and all loaded profiles are enabled by default when no user app-selection state exists. The ChatGPT profile covers OpenAI API-key traffic, OpenAI platform traffic, ChatGPT subscription/login traffic, and Codex traffic through separate traffic app IDs. Generic OpenAI-compatible, generic Anthropic-compatible, xAI-compatible, and split Codex API/ChatGPT-login profiles are removed from the visible catalog for now. Existing local state that references retired profile IDs is normalized where possible so upgrades do not break the Settings or Connect views.
+Current state: the visible bundled app profile catalog is intentionally narrow: `claude` and `chatgpt` are available, and only those bundled MVP profiles are enabled by default when no user app-selection state exists. Imported/custom profile JSON remains loadable but opt-in until explicitly selected. The ChatGPT profile covers OpenAI API-key traffic, OpenAI platform traffic, ChatGPT subscription/login traffic, and Codex traffic through separate traffic app IDs. Generic OpenAI-compatible, generic Anthropic-compatible, xAI-compatible, and split Codex API/ChatGPT-login profiles are removed from the visible catalog for now. Existing local state that references retired profile IDs is normalized where possible so upgrades do not break the Settings or Connect views.
 
 Parked work:
 
