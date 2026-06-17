@@ -255,6 +255,7 @@ fn linux_install_and_remove_commands_use_trust_anchor() {
         install.args,
         vec![LINUX_TRUST, "anchor", "--store", "/tmp/dam ca/ca.pem"]
     );
+    assert!(system_trust_command_inherits_stdio(&install));
 
     let dir = tempfile::tempdir().unwrap();
     let artifact = generate_local_ca_artifact_at(dir.path(), 1).unwrap();

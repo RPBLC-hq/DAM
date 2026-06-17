@@ -2,7 +2,7 @@ use std::{
     env, fmt, fs,
     io::Write,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -1157,6 +1157,29 @@ fn run_system_trust_command(command: &SystemTrustCommand) -> Result<(), TrustArt
         platform_store => return Err(TrustArtifactError::UnsupportedPlatform(platform_store)),
     }
 
+    if system_trust_command_inherits_stdio(command) {
+        let status = Command::new(&command.program)
+            .args(&command.args)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .status()
+            .map_err(|source| TrustArtifactError::RunCommand {
+                program: command.program.clone(),
+                source,
+            })?;
+        if status.success() {
+            return Ok(());
+        }
+
+        return Err(TrustArtifactError::CommandFailed {
+            program: command.program.clone(),
+            args: command.args.join(" "),
+            status: status.to_string(),
+            stderr: "see terminal stderr".to_string(),
+        });
+    }
+
     let output = Command::new(&command.program)
         .args(&command.args)
         .output()
@@ -1174,6 +1197,10 @@ fn run_system_trust_command(command: &SystemTrustCommand) -> Result<(), TrustArt
         status: output.status.to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
     })
+}
+
+fn system_trust_command_inherits_stdio(command: &SystemTrustCommand) -> bool {
+    command.program == LINUX_SUDO
 }
 
 pub fn default_allowed_hosts() -> Vec<String> {
