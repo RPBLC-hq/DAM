@@ -15,6 +15,7 @@ scripts/dam-build.sh deploy-local --mode development
 scripts/dam-build.sh agent-check
 scripts/dam-build.sh agent-protection-smoke
 scripts/dam-build.sh agent-recovery-smoke --network-mode tun --trust-mode local_ca [--state-dir PATH]
+scripts/dam-build.sh agent-repair-smoke --network-mode tun --trust-mode local_ca --confirm-mutation [--state-dir PATH]
 scripts/dam-build.sh agent-install --skip-checks
 scripts/dam-build.sh agent-status --network-mode tun --trust-mode local_ca [--state-dir PATH]
 ```
@@ -39,6 +40,8 @@ scripts/dam-build.sh agent-status --network-mode tun --trust-mode local_ca [--st
 
 `agent-recovery-smoke` runs the installed app's read-only recovery probes without changing routing or daemon state: `dam setup rescue --dry-run --json`, `dam setup repair --dry-run --network-mode <mode> --trust-mode <mode> --json`, and `dam setup export-diagnostics --network-mode <mode> --trust-mode <mode> --json`. It uses the same `--network-mode`, `--trust-mode`, `--state-dir`, `DAM_AGENT_NETWORK_MODE`, `DAM_AGENT_TRUST_MODE`, and `DAM_AGENT_STATE_DIR` inputs as `agent-status` for setup repair planning and diagnostics export. Use it after `agent-install` when validating that the installed release artifact can explain and preview recovery actions before any mutating rescue/repair is attempted; pass `--state-dir` when validating retained or fixture state instead of the live user state.
 
+`agent-repair-smoke` is the opt-in mutating installed-app recovery smoke. It refuses to run unless `--confirm-mutation` or `DAM_AGENT_CONFIRM_MUTATION=1` is set, then runs `dam setup rescue --yes --json`, `dam setup repair --yes --network-mode <mode> --trust-mode <mode> --json`, and a final `dam setup status --network-mode <mode> --trust-mode <mode> --json` through the installed `dam` binary. Use it only on a disposable local installed state or with an explicit `--state-dir` fixture after the read-only `agent-recovery-smoke` output is understood; the failsafe is the same local recovery path it exercises, and the command keeps the setup mode context aligned with `agent-status`.
+
 `agent-install` is the idempotent local release-path install command for macOS. It optionally runs `agent-check`, builds the app, notarizes Developer ID builds unless notarization is disabled, stops the installed tray/web processes before replacing the app bundle, verifies the installed app, refreshes app-owned System Extension activation, reconfigures the Network Extension manager for `tun` installs, restarts the daemon with the persisted DAM configuration, opens the tray app, and prints `agent-status`.
 
 `agent-status` inspects the installed app without mutating setup. It reports matching DAM processes, verifies code signing, validates notarization/Gatekeeper when notarization is enabled, and runs the installed `dam doctor --json`, `dam setup status --json`, `dam setup next-action --json`, `dam setup export-diagnostics --json`, and `dam status --json` probes. Setup probes default to the release-path `tun` + `local_ca` modes and can be overridden with `--network-mode`, `--trust-mode`, and `--state-dir`/`DAM_AGENT_STATE_DIR` so support and tests can inspect a retained installed state directory without touching the live default. Invalid setup probe modes are rejected during script argument validation before macOS-only installed-app checks run. The npm wrapper package doctor remains part of `check`/`agent-check` through the npm smoke test; it is not an installed native app command.
@@ -57,7 +60,8 @@ scripts/dam-build.sh agent-status --network-mode tun --trust-mode local_ca [--st
 - `DAM_AGENT_STATUS_STRICT`: set to `1` to make `agent-status` fail when any probe fails.
 - `DAM_AGENT_NETWORK_MODE`: setup mode for `agent-status`, default `tun`.
 - `DAM_AGENT_TRUST_MODE`: trust mode for `agent-status`, default `local_ca`.
-- `DAM_AGENT_STATE_DIR`: optional state directory for installed-app `agent-status` and `agent-recovery-smoke` probes.
+- `DAM_AGENT_STATE_DIR`: optional state directory for installed-app `agent-status`, `agent-recovery-smoke`, and `agent-repair-smoke` probes.
+- `DAM_AGENT_CONFIRM_MUTATION`: set to `1` to allow the mutating `agent-repair-smoke` command.
 - `DAM_AGENT_E2E_UPSTREAM`: local OpenAI-compatible upstream for `agent-protection-smoke`, default `http://127.0.0.1:8080`.
 - `DAM_AGENT_E2E_LISTEN`: loopback listen address for the smoke proxy, default `127.0.0.1:7831`.
 - `DAM_AGENT_E2E_STARTUP_TIMEOUT`: smoke proxy startup timeout in seconds, default `30`.
