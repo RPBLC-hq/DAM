@@ -1145,6 +1145,33 @@ fn parses_trust_install_and_remove_local_ca_approval() {
 }
 
 #[test]
+fn rejects_trust_local_ca_dry_run_with_approval() {
+    let install_err = parse_cli([
+        "trust".to_string(),
+        "install-local-ca".to_string(),
+        "--dry-run".to_string(),
+        "--yes".to_string(),
+    ])
+    .unwrap_err();
+    let remove_err = parse_cli([
+        "trust".to_string(),
+        "remove-local-ca".to_string(),
+        "--yes".to_string(),
+        "--dry-run".to_string(),
+    ])
+    .unwrap_err();
+
+    assert_eq!(
+        install_err,
+        "trust install-local-ca cannot combine --dry-run and --yes"
+    );
+    assert_eq!(
+        remove_err,
+        "trust remove-local-ca cannot combine --dry-run and --yes"
+    );
+}
+
+#[test]
 fn parses_network_install_and_remove_system_proxy_approval() {
     let install = parse_cli([
         "network".to_string(),

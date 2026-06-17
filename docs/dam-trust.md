@@ -44,7 +44,7 @@ $DAM_STATE_DIR/trust/local-ca/ca-key.pem
 
 When `DAM_STATE_DIR` is unset, `$HOME/.dam` is the state directory. On Unix platforms, the artifact directory is set to `0700`, the private key and manifest are written as `0600`, and the certificate is written as `0644`. Writes are atomic, and generation refuses to overwrite existing DAM CA material.
 
-Trust commands are previewed by default through `dam trust install-local-ca` and `dam trust remove-local-ca`. The commands mutate supported local trust stores only when the caller passes `--yes`. Installation marks the manifest with `installed_at_unix` after the trust command succeeds. Removal clears that marker only after the trust removal command succeeds.
+Trust commands are previewed by default through `dam trust install-local-ca` and `dam trust remove-local-ca`. The commands mutate supported local trust stores only when the caller passes `--yes`; callers cannot combine `--dry-run` and `--yes` in a single trust command. Installation marks the manifest with `installed_at_unix` after the trust command succeeds. Removal clears that marker only after the trust removal command succeeds.
 
 `issue_local_ca_leaf_certificate` reads the local CA artifact and issues an in-memory server certificate/key for a normalized host. Leaf certificates are used by the daemon-gated transparent CONNECT runtime and are not written to daemon state.
 

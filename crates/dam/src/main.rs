@@ -2222,17 +2222,28 @@ fn parse_trust_delete_local_ca(args: &[String]) -> Result<Cli, String> {
 fn parse_trust_install_local_ca(args: &[String]) -> Result<Cli, String> {
     let mut json = false;
     let mut yes = false;
+    let mut dry_run_explicit = false;
+    let mut yes_explicit = false;
     for arg in args {
         match arg.as_str() {
             "--json" => json = true,
-            "--yes" => yes = true,
-            "--dry-run" => yes = false,
+            "--yes" => {
+                yes_explicit = true;
+                yes = true;
+            }
+            "--dry-run" => {
+                dry_run_explicit = true;
+                yes = false;
+            }
             "-h" | "--help" => {
                 println!("{}", usage_trust_install_local_ca());
                 std::process::exit(0);
             }
             arg => return Err(format!("unknown trust install-local-ca argument: {arg}")),
         }
+    }
+    if dry_run_explicit && yes_explicit {
+        return Err("trust install-local-ca cannot combine --dry-run and --yes".to_string());
     }
     Ok(Cli {
         command: CommandKind::Trust(TrustArgs::InstallTrust { json, yes }),
@@ -2242,17 +2253,28 @@ fn parse_trust_install_local_ca(args: &[String]) -> Result<Cli, String> {
 fn parse_trust_remove_local_ca(args: &[String]) -> Result<Cli, String> {
     let mut json = false;
     let mut yes = false;
+    let mut dry_run_explicit = false;
+    let mut yes_explicit = false;
     for arg in args {
         match arg.as_str() {
             "--json" => json = true,
-            "--yes" => yes = true,
-            "--dry-run" => yes = false,
+            "--yes" => {
+                yes_explicit = true;
+                yes = true;
+            }
+            "--dry-run" => {
+                dry_run_explicit = true;
+                yes = false;
+            }
             "-h" | "--help" => {
                 println!("{}", usage_trust_remove_local_ca());
                 std::process::exit(0);
             }
             arg => return Err(format!("unknown trust remove-local-ca argument: {arg}")),
         }
+    }
+    if dry_run_explicit && yes_explicit {
+        return Err("trust remove-local-ca cannot combine --dry-run and --yes".to_string());
     }
     Ok(Cli {
         command: CommandKind::Trust(TrustArgs::RemoveTrust { json, yes }),
