@@ -28,7 +28,10 @@ fn trust_action_plans_mark_supported_local_ca_platforms_as_implemented() {
 
     assert_eq!(inspect.support, TrustSupport::Implemented);
     assert_eq!(install.support, TrustSupport::Implemented);
+    #[cfg(target_os = "linux")]
     assert_eq!(linux.support, TrustSupport::Implemented);
+    #[cfg(not(target_os = "linux"))]
+    assert_eq!(linux.support, TrustSupport::Planned);
     assert!(install.requires_user_consent);
     assert!(install.rollback_required);
 }
@@ -184,6 +187,7 @@ fn local_ca_install_plan_previews_generation_and_system_command() {
     );
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn linux_local_ca_install_plan_previews_trust_anchor_command() {
     let dir = tempfile::tempdir().unwrap();
@@ -202,7 +206,10 @@ fn linux_local_ca_install_plan_previews_trust_anchor_command() {
     assert_eq!(plan.commands[0].args[0], LINUX_TRUST);
     assert_eq!(plan.commands[0].args[1], "anchor");
     assert_eq!(plan.commands[0].args[2], "--store");
-    assert!(plan.commands[0].args[3].ends_with("trust/local-ca/ca.pem"));
+    assert!(
+        Path::new(&plan.commands[0].args[3])
+            .ends_with(Path::new("trust").join("local-ca").join("ca.pem"))
+    );
     assert_eq!(plan.system_store, "linux_nss_or_system_store");
 }
 

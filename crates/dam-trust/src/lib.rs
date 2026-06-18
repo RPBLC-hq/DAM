@@ -288,8 +288,13 @@ fn local_ca_requires_admin(platform_store: PlatformTrustStore) -> bool {
 
 fn local_ca_platform_support(platform_store: PlatformTrustStore) -> TrustSupport {
     match platform_store {
-        PlatformTrustStore::MacosKeychain | PlatformTrustStore::LinuxNssOrSystemStore => {
-            TrustSupport::Implemented
+        PlatformTrustStore::MacosKeychain => TrustSupport::Implemented,
+        PlatformTrustStore::LinuxNssOrSystemStore => {
+            if cfg!(target_os = "linux") {
+                TrustSupport::Implemented
+            } else {
+                TrustSupport::Planned
+            }
         }
         PlatformTrustStore::WindowsRootStore | PlatformTrustStore::Unknown => TrustSupport::Planned,
     }
