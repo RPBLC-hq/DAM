@@ -793,6 +793,8 @@ fn connect_preflight_blocks_missing_local_ca_setup() {
     assert!(error.contains("local CA"));
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     assert!(error.contains("dam trust install-local-ca"));
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    assert!(error.contains("not implemented"));
 }
 
 #[test]
