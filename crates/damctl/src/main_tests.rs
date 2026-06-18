@@ -573,13 +573,12 @@ fn trust_inspect_reports_default_read_only_state() {
     assert!(output.stdout.contains("local_ca_artifact: missing"));
     assert!(output.stdout.contains("trust_routes: 10"));
     assert!(output.stdout.contains("action inspect: implemented"));
-    let expected_install_support = if dam_trust::PlatformTrustStore::current()
-        == dam_trust::PlatformTrustStore::MacosKeychain
-    {
-        "implemented"
-    } else {
-        "planned"
-    };
+    let expected_install_support = dam_trust::TrustActionPlan::for_action(
+        dam_trust::TrustAction::InstallLocalCa,
+        dam_trust::PlatformTrustStore::current(),
+    )
+    .support
+    .tag();
     assert!(output.stdout.contains(&format!(
         "action install_local_ca: {expected_install_support}"
     )));

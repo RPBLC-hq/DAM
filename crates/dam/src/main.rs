@@ -2222,17 +2222,28 @@ fn parse_trust_delete_local_ca(args: &[String]) -> Result<Cli, String> {
 fn parse_trust_install_local_ca(args: &[String]) -> Result<Cli, String> {
     let mut json = false;
     let mut yes = false;
+    let mut dry_run_explicit = false;
+    let mut yes_explicit = false;
     for arg in args {
         match arg.as_str() {
             "--json" => json = true,
-            "--yes" => yes = true,
-            "--dry-run" => yes = false,
+            "--yes" => {
+                yes_explicit = true;
+                yes = true;
+            }
+            "--dry-run" => {
+                dry_run_explicit = true;
+                yes = false;
+            }
             "-h" | "--help" => {
                 println!("{}", usage_trust_install_local_ca());
                 std::process::exit(0);
             }
             arg => return Err(format!("unknown trust install-local-ca argument: {arg}")),
         }
+    }
+    if dry_run_explicit && yes_explicit {
+        return Err("trust install-local-ca cannot combine --dry-run and --yes".to_string());
     }
     Ok(Cli {
         command: CommandKind::Trust(TrustArgs::InstallTrust { json, yes }),
@@ -2242,17 +2253,28 @@ fn parse_trust_install_local_ca(args: &[String]) -> Result<Cli, String> {
 fn parse_trust_remove_local_ca(args: &[String]) -> Result<Cli, String> {
     let mut json = false;
     let mut yes = false;
+    let mut dry_run_explicit = false;
+    let mut yes_explicit = false;
     for arg in args {
         match arg.as_str() {
             "--json" => json = true,
-            "--yes" => yes = true,
-            "--dry-run" => yes = false,
+            "--yes" => {
+                yes_explicit = true;
+                yes = true;
+            }
+            "--dry-run" => {
+                dry_run_explicit = true;
+                yes = false;
+            }
             "-h" | "--help" => {
                 println!("{}", usage_trust_remove_local_ca());
                 std::process::exit(0);
             }
             arg => return Err(format!("unknown trust remove-local-ca argument: {arg}")),
         }
+    }
+    if dry_run_explicit && yes_explicit {
+        return Err("trust remove-local-ca cannot combine --dry-run and --yes".to_string());
     }
     Ok(Cli {
         command: CommandKind::Trust(TrustArgs::RemoveTrust { json, yes }),
@@ -2643,6 +2665,7 @@ fn expand_connect_profile_args(
         expanded.extend(["--trust-mode".to_string(), "local_ca".to_string()]);
     }
 
+    normalize_profile_connect_args_for_platform(&mut expanded);
     expanded.extend(remaining);
     let apply_profile_ids = if apply {
         selected_profile_ids.clone()
@@ -2702,6 +2725,18 @@ fn profiles_require_local_ca(
     }
     Ok(false)
 }
+
+#[cfg(target_os = "linux")]
+fn normalize_profile_connect_args_for_platform(args: &mut [String]) {
+    for index in 0..args.len().saturating_sub(1) {
+        if args[index] == "--network-mode" && args[index + 1] == "tun" {
+            args[index + 1] = "explicit_proxy".to_string();
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn normalize_profile_connect_args_for_platform(_args: &mut [String]) {}
 
 fn required_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str, String> {
     args.get(index)
@@ -4129,11 +4164,11 @@ fn usage_trust_delete_local_ca() -> &'static str {
 }
 
 fn usage_trust_install_local_ca() -> &'static str {
-    "Usage: dam trust install-local-ca [--dry-run|--yes] [--json]\n\nPreviews the local trust change by default. Use --yes to install the DAM local CA into the macOS user login keychain."
+    "Usage: dam trust install-local-ca [--dry-run|--yes] [--json]\n\nPreviews the local trust change by default. Use --yes to install the DAM local CA into supported local trust stores (macOS login keychain, Linux trust anchor store)."
 }
 
 fn usage_trust_remove_local_ca() -> &'static str {
-    "Usage: dam trust remove-local-ca [--dry-run|--yes] [--json]\n\nPreviews the local trust removal by default. Use --yes to remove the recorded DAM local CA from the macOS user login keychain."
+    "Usage: dam trust remove-local-ca [--dry-run|--yes] [--json]\n\nPreviews the local trust removal by default. Use --yes to remove the recorded DAM local CA from supported local trust stores."
 }
 
 fn usage_network() -> &'static str {

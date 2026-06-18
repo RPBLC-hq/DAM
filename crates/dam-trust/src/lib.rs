@@ -2,7 +2,7 @@ use std::{
     env, fmt, fs,
     io::Write,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -23,6 +23,8 @@ const LOCAL_CA_MANIFEST_VERSION: u32 = 1;
 const MACOS_SECURITY: &str = "/usr/bin/security";
 const MACOS_LOGIN_KEYCHAIN_DB: &str = "Library/Keychains/login.keychain-db";
 const MACOS_LOGIN_KEYCHAIN_LEGACY: &str = "Library/Keychains/login.keychain";
+const LINUX_SUDO: &str = "/usr/bin/sudo";
+const LINUX_TRUST: &str = "/usr/bin/trust";
 
 #[derive(Debug, thiserror::Error)]
 pub enum TrustArtifactError {
@@ -148,6 +150,15 @@ pub enum TrustSupport {
     Planned,
 }
 
+impl TrustSupport {
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Implemented => "implemented",
+            Self::Planned => "planned",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlatformTrustStore {
@@ -176,11 +187,11 @@ impl PlatformTrustStore {
         {
             Self::WindowsRootStore
         }
-        #[cfg(all(unix, not(target_os = "macos")))]
+        #[cfg(target_os = "linux")]
         {
             Self::LinuxNssOrSystemStore
         }
-        #[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             Self::Unknown
         }
@@ -277,10 +288,21 @@ fn local_ca_requires_admin(platform_store: PlatformTrustStore) -> bool {
 
 fn local_ca_platform_support(platform_store: PlatformTrustStore) -> TrustSupport {
     match platform_store {
-        PlatformTrustStore::MacosKeychain => TrustSupport::Implemented,
-        PlatformTrustStore::WindowsRootStore
-        | PlatformTrustStore::LinuxNssOrSystemStore
-        | PlatformTrustStore::Unknown => TrustSupport::Planned,
+        PlatformTrustStore::MacosKeychain => {
+            if cfg!(target_os = "macos") {
+                TrustSupport::Implemented
+            } else {
+                TrustSupport::Planned
+            }
+        }
+        PlatformTrustStore::LinuxNssOrSystemStore => {
+            if cfg!(target_os = "linux") {
+                TrustSupport::Implemented
+            } else {
+                TrustSupport::Planned
+            }
+        }
+        PlatformTrustStore::WindowsRootStore | PlatformTrustStore::Unknown => TrustSupport::Planned,
     }
 }
 
@@ -634,7 +656,10 @@ pub fn local_ca_install_plan_for_platform(
     let will_generate_artifact = artifact.is_none();
     let can_execute = support == TrustSupport::Implemented && !already_installed;
     let commands = if support == TrustSupport::Implemented && !already_installed {
-        vec![macos_install_command(&certificate_path)]
+        vec![install_command_for_platform(
+            platform_store,
+            &certificate_path,
+        )]
     } else {
         Vec::new()
     };
@@ -644,10 +669,11 @@ pub fn local_ca_install_plan_for_platform(
         }
         (TrustSupport::Implemented, true, _) => "local CA is already marked installed".to_string(),
         (TrustSupport::Implemented, false, true) => {
-            "will generate a DAM local CA artifact, then install it in local user trust".to_string()
+            "will generate a DAM local CA artifact, then install it in local platform trust"
+                .to_string()
         }
         (TrustSupport::Implemented, false, false) => {
-            "will install the DAM local CA certificate in local user trust".to_string()
+            "will install the DAM local CA certificate in local platform trust".to_string()
         }
     };
 
@@ -682,7 +708,7 @@ pub fn local_ca_remove_plan_for_platform(
         .unwrap_or(false);
     let commands = if support == TrustSupport::Implemented && installed {
         let artifact = artifact.as_ref().expect("installed artifact exists");
-        vec![macos_remove_command(artifact)?]
+        vec![remove_command_for_platform(platform_store, artifact)?]
     } else {
         Vec::new()
     };
@@ -691,7 +717,7 @@ pub fn local_ca_remove_plan_for_platform(
             format!("local CA removal is not implemented for {platform_store}")
         }
         (TrustSupport::Implemented, true) => {
-            "will remove the DAM local CA certificate from local user trust".to_string()
+            "will remove the DAM local CA certificate from local platform trust".to_string()
         }
         (TrustSupport::Implemented, false) => "no installed DAM local CA is recorded".to_string(),
     };
@@ -766,7 +792,8 @@ pub fn install_local_ca_system_trust(
         });
     }
 
-    let command = macos_install_command(&artifact.paths.certificate_path);
+    let command =
+        install_command_for_platform(plan.platform_store, &artifact.paths.certificate_path);
     run_system_trust_command(&command)?;
     let installed = mark_local_ca_installed_at(&state_dir, unix_timestamp()?)?;
 
@@ -806,7 +833,7 @@ pub fn remove_local_ca_system_trust(
         });
     }
 
-    let command = macos_remove_command(&artifact)?;
+    let command = remove_command_for_platform(plan.platform_store, &artifact)?;
     run_system_trust_command(&command)?;
     let updated = mark_local_ca_uninstalled(&state_dir)?;
 
@@ -1050,6 +1077,18 @@ fn macos_install_command(certificate_path: &Path) -> SystemTrustCommand {
     }
 }
 
+fn linux_install_command(certificate_path: &Path) -> SystemTrustCommand {
+    SystemTrustCommand {
+        program: LINUX_SUDO.to_string(),
+        args: vec![
+            LINUX_TRUST.to_string(),
+            "anchor".to_string(),
+            "--store".to_string(),
+            certificate_path.display().to_string(),
+        ],
+    }
+}
+
 fn macos_remove_command(
     artifact: &LocalCaArtifact,
 ) -> Result<SystemTrustCommand, TrustArtifactError> {
@@ -1068,6 +1107,46 @@ fn macos_remove_command(
             macos_user_keychain_path().display().to_string(),
         ],
     })
+}
+
+fn linux_remove_command(
+    artifact: &LocalCaArtifact,
+) -> Result<SystemTrustCommand, TrustArtifactError> {
+    Ok(SystemTrustCommand {
+        program: LINUX_SUDO.to_string(),
+        args: vec![
+            LINUX_TRUST.to_string(),
+            "anchor".to_string(),
+            "--remove".to_string(),
+            artifact.paths.certificate_path.display().to_string(),
+        ],
+    })
+}
+
+fn install_command_for_platform(
+    platform_store: PlatformTrustStore,
+    certificate_path: &Path,
+) -> SystemTrustCommand {
+    match platform_store {
+        PlatformTrustStore::MacosKeychain => macos_install_command(certificate_path),
+        PlatformTrustStore::LinuxNssOrSystemStore => linux_install_command(certificate_path),
+        PlatformTrustStore::WindowsRootStore | PlatformTrustStore::Unknown => {
+            unreachable!("unsupported platform store should not request install commands")
+        }
+    }
+}
+
+fn remove_command_for_platform(
+    platform_store: PlatformTrustStore,
+    artifact: &LocalCaArtifact,
+) -> Result<SystemTrustCommand, TrustArtifactError> {
+    match platform_store {
+        PlatformTrustStore::MacosKeychain => macos_remove_command(artifact),
+        PlatformTrustStore::LinuxNssOrSystemStore => linux_remove_command(artifact),
+        PlatformTrustStore::WindowsRootStore | PlatformTrustStore::Unknown => {
+            unreachable!("unsupported platform store should not request remove commands")
+        }
+    }
 }
 
 fn system_store_name(platform_store: PlatformTrustStore) -> String {
@@ -1093,10 +1172,32 @@ fn macos_user_keychain_path() -> PathBuf {
 }
 
 fn run_system_trust_command(command: &SystemTrustCommand) -> Result<(), TrustArtifactError> {
-    if PlatformTrustStore::current() != PlatformTrustStore::MacosKeychain {
-        return Err(TrustArtifactError::UnsupportedPlatform(
-            PlatformTrustStore::current(),
-        ));
+    match PlatformTrustStore::current() {
+        PlatformTrustStore::MacosKeychain | PlatformTrustStore::LinuxNssOrSystemStore => {}
+        platform_store => return Err(TrustArtifactError::UnsupportedPlatform(platform_store)),
+    }
+
+    if system_trust_command_inherits_stdio(command) {
+        let status = Command::new(&command.program)
+            .args(&command.args)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .status()
+            .map_err(|source| TrustArtifactError::RunCommand {
+                program: command.program.clone(),
+                source,
+            })?;
+        if status.success() {
+            return Ok(());
+        }
+
+        return Err(TrustArtifactError::CommandFailed {
+            program: command.program.clone(),
+            args: command.args.join(" "),
+            status: status.to_string(),
+            stderr: "see terminal stderr".to_string(),
+        });
     }
 
     let output = Command::new(&command.program)
@@ -1116,6 +1217,10 @@ fn run_system_trust_command(command: &SystemTrustCommand) -> Result<(), TrustArt
         status: output.status.to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
     })
+}
+
+fn system_trust_command_inherits_stdio(command: &SystemTrustCommand) -> bool {
+    command.program == LINUX_SUDO
 }
 
 pub fn default_allowed_hosts() -> Vec<String> {
