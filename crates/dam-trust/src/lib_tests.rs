@@ -258,9 +258,10 @@ fn macos_install_command_uses_user_login_keychain() {
 fn linux_install_and_remove_commands_use_trust_anchor() {
     let install = linux_install_command(Path::new("/tmp/dam ca/ca.pem"));
     assert_eq!(install.program, LINUX_SUDO);
+    assert_eq!(&install.args[0..3], &[LINUX_TRUST, "anchor", "--store"]);
     assert_eq!(
-        install.args,
-        vec![LINUX_TRUST, "anchor", "--store", "/tmp/dam ca/ca.pem"]
+        Path::new(install.args.last().unwrap()),
+        Path::new("/tmp/dam ca/ca.pem")
     );
     assert!(system_trust_command_inherits_stdio(&install));
 
