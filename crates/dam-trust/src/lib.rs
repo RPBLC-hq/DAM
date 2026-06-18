@@ -23,8 +23,8 @@ const LOCAL_CA_MANIFEST_VERSION: u32 = 1;
 const MACOS_SECURITY: &str = "/usr/bin/security";
 const MACOS_LOGIN_KEYCHAIN_DB: &str = "Library/Keychains/login.keychain-db";
 const MACOS_LOGIN_KEYCHAIN_LEGACY: &str = "Library/Keychains/login.keychain";
-const LINUX_SUDO: &str = "sudo";
-const LINUX_TRUST: &str = "trust";
+const LINUX_SUDO: &str = "/usr/bin/sudo";
+const LINUX_TRUST: &str = "/usr/bin/trust";
 
 #[derive(Debug, thiserror::Error)]
 pub enum TrustArtifactError {

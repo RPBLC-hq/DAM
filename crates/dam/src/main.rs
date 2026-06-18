@@ -2726,16 +2726,17 @@ fn profiles_require_local_ca(
     Ok(false)
 }
 
+#[cfg(target_os = "linux")]
 fn normalize_profile_connect_args_for_platform(args: &mut [String]) {
-    #[cfg(target_os = "linux")]
-    {
-        for index in 0..args.len().saturating_sub(1) {
-            if args[index] == "--network-mode" && args[index + 1] == "tun" {
-                args[index + 1] = "explicit_proxy".to_string();
-            }
+    for index in 0..args.len().saturating_sub(1) {
+        if args[index] == "--network-mode" && args[index + 1] == "tun" {
+            args[index + 1] = "explicit_proxy".to_string();
         }
     }
 }
+
+#[cfg(not(target_os = "linux"))]
+fn normalize_profile_connect_args_for_platform(_args: &mut [String]) {}
 
 fn required_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str, String> {
     args.get(index)
