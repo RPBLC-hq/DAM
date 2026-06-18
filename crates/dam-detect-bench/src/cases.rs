@@ -153,7 +153,7 @@ fn agent_trace_mixed_prompt() -> Case {
     let api_key = openai_project_key('c');
     let database_url = database_url_with_password();
     let email = "casey.debug@example.com";
-    let ssn = "123-45-6789";
+    let ssn = "234-56-7890";
 
     Case {
         name: "agent_trace/mixed_prompt_env_and_tool_output",
