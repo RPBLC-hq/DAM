@@ -27,7 +27,10 @@ fn trust_action_plans_mark_supported_local_ca_platforms_as_implemented() {
     );
 
     assert_eq!(inspect.support, TrustSupport::Implemented);
+    #[cfg(target_os = "macos")]
     assert_eq!(install.support, TrustSupport::Implemented);
+    #[cfg(not(target_os = "macos"))]
+    assert_eq!(install.support, TrustSupport::Planned);
     #[cfg(target_os = "linux")]
     assert_eq!(linux.support, TrustSupport::Implemented);
     #[cfg(not(target_os = "linux"))]
@@ -162,6 +165,7 @@ fn local_ca_artifact_generates_inspects_and_deletes_without_installing() {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
 fn local_ca_install_plan_previews_generation_and_system_command() {
     let dir = tempfile::tempdir().unwrap();
 
@@ -214,6 +218,7 @@ fn linux_local_ca_install_plan_previews_trust_anchor_command() {
 }
 
 #[test]
+#[cfg(target_os = "macos")]
 fn local_ca_remove_plan_uses_certificate_fingerprint() {
     let dir = tempfile::tempdir().unwrap();
     let artifact = generate_local_ca_artifact_at(dir.path(), 1).unwrap();
