@@ -2727,7 +2727,7 @@ fn profiles_require_local_ca(
 }
 
 fn normalize_profile_connect_args_for_platform(args: &mut [String]) {
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(target_os = "linux")]
     {
         for index in 0..args.len().saturating_sub(1) {
             if args[index] == "--network-mode" && args[index + 1] == "tun" {

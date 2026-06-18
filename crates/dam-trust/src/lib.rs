@@ -150,6 +150,15 @@ pub enum TrustSupport {
     Planned,
 }
 
+impl TrustSupport {
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Implemented => "implemented",
+            Self::Planned => "planned",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlatformTrustStore {
@@ -178,11 +187,11 @@ impl PlatformTrustStore {
         {
             Self::WindowsRootStore
         }
-        #[cfg(all(unix, not(target_os = "macos")))]
+        #[cfg(target_os = "linux")]
         {
             Self::LinuxNssOrSystemStore
         }
-        #[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
+        #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
             Self::Unknown
         }

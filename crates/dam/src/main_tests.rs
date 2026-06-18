@@ -4,11 +4,11 @@ const OPENAI_API_UPSTREAM: &str = "https://api.openai.com";
 const ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
 
 fn expected_profile_network_mode() -> dam_net::CaptureMode {
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(target_os = "linux")]
     {
         dam_net::CaptureMode::ExplicitProxy
     }
-    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    #[cfg(not(target_os = "linux"))]
     {
         dam_net::CaptureMode::Tun
     }
@@ -791,6 +791,7 @@ fn connect_preflight_blocks_missing_local_ca_setup() {
             .unwrap_err();
 
     assert!(error.contains("local CA"));
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     assert!(error.contains("dam trust install-local-ca"));
 }
 
