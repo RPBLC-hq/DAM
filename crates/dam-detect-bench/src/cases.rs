@@ -103,6 +103,7 @@ pub(crate) fn cases() -> Vec<Case> {
             }
         },
         secret_case("api_key/pem_private_key", "", pem_private_key(), ""),
+        agent_trace_mixed_prompt(),
         case(
             "negative/package_version",
             "packages dam@0.1.0 and dam-web-ui@0.1.0",
@@ -144,6 +145,36 @@ fn secret_case(name: &'static str, prefix: &str, value: String, suffix: &str) ->
             kind: SensitiveType::ApiKey,
             value,
         }],
+        related_domains: Vec::new(),
+    }
+}
+
+fn agent_trace_mixed_prompt() -> Case {
+    let api_key = openai_project_key('c');
+    let database_url = database_url_with_password();
+    let email = "casey.debug@example.com";
+    let ssn = "234-56-7890";
+
+    Case {
+        name: "agent_trace/mixed_prompt_env_and_tool_output",
+        input: format!(
+            "Debug this local app config before the coding agent sends it upstream.\n\
+             ```env\nOPENAI_API_KEY={api_key}\nDATABASE_URL={database_url}\n```\n\
+             Customer fixture: {email} has tax id {ssn}.\n\
+             Terminal output:\n$ npm run build\npackages dam@0.1.0 and dam-web-ui@0.1.0 passed.\n"
+        ),
+        expected: vec![
+            ExpectedDetection {
+                kind: SensitiveType::ApiKey,
+                value: api_key,
+            },
+            ExpectedDetection {
+                kind: SensitiveType::ApiKey,
+                value: database_url,
+            },
+            expected(SensitiveType::Email, email),
+            expected(SensitiveType::Ssn, ssn),
+        ],
         related_domains: Vec::new(),
     }
 }
