@@ -98,10 +98,12 @@ cargo build -p dam -p dam-web -p dam-tray
 cargo run -p dam-tray
 ```
 
-Headless setup, app profiles (Claude, ChatGPT, …), and every routing/trust
-flag are in [docs/dam.md](docs/dam.md),
+Headless setup, the MVP-visible app profiles (Claude and ChatGPT), and every
+routing/trust flag are in [docs/dam.md](docs/dam.md),
 [docs/dam-tray.md](docs/dam-tray.md), and
-[docs/dam-integrations.md](docs/dam-integrations.md).
+[docs/dam-integrations.md](docs/dam-integrations.md). Imported/custom profile
+JSON remains opt-in and is documented in those module docs rather than treated
+as part of the default visible MVP catalog.
 
 ## How It Works
 
