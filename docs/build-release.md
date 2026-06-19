@@ -14,6 +14,7 @@ scripts/dam-build.sh release-macos --mode developer-id
 scripts/dam-build.sh deploy-local --mode development
 scripts/dam-build.sh agent-check
 scripts/dam-build.sh agent-protection-smoke
+scripts/dam-build.sh agent-visible-evidence-smoke
 scripts/dam-build.sh agent-recovery-smoke --network-mode tun --trust-mode local_ca [--state-dir PATH]
 scripts/dam-build.sh agent-repair-smoke --network-mode tun --trust-mode local_ca --confirm-mutation [--state-dir PATH]
 scripts/dam-build.sh agent-install --skip-checks
@@ -37,6 +38,8 @@ scripts/dam-build.sh agent-status --network-mode tun --trust-mode local_ca [--st
 `agent-check` is the default verification command for local agents and maintainers. It runs `check` and adds `git diff --check` when the source tree is a git checkout.
 
 `agent-protection-smoke` runs the local API-through-DAM protection smoke test against a loopback OpenAI-compatible upstream. By default it uses local llama.cpp at `http://127.0.0.1:8080`, builds and runs `target/debug/dam-proxy` on `127.0.0.1:7831`, uses temporary vault/activity SQLite stores, sends synthetic email/SSN values only, verifies trusted-side resolution, verifies the model can transform only DAM references by inserting whitespace after reference opening brackets, checks the activity log for raw synthetic leaks, then terminates the proxy and removes the temporary stores. If `dam-proxy` exits before becoming healthy, the command fails with the captured exit code and stdout/stderr tail so port/config problems are actionable. It does not change system network settings or call paid providers. Set `DAM_AGENT_E2E_BINARY` to test a specific proxy binary, `DAM_AGENT_E2E_BUILD=0` to reuse an existing binary, or `DAM_AGENT_E2E_KEEP_TEMP=1` to retain temporary smoke-test stores for debugging.
+
+`agent-visible-evidence-smoke` runs a loopback-only visible-evidence verifier against temporary local DAM state. It starts a deterministic fake OpenAI-compatible upstream plus `dam-proxy` and `dam-web`, sends one synthetic request through DAM, polls `GET /api/v1/connect`, `GET /api/v1/activity`, and `GET /api/v1/activity/:id`, and fails closed if raw synthetic values appear in upstream payloads, Connect JSON, Activity JSON, Activity detail JSON, or non-vault log bytes. When Activity exposes a stored local value, the smoke also exercises `POST /api/v1/activity/:id/add-to-wallet` so Wallet add convenience still works without first rendering the raw value in Activity. Set `DAM_AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT` to test a different verifier script, `DAM_AGENT_E2E_WEB_BINARY` to point at a specific `dam-web` build, `DAM_AGENT_E2E_BUILD=0` to reuse existing binaries, or `DAM_AGENT_E2E_KEEP_TEMP=1` to retain the temporary stores.
 
 `agent-recovery-smoke` runs the installed app's read-only recovery probes without changing routing or daemon state: `dam setup rescue --dry-run --json`, `dam setup repair --dry-run --network-mode <mode> --trust-mode <mode> --json`, and `dam setup export-diagnostics --network-mode <mode> --trust-mode <mode> --json`. It uses the same `--network-mode`, `--trust-mode`, `--state-dir`, `DAM_AGENT_NETWORK_MODE`, `DAM_AGENT_TRUST_MODE`, and `DAM_AGENT_STATE_DIR` inputs as `agent-status` for setup repair planning and diagnostics export. Use it after `agent-install` when validating that the installed release artifact can explain and preview recovery actions before any mutating rescue/repair is attempted; pass `--state-dir` when validating retained or fixture state instead of the live user state.
 
@@ -67,7 +70,9 @@ scripts/dam-build.sh agent-status --network-mode tun --trust-mode local_ca [--st
 - `DAM_AGENT_E2E_STARTUP_TIMEOUT`: smoke proxy startup timeout in seconds, default `30`.
 - `DAM_AGENT_E2E_HTTP_TIMEOUT`: smoke request timeout in seconds, default `60`.
 - `DAM_AGENT_E2E_SMOKE_SCRIPT`: verifier script path, default `scripts/rpblc_dam_local_llm_e2e_smoke.py`.
+- `DAM_AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT`: visible-evidence verifier script path, default `scripts/rpblc_dam_visible_evidence_smoke.py`.
 - `DAM_AGENT_E2E_BINARY`: `dam-proxy` binary path for the smoke test, default `target/debug/dam-proxy`.
+- `DAM_AGENT_E2E_WEB_BINARY`: `dam-web` binary path for the visible-evidence smoke test, default `target/debug/dam-web`.
 - `DAM_AGENT_E2E_BUILD`: set to `0` to skip the default smoke-test `cargo build -p dam-proxy` step.
 - `DAM_AGENT_E2E_KEEP_TEMP`: set to `1` to retain the smoke-test temporary vault/log directory for debugging.
 

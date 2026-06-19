@@ -37,6 +37,7 @@ pub fn router() -> Router<AppState> {
         .route("/wallet/:id/remove", post(wallet::remove))
         .route("/activity", get(activity::list))
         .route("/activity/:id", get(activity::detail))
+        .route("/activity/:id/add-to-wallet", post(activity::add_to_wallet))
         .route("/allowed", get(allowed::list))
         .route("/system", get(system::list))
         .route("/settings", get(settings::get))

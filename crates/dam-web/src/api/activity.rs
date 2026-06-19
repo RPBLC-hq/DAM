@@ -5,9 +5,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use dam_core::SensitiveType;
+
 use crate::AppState;
 use crate::activity_map::{Decision, actor_from_message, derive_event_with_actor};
 use crate::error::{Ok, WebError, WebErrorCode, WebResult};
+
+use super::wallet::{WalletDetail, add_wallet_value};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ActivityFeed {
@@ -26,6 +30,7 @@ pub struct ActivityEvent {
     pub value: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
+    pub can_add_to_wallet: bool,
     pub decision: Decision,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purpose: Option<String>,
@@ -127,14 +132,17 @@ pub async fn list(
         {
             continue;
         }
+        let display_value = display_value(&entry.reference, &ev.kind);
+        let can_add_to_wallet = can_add_to_wallet(&ev.kind, entry.value.as_deref());
         events.push(ActivityEvent {
             id: ev.id,
             ts: ev.ts,
             day: ev.day,
             profile,
             kind: ev.kind,
-            value: entry.value.clone(),
+            value: display_value,
             reference: entry.reference.clone(),
+            can_add_to_wallet,
             decision: ev.decision,
             purpose: ev.purpose,
             audit_id: ev.audit_id,
@@ -209,12 +217,6 @@ pub async fn detail(
             value: kind.clone(),
         });
     }
-    if let Some(value) = &entry.value {
-        items.push(EvidenceItem {
-            label: "value".into(),
-            value: value.clone(),
-        });
-    }
     if let Some(reference) = &entry.reference {
         items.push(EvidenceItem {
             label: "reference".into(),
@@ -237,6 +239,57 @@ pub async fn detail(
     });
 
     Ok(Ok::new(ActivityEvidence { items }))
+}
+
+pub async fn add_to_wallet(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> WebResult<WalletDetail> {
+    let entries = state
+        .logs
+        .list()
+        .map_err(|_| WebError::new(WebErrorCode::DaemonUnreachable))?;
+    let entry = entries
+        .into_iter()
+        .find(|e| e.id == id)
+        .ok_or_else(|| WebError::new(WebErrorCode::WalletValueMissing))?;
+    let kind = entry
+        .kind
+        .as_deref()
+        .and_then(SensitiveType::from_tag)
+        .ok_or_else(|| WebError::new(WebErrorCode::InvalidRequest))?;
+    let value = entry
+        .value
+        .as_deref()
+        .ok_or_else(|| WebError::new(WebErrorCode::WalletValueMissing))?;
+    let detail = add_wallet_value(&state, kind, value)?;
+    Ok(Ok::new(detail))
+}
+
+fn display_value(reference: &Option<String>, kind: &str) -> Option<String> {
+    reference
+        .as_ref()
+        .map(|value| format!("[{value}]"))
+        .or_else(|| Some(format!("[{kind}]")))
+}
+
+fn can_add_to_wallet(kind: &str, value: Option<&str>) -> bool {
+    let Some(value) = value.map(str::trim) else {
+        return false;
+    };
+    if value.is_empty() {
+        return false;
+    }
+    matches!(
+        SensitiveType::from_tag(kind),
+        Some(
+            SensitiveType::Email
+                | SensitiveType::Domain
+                | SensitiveType::Phone
+                | SensitiveType::Ssn
+                | SensitiveType::CreditCard
+        )
+    )
 }
 
 fn decision_matches(filter: &str, decision: Decision) -> bool {

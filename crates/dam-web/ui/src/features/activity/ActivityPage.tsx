@@ -28,8 +28,6 @@ const ACTIVITY_REFETCH_INTERVAL_MS = 5_000
 
 type AddActivityValueRequest = {
   eventId: number
-  kind: WalletKind
-  value: string
 }
 
 export function ActivityPage() {
@@ -75,8 +73,8 @@ export function ActivityPage() {
   })
 
   const addToWallet = useMutation({
-    mutationFn: ({ kind, value }: AddActivityValueRequest) =>
-      apiPost<WalletDetail>('/wallet', { kind, value }),
+    mutationFn: ({ eventId }: AddActivityValueRequest) =>
+      apiPost<WalletDetail>(`/activity/${eventId}/add-to-wallet`, {}),
     onSuccess: (_detail, variables) => {
       setAddedActivityIds((current) => {
         const next = new Set(current)
@@ -156,7 +154,7 @@ export function ActivityPage() {
               addPending={addToWallet.isPending && addToWallet.variables?.eventId === item.id}
               addSucceeded={addedActivityIds.has(item.id)}
               addFailed={addToWallet.isError && addToWallet.variables?.eventId === item.id}
-              onAddToWallet={(kind, value) => addToWallet.mutate({ eventId: item.id, kind, value })}
+              onAddToWallet={() => addToWallet.mutate({ eventId: item.id })}
             />
           ))
         )}
@@ -180,7 +178,7 @@ function ActivityRow({
   addPending: boolean
   addSucceeded: boolean
   addFailed: boolean
-  onAddToWallet: (kind: WalletKind, value: string) => void
+  onAddToWallet: () => void
 }) {
   const { t } = useI18n()
   const ago = relative(Math.max(0, Math.floor(Date.now() / 1000) - item.ts))
@@ -188,9 +186,8 @@ function ActivityRow({
   const detected = activityDetectedLabel(item, t('activity.valueUnavailable'))
   const identifier = activityIdentifierLabel(item)
   const walletKind = walletKindForActivityKind(item.kind)
-  const walletValue = item.value?.trim() ?? ''
-  const showWalletAction = walletKind !== null
-  const addDisabled = addBusy || addPending || addSucceeded || !walletValue
+  const showWalletAction = walletKind !== null && item.can_add_to_wallet
+  const addDisabled = addBusy || addPending || addSucceeded
 
   return (
     <article className="dam-activity__row">
@@ -220,11 +217,7 @@ function ActivityRow({
             bracketed
             type="button"
             disabled={addDisabled}
-            title={!walletValue ? t('activity.valueUnavailable') : undefined}
-            onClick={() => {
-              if (!walletKind || !walletValue) return
-              onAddToWallet(walletKind, walletValue)
-            }}
+            onClick={onAddToWallet}
           >
             {addPending
               ? t('activity.adding')

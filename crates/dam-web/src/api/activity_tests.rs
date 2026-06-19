@@ -44,8 +44,12 @@ async fn activity_resolves_profile_label_without_wallet_lookup() {
     assert_eq!(event.profile, profile_label);
     assert_ne!(event.profile, target_label);
     assert_eq!(event.kind, "email");
-    assert_eq!(event.value.as_deref(), Some("ada@example.test"));
+    assert_eq!(
+        event.value.as_deref(),
+        Some(format!("[{}]", reference.key()).as_str())
+    );
     assert_eq!(event.reference.as_deref(), Some(reference.key().as_str()));
+    assert!(event.can_add_to_wallet);
     assert!(matches!(event.decision, Decision::Sealed));
 }
 
@@ -140,10 +144,8 @@ async fn activity_uses_redaction_event_for_sealed_activity_without_policy_duplic
     assert_eq!(response.data.events.len(), 1);
     assert_eq!(response.data.events[0].id, 2);
     assert_eq!(response.data.events[0].kind, "email");
-    assert_eq!(
-        response.data.events[0].value.as_deref(),
-        Some("ada@example.test")
-    );
+    assert_eq!(response.data.events[0].value.as_deref(), Some("[email]"));
+    assert!(response.data.events[0].can_add_to_wallet);
     assert_eq!(response.data.summary.total, 1);
 }
 
@@ -201,15 +203,59 @@ async fn activity_shows_consent_outcome_without_wallet_lookup() {
     let sealed = &response.data.events[0];
     assert_eq!(sealed.id, 2);
     assert_eq!(sealed.kind, "email");
-    assert_eq!(sealed.value.as_deref(), Some("ada@example.test"));
+    assert_eq!(sealed.value.as_deref(), Some("[email]"));
+    assert!(sealed.can_add_to_wallet);
     assert!(matches!(sealed.decision, Decision::Sealed));
 
     let granted = &response.data.events[1];
     assert_eq!(granted.id, 1);
     assert_eq!(granted.kind, "email");
-    assert_eq!(granted.value.as_deref(), Some("ada@example.test"));
+    assert_eq!(granted.value.as_deref(), Some("[email]"));
+    assert!(granted.can_add_to_wallet);
     assert!(matches!(granted.decision, Decision::Granted));
     assert_eq!(response.data.summary.total, 2);
+}
+
+#[tokio::test]
+async fn activity_detail_omits_raw_value_and_add_to_wallet_reuses_log_value() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    let reference = Reference::generate(SensitiveType::Email);
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::Redaction,
+            "replacement applied with tokenized reference",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_value("ada@example.test")
+        .with_reference(reference.clone())
+        .with_action("tokenized"),
+    )
+    .unwrap();
+    let state = test_state(vault.clone(), logs);
+
+    let detail_response = detail(State(state.clone()), Path(1)).await.unwrap();
+    let labels = detail_response
+        .data
+        .items
+        .iter()
+        .map(|item| item.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(!labels.contains(&"value"));
+    assert!(labels.contains(&"reference"));
+
+    let add_response = add_to_wallet(State(state), Path(1)).await.unwrap();
+    let key = add_response
+        .data
+        .reference
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    assert_eq!(
+        vault.get_wallet(key).unwrap().as_deref(),
+        Some("ada@example.test")
+    );
 }
 
 #[tokio::test]
