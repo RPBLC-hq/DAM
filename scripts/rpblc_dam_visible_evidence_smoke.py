@@ -22,6 +22,7 @@ import tempfile
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -82,10 +83,16 @@ def post_json(url: str, payload: dict[str, Any], *, timeout: float) -> dict[str,
 
 
 def post_empty_json(url: str, *, timeout: float) -> dict[str, Any]:
+    parsed = urllib.parse.urlparse(url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
     request = urllib.request.Request(
         url,
         data=b"{}",
-        headers={"content-type": "application/json"},
+        headers={
+            "content-type": "application/json",
+            "origin": origin,
+            "referer": origin + "/",
+        },
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:  # nosec: loopback only

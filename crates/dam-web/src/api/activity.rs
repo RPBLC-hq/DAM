@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use dam_core::SensitiveType;
+use dam_core::{Reference, SensitiveType, VaultReader};
 
 use crate::AppState;
 use crate::activity_map::{Decision, actor_from_message, derive_event_with_actor};
@@ -133,7 +133,8 @@ pub async fn list(
             continue;
         }
         let display_value = display_value(&entry.reference, &ev.kind);
-        let can_add_to_wallet = can_add_to_wallet(&ev.kind, entry.value.as_deref());
+        let can_add_to_wallet =
+            can_add_to_wallet(&ev.kind, entry.value.as_deref(), entry.reference.as_deref());
         events.push(ActivityEvent {
             id: ev.id,
             ts: ev.ts,
@@ -258,12 +259,29 @@ pub async fn add_to_wallet(
         .as_deref()
         .and_then(SensitiveType::from_tag)
         .ok_or_else(|| WebError::new(WebErrorCode::InvalidRequest))?;
-    let value = entry
-        .value
-        .as_deref()
-        .ok_or_else(|| WebError::new(WebErrorCode::WalletValueMissing))?;
-    let detail = add_wallet_value(&state, kind, value)?;
+    let value = activity_wallet_value(&state, entry.value.as_deref(), entry.reference.as_deref())?;
+    let detail = add_wallet_value(&state, kind, &value)?;
     Ok(Ok::new(detail))
+}
+
+fn activity_wallet_value(
+    state: &AppState,
+    value: Option<&str>,
+    reference: Option<&str>,
+) -> Result<String, WebError> {
+    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+        return Ok(value.to_string());
+    }
+
+    let reference = reference
+        .and_then(Reference::parse_key)
+        .ok_or_else(|| WebError::new(WebErrorCode::WalletValueMissing))?;
+    state
+        .vault
+        .read(&reference)
+        .map_err(|_| WebError::new(WebErrorCode::WalletUnreachable))?
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| WebError::new(WebErrorCode::WalletValueMissing))
 }
 
 fn display_value(reference: &Option<String>, kind: &str) -> Option<String> {
@@ -273,14 +291,8 @@ fn display_value(reference: &Option<String>, kind: &str) -> Option<String> {
         .or_else(|| Some(format!("[{kind}]")))
 }
 
-fn can_add_to_wallet(kind: &str, value: Option<&str>) -> bool {
-    let Some(value) = value.map(str::trim) else {
-        return false;
-    };
-    if value.is_empty() {
-        return false;
-    }
-    matches!(
+fn can_add_to_wallet(kind: &str, value: Option<&str>, reference: Option<&str>) -> bool {
+    if !matches!(
         SensitiveType::from_tag(kind),
         Some(
             SensitiveType::Email
@@ -289,7 +301,15 @@ fn can_add_to_wallet(kind: &str, value: Option<&str>) -> bool {
                 | SensitiveType::Ssn
                 | SensitiveType::CreditCard
         )
-    )
+    ) {
+        return false;
+    }
+
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+        || reference.and_then(Reference::parse_key).is_some()
 }
 
 fn decision_matches(filter: &str, decision: Decision) -> bool {

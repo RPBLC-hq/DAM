@@ -1,6 +1,8 @@
 use super::*;
 use axum::extract::{Query, State};
-use dam_core::{LogEvent, LogEventType, LogLevel, Reference, SensitiveType};
+use dam_core::{
+    LogEvent, LogEventType, LogLevel, Reference, SensitiveType, VaultRecord, VaultWriter,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -217,10 +219,17 @@ async fn activity_shows_consent_outcome_without_wallet_lookup() {
 }
 
 #[tokio::test]
-async fn activity_detail_omits_raw_value_and_add_to_wallet_reuses_log_value() {
+async fn activity_detail_omits_raw_value_and_add_to_wallet_resolves_reference() {
     let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
     let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
     let reference = Reference::generate(SensitiveType::Email);
+    vault
+        .write(&VaultRecord {
+            reference: reference.clone(),
+            kind: SensitiveType::Email,
+            value: "ada@example.test".to_string(),
+        })
+        .unwrap();
     logs.record(
         &LogEvent::new(
             "op-1",
@@ -229,12 +238,23 @@ async fn activity_detail_omits_raw_value_and_add_to_wallet_reuses_log_value() {
             "replacement applied with tokenized reference",
         )
         .with_kind(SensitiveType::Email)
-        .with_value("ada@example.test")
         .with_reference(reference.clone())
         .with_action("tokenized"),
     )
     .unwrap();
     let state = test_state(vault.clone(), logs);
+
+    let list_response = list(
+        State(state.clone()),
+        Query(ActivityQuery {
+            since: Some(0),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(list_response.data.events.len(), 1);
+    assert!(list_response.data.events[0].can_add_to_wallet);
 
     let detail_response = detail(State(state.clone()), Path(1)).await.unwrap();
     let labels = detail_response
