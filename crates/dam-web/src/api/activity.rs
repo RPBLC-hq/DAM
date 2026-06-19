@@ -254,6 +254,9 @@ pub async fn add_to_wallet(
         .into_iter()
         .find(|e| e.id == id)
         .ok_or_else(|| WebError::new(WebErrorCode::WalletValueMissing))?;
+    if derive_event_with_actor(&entry, None).is_none() {
+        return Err(WebError::new(WebErrorCode::InvalidRequest));
+    }
     let kind_tag = entry
         .kind
         .as_deref()

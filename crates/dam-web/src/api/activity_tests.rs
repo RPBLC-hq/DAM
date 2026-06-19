@@ -321,6 +321,62 @@ async fn activity_rejects_add_to_wallet_for_non_allowlisted_kind() {
 }
 
 #[tokio::test]
+async fn activity_rejects_add_to_wallet_for_non_surfaced_allowlisted_row() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    let reference = Reference::generate(SensitiveType::Email);
+    vault
+        .write(&VaultRecord {
+            reference: reference.clone(),
+            kind: SensitiveType::Email,
+            value: "ada@example.test".to_string(),
+        })
+        .unwrap();
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::VaultWrite,
+            "vault entry stored for tokenized reference",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_reference(reference.clone())
+        .with_action("stored"),
+    )
+    .unwrap();
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::Redaction,
+            "replacement applied with tokenized reference",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_reference(reference.clone())
+        .with_action("tokenized"),
+    )
+    .unwrap();
+    let state = test_state(vault.clone(), logs);
+
+    let list_response = list(
+        State(state.clone()),
+        Query(ActivityQuery {
+            since: Some(0),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(list_response.data.events.len(), 1);
+    assert_eq!(list_response.data.events[0].id, 2);
+    assert!(list_response.data.events[0].can_add_to_wallet);
+
+    let error = add_to_wallet(State(state), Path(1)).await.unwrap_err();
+    assert_eq!(error.code, WebErrorCode::InvalidRequest);
+    assert!(vault.get_wallet(&reference.key()).unwrap().is_none());
+}
+
+#[tokio::test]
 async fn activity_uses_bounded_relevant_log_query_without_request_summaries() {
     let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
     let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
