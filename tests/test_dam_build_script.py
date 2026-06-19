@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import subprocess
 import sys
@@ -9,6 +10,15 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_SCRIPT = ROOT / "scripts" / "dam-build.sh"
+VISIBLE_EVIDENCE_SMOKE_SCRIPT = ROOT / "scripts" / "rpblc_dam_visible_evidence_smoke.py"
+
+
+spec = importlib.util.spec_from_file_location(
+    "rpblc_dam_visible_evidence_smoke", VISIBLE_EVIDENCE_SMOKE_SCRIPT
+)
+assert spec is not None and spec.loader is not None
+visible_evidence_smoke = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(visible_evidence_smoke)
 
 
 class DamBuildScriptTests(unittest.TestCase):
@@ -138,6 +148,42 @@ class DamBuildScriptTests(unittest.TestCase):
                     str(ROOT / "target" / "debug" / "dam-web"),
                 ],
             )
+
+    def test_visible_evidence_smoke_sanitizes_wallet_add_output(self):
+        result = visible_evidence_smoke.sanitize_wallet_add_result(
+            {
+                "ok": True,
+                "data": {
+                    "item": {
+                        "id": "ref-123",
+                        "kind": "ssn",
+                        "value": "123-45-6789",
+                        "state": "protected",
+                        "shared_with": [],
+                    },
+                    "meta": [{"key": "stored in", "value": "local vault"}],
+                    "first_seen": "2026-06-19",
+                    "reference": "[ssn:ref-123]",
+                },
+            }
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "ok": True,
+                "data": {
+                    "item": {
+                        "id": "ref-123",
+                        "kind": "ssn",
+                        "state": "protected",
+                    },
+                    "meta": [{"key": "stored in", "value": "local vault"}],
+                    "first_seen": "2026-06-19",
+                    "reference": "[ssn:ref-123]",
+                },
+            },
+        )
 
     def test_agent_status_rejects_invalid_setup_probe_modes_before_macos_checks(self):
         result = subprocess.run(

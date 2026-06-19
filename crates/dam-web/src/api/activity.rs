@@ -254,10 +254,14 @@ pub async fn add_to_wallet(
         .into_iter()
         .find(|e| e.id == id)
         .ok_or_else(|| WebError::new(WebErrorCode::WalletValueMissing))?;
-    let kind = entry
+    let kind_tag = entry
         .kind
         .as_deref()
-        .and_then(SensitiveType::from_tag)
+        .ok_or_else(|| WebError::new(WebErrorCode::InvalidRequest))?;
+    if !wallet_addable_kind(kind_tag) {
+        return Err(WebError::new(WebErrorCode::InvalidRequest));
+    }
+    let kind = SensitiveType::from_tag(kind_tag)
         .ok_or_else(|| WebError::new(WebErrorCode::InvalidRequest))?;
     let value = activity_wallet_value(&state, entry.value.as_deref(), entry.reference.as_deref())?;
     let detail = add_wallet_value(&state, kind, &value)?;
@@ -292,16 +296,7 @@ fn display_value(reference: &Option<String>, kind: &str) -> Option<String> {
 }
 
 fn can_add_to_wallet(kind: &str, value: Option<&str>, reference: Option<&str>) -> bool {
-    if !matches!(
-        SensitiveType::from_tag(kind),
-        Some(
-            SensitiveType::Email
-                | SensitiveType::Domain
-                | SensitiveType::Phone
-                | SensitiveType::Ssn
-                | SensitiveType::CreditCard
-        )
-    ) {
+    if !wallet_addable_kind(kind) {
         return false;
     }
 
@@ -310,6 +305,19 @@ fn can_add_to_wallet(kind: &str, value: Option<&str>, reference: Option<&str>) -
         .filter(|value| !value.is_empty())
         .is_some()
         || reference.and_then(Reference::parse_key).is_some()
+}
+
+fn wallet_addable_kind(kind: &str) -> bool {
+    matches!(
+        SensitiveType::from_tag(kind),
+        Some(
+            SensitiveType::Email
+                | SensitiveType::Domain
+                | SensitiveType::Phone
+                | SensitiveType::Ssn
+                | SensitiveType::CreditCard
+        )
+    )
 }
 
 fn decision_matches(filter: &str, decision: Decision) -> bool {

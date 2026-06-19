@@ -317,6 +317,32 @@ def poll_activity(base_url: str, *, timeout: float) -> tuple[dict[str, Any], byt
     raise AssertionError(f"activity feed did not surface a sealed event within timeout: {last_error[-500:]}")
 
 
+def sanitize_wallet_add_result(result: dict[str, Any]) -> dict[str, Any]:
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return {"ok": bool(result.get("ok"))}
+
+    raw_item = data.get("item")
+    item = raw_item if isinstance(raw_item, dict) else {}
+    sanitized_item: dict[str, Any] = {}
+    for key in ("id", "kind", "state"):
+        if key in item:
+            sanitized_item[key] = item[key]
+
+    sanitized: dict[str, Any] = {"ok": bool(result.get("ok"))}
+    sanitized_data: dict[str, Any] = {}
+    if sanitized_item:
+        sanitized_data["item"] = sanitized_item
+    for key in ("reference", "first_seen"):
+        if key in data:
+            sanitized_data[key] = data[key]
+    if "meta" in data:
+        sanitized_data["meta"] = data["meta"]
+    if sanitized_data:
+        sanitized["data"] = sanitized_data
+    return sanitized
+
+
 def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     root = Path(__file__).resolve().parents[1]
     proxy_binary = Path(args.binary)
@@ -426,6 +452,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             f"http://{args.web_addr}/api/v1/activity/{event['id']}/add-to-wallet",
             timeout=args.http_timeout,
         )
+        sanitized_add_result = sanitize_wallet_add_result(add_result)
 
         return {
             "upstream": upstream.base_url,
@@ -444,7 +471,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             "activity_payload": activity_payload.decode("utf-8", errors="replace"),
             "log_rows": count_log_rows(log_db),
             "raw_synthetic_values_in_log_db": raw_values_in_file(log_db),
-            "wallet_add_result": add_result,
+            "wallet_add_result": sanitized_add_result,
             "cleanup": "kept" if args.keep_temp else "removed",
             "temp_dir": str(temp_dir),
         }

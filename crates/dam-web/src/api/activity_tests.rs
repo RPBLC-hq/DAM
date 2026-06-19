@@ -279,6 +279,48 @@ async fn activity_detail_omits_raw_value_and_add_to_wallet_resolves_reference() 
 }
 
 #[tokio::test]
+async fn activity_rejects_add_to_wallet_for_non_allowlisted_kind() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    let reference = Reference::generate(SensitiveType::ApiKey);
+    vault
+        .write(&VaultRecord {
+            reference: reference.clone(),
+            kind: SensitiveType::ApiKey,
+            value: "sk-synthetic-value".to_string(),
+        })
+        .unwrap();
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::Redaction,
+            "replacement applied with tokenized reference",
+        )
+        .with_kind(SensitiveType::ApiKey)
+        .with_reference(reference)
+        .with_action("tokenized"),
+    )
+    .unwrap();
+    let state = test_state(vault, logs);
+
+    let list_response = list(
+        State(state.clone()),
+        Query(ActivityQuery {
+            since: Some(0),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(list_response.data.events.len(), 1);
+    assert!(!list_response.data.events[0].can_add_to_wallet);
+
+    let error = add_to_wallet(State(state), Path(1)).await.unwrap_err();
+    assert_eq!(error.code, WebErrorCode::InvalidRequest);
+}
+
+#[tokio::test]
 async fn activity_uses_bounded_relevant_log_query_without_request_summaries() {
     let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
     let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
