@@ -416,12 +416,16 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
                 + ", ".join(raw_values_in_file(log_db))
             )
 
-        add_result = None
-        if event.get("can_add_to_wallet"):
-            add_result = post_empty_json(
-                f"http://{args.web_addr}/api/v1/activity/{event['id']}/add-to-wallet",
-                timeout=args.http_timeout,
+        if not event.get("can_add_to_wallet"):
+            raise AssertionError(
+                "sealed activity event did not allow add-to-wallet; visible-evidence smoke "
+                "requires exercising the guarded wallet path"
             )
+
+        add_result = post_empty_json(
+            f"http://{args.web_addr}/api/v1/activity/{event['id']}/add-to-wallet",
+            timeout=args.http_timeout,
+        )
 
         return {
             "upstream": upstream.base_url,
