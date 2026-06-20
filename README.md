@@ -156,6 +156,7 @@ Full pipeline, resolve path, and control/diagnostics flows are in
 | Use the web UI / tray | [docs/dam-web.md](docs/dam-web.md) · [docs/dam-tray.md](docs/dam-tray.md) |
 | Drive DAM from an agent | [docs/dam-mcp.md](docs/dam-mcp.md) · [docs/dam-api.md](docs/dam-api.md) |
 | What's detected | [docs/dam-detect.md](docs/dam-detect.md) · [docs/dam-policy.md](docs/dam-policy.md) |
+| Prepare a security review | [docs/security-review-bundle.md](docs/security-review-bundle.md) |
 | Build & release | [docs/build-release.md](docs/build-release.md) |
 | Module map & architecture | [docs/README.md](docs/README.md) |
 
