@@ -376,7 +376,7 @@ else:
     :
   else
     whoami_output="missing"
-    blockers+=("npm publish auth is not configured on this machine; Alexy must run npm adduser or configure a publish token for $package_name")
+    blockers+=("npm publish auth is not configured on this machine; run npm adduser or configure a publish token for $package_name")
   fi
 
   printf 'DAM agent npm readiness\n'
