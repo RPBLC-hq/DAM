@@ -41,6 +41,7 @@ class DamBuildScriptTests(unittest.TestCase):
         self.assertIn("DAM_AGENT_E2E_BINARY", result.stdout)
         self.assertIn("DAM_AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT", result.stdout)
         self.assertIn("DAM_AGENT_E2E_WEB_BINARY", result.stdout)
+        self.assertIn("DAM_AGENT_E2E_WEB_ADDR", result.stdout)
         self.assertIn("DAM_AGENT_E2E_BUILD", result.stdout)
         self.assertIn("DAM_AGENT_E2E_KEEP_TEMP", result.stdout)
         self.assertIn("DAM_AGENT_STATE_DIR", result.stdout)
@@ -119,6 +120,7 @@ class DamBuildScriptTests(unittest.TestCase):
                 {
                     "DAM_AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT": str(stub_path),
                     "DAM_AGENT_E2E_LISTEN": "127.0.0.1:17831",
+                    "DAM_AGENT_E2E_WEB_ADDR": "127.0.0.1:12896",
                     "DAM_AGENT_E2E_STARTUP_TIMEOUT": "7",
                     "DAM_AGENT_E2E_HTTP_TIMEOUT": "11",
                 }
@@ -139,6 +141,8 @@ class DamBuildScriptTests(unittest.TestCase):
                 [
                     "--listen",
                     "127.0.0.1:17831",
+                    "--web-addr",
+                    "127.0.0.1:12896",
                     "--startup-timeout",
                     "7",
                     "--http-timeout",
@@ -149,6 +153,47 @@ class DamBuildScriptTests(unittest.TestCase):
                     str(ROOT / "target" / "debug" / "dam-web"),
                 ],
             )
+
+    def test_agent_visible_evidence_smoke_allocates_free_loopback_web_addr_by_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "argv.txt"
+            stub_path = Path(temp_dir) / "visible_smoke_stub.py"
+            stub_path.write_text(
+                textwrap.dedent(
+                    f"""
+                    import pathlib
+                    import sys
+                    pathlib.Path({str(output_path)!r}).write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
+                    raise SystemExit(0)
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "DAM_AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT": str(stub_path),
+                    "DAM_AGENT_E2E_LISTEN": "127.0.0.1:17831",
+                    "DAM_AGENT_E2E_STARTUP_TIMEOUT": "7",
+                    "DAM_AGENT_E2E_HTTP_TIMEOUT": "11",
+                }
+            )
+            env.pop("DAM_AGENT_E2E_WEB_ADDR", None)
+            subprocess.run(
+                [str(BUILD_SCRIPT), "agent-visible-evidence-smoke"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            argv = output_path.read_text(encoding="utf-8").splitlines()
+            web_addr = argv[argv.index("--web-addr") + 1]
+            self.assertRegex(web_addr, r"^127\.0\.0\.1:\d+$")
+            self.assertNotEqual(web_addr, "127.0.0.1:2896")
 
     def test_visible_evidence_smoke_sanitizes_wallet_add_output(self):
         result = visible_evidence_smoke.sanitize_wallet_add_result(

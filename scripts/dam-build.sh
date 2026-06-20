@@ -21,6 +21,7 @@ AGENT_E2E_SMOKE_SCRIPT="${DAM_AGENT_E2E_SMOKE_SCRIPT:-$ROOT/scripts/rpblc_dam_lo
 AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT="${DAM_AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT:-$ROOT/scripts/rpblc_dam_visible_evidence_smoke.py}"
 AGENT_E2E_BINARY="${DAM_AGENT_E2E_BINARY:-$ROOT/target/debug/dam-proxy}"
 AGENT_E2E_WEB_BINARY="${DAM_AGENT_E2E_WEB_BINARY:-$ROOT/target/debug/dam-web}"
+AGENT_E2E_WEB_ADDR="${DAM_AGENT_E2E_WEB_ADDR:-}"
 AGENT_E2E_BUILD="${DAM_AGENT_E2E_BUILD:-1}"
 AGENT_E2E_KEEP_TEMP="${DAM_AGENT_E2E_KEEP_TEMP:-0}"
 AGENT_CONFIRM_MUTATION="${DAM_AGENT_CONFIRM_MUTATION:-0}"
@@ -98,6 +99,7 @@ Environment:
                            Visible-evidence verifier script, currently $AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT
   DAM_AGENT_E2E_BINARY     dam-proxy binary path for smoke, currently $AGENT_E2E_BINARY
   DAM_AGENT_E2E_WEB_BINARY dam-web binary path for visible-evidence smoke, currently $AGENT_E2E_WEB_BINARY
+  DAM_AGENT_E2E_WEB_ADDR   dam-web listen address for visible-evidence smoke; defaults to a free loopback port
   DAM_AGENT_E2E_BUILD      Set to 0 to reuse the binary without cargo build, currently $AGENT_E2E_BUILD
   DAM_AGENT_E2E_KEEP_TEMP  Set to 1 to keep smoke temp vault/log files, currently $AGENT_E2E_KEEP_TEMP
   DAM_AGENT_CONFIRM_MUTATION
@@ -110,6 +112,16 @@ run() {
   printf ' %q' "$@"
   printf '\n'
   "$@"
+}
+
+free_loopback_addr() {
+  python3 - <<'PY'
+import socket
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    host, port = sock.getsockname()
+    print(f"{host}:{port}")
+PY
 }
 
 require_macos() {
@@ -442,9 +454,14 @@ cmd_agent_visible_evidence_smoke() {
     echo "missing visible evidence smoke script: $AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT" >&2
     exit 1
   fi
+  local web_addr="$AGENT_E2E_WEB_ADDR"
+  if [[ -z "$web_addr" ]]; then
+    web_addr="$(free_loopback_addr)"
+  fi
   local smoke_args=(
     "$AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT"
     --listen "$AGENT_E2E_LISTEN"
+    --web-addr "$web_addr"
     --startup-timeout "$AGENT_E2E_STARTUP_TIMEOUT"
     --http-timeout "$AGENT_E2E_HTTP_TIMEOUT"
     --binary "$AGENT_E2E_BINARY"
