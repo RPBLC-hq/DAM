@@ -238,9 +238,10 @@ Use [../dam.example.toml](../dam.example.toml) as the local starting point.
 ```bash
 scripts/dam-build.sh agent-check
 scripts/dam-build.sh agent-protection-smoke
+scripts/dam-build.sh agent-visible-evidence-smoke
 ```
 
-The build/release entrypoint in [build-release.md](build-release.md) wraps local verification, source builds, local API-through-DAM protection smoke testing, signed macOS app packaging, notarization, local deploy, installed-app verification, restart, and status steps so local, CI, and agent workflows use the same command surface.
+The build/release entrypoint in [build-release.md](build-release.md) wraps local verification, source builds, loopback-only synthetic-data-only API-through-DAM protection smoke testing, loopback-only visible-evidence / Activity-to-Wallet proof, signed macOS app packaging, notarization, local deploy, installed-app verification, restart, and status steps so local, CI, and agent workflows use the same command surface.
 
 Run only the E2E suite with:
 
