@@ -447,7 +447,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
       'Right now, every app on this device reads more than it needs — your name, your numbers, your address, the words you type. RPBLC.DAM stands between them and the open internet, so every share waits for your call. Every grant is signed; every value, revocable.',
     'connect.protectedStatus': 'Protected. DAM is mediating requests on this device.',
     'connect.pausedStatus': 'Protection is paused. Local clients can keep their endpoint.',
-    'connect.degradedStatus': 'Protection needs attention. DAM is still here.',
+    'connect.degradedStatus': 'DAM detected an issue. Protection may not be active.',
     'connect.setupStatus': 'Finish local setup before DAM can protect this device.',
     'connect.summary.requested': 'DAM setup was requested. Continue the handoff on this device.',
     'connect.summary.waiting_for_approval':
@@ -461,7 +461,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.summary.connected':
       'DAM is connected locally. Finish the remaining trust steps on this device.',
     'connect.summary.rolled_back':
-      'DAM rolled protection back to keep this device safe. Repair is needed.',
+      'DAM rolled back the protection setup. Repair is needed before protection can resume.',
     'connect.summary.failed': 'DAM hit a local setup failure. Repair is needed before protection can continue.',
     'connect.nothingAsking': 'no new requests',
     'connect.protectedFor': 'Protected for',
@@ -855,7 +855,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
       'Aujourd’hui, chaque app de cet appareil lit plus qu’elle ne le doit — votre nom, vos numéros, votre adresse, les mots que vous écrivez. RPBLC.DAM se place entre elles et l’internet ouvert, pour que chaque partage attende votre décision. Chaque autorisation est signée ; chaque valeur, révocable.',
     'connect.protectedStatus': 'Protégé. DAM encadre les requêtes sur cet appareil.',
     'connect.pausedStatus': 'La protection est en pause. Les clients locaux gardent leur point d’accès.',
-    'connect.degradedStatus': 'La protection demande une attention. DAM reste présent.',
+    'connect.degradedStatus': 'DAM a détecté un problème. La protection peut ne pas être active.',
     'connect.setupStatus': 'Terminez la configuration locale avant que DAM protège cet appareil.',
     'connect.summary.requested': 'La configuration de DAM a été demandée. Continuez la procédure sur cet appareil.',
     'connect.summary.waiting_for_approval':
@@ -869,7 +869,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.summary.connected':
       'DAM est connecté localement. Terminez les dernières étapes de confiance sur cet appareil.',
     'connect.summary.rolled_back':
-      'DAM a annulé la protection pour garder cet appareil sûr. Une réparation est nécessaire.',
+      'DAM a annulé l’installation de la protection. Une réparation est nécessaire avant de la reprendre.',
     'connect.summary.failed':
       'DAM a rencontré un échec de configuration locale. Une réparation est nécessaire avant de poursuivre la protection.',
     'connect.nothingAsking': 'aucune nouvelle demande',
