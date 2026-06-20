@@ -286,6 +286,61 @@ class DamBuildScriptTests(unittest.TestCase):
                 ],
             )
 
+    def test_agent_recovery_smoke_honors_environment_selected_setup_modes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            app_dir = temp_path / "DAM.app"
+            dam_bin = app_dir / "Contents" / "MacOS" / "dam"
+            calls_path = temp_path / "dam-calls.txt"
+            state_dir = temp_path / "fixture-state"
+            bin_dir.mkdir()
+            dam_bin.parent.mkdir(parents=True)
+
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
+            dam_bin.write_text(
+                textwrap.dedent(
+                    f"""
+                    #!/usr/bin/env sh
+                    printf '%s\\n' "$*" >> {str(calls_path)!r}
+                    exit 0
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            dam_bin.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "DAM_INSTALL_DIR": str(temp_path),
+                    "DAM_AGENT_NETWORK_MODE": "explicit_proxy",
+                    "DAM_AGENT_TRUST_MODE": "disabled",
+                    "DAM_AGENT_STATE_DIR": str(state_dir),
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                }
+            )
+            subprocess.run(
+                [str(BUILD_SCRIPT), "agent-recovery-smoke"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            self.assertEqual(
+                calls_path.read_text(encoding="utf-8").splitlines(),
+                [
+                    f"setup rescue --dry-run --state-dir {state_dir} --json",
+                    f"setup repair --dry-run --network-mode explicit_proxy --trust-mode disabled --state-dir {state_dir} --json",
+                    f"setup export-diagnostics --network-mode explicit_proxy --trust-mode disabled --state-dir {state_dir} --json",
+                ],
+            )
+
     def test_agent_repair_smoke_requires_explicit_mutation_confirmation_before_macos_checks(self):
         result = subprocess.run(
             [str(BUILD_SCRIPT), "agent-repair-smoke"],
@@ -357,6 +412,62 @@ class DamBuildScriptTests(unittest.TestCase):
                     f"setup rescue --yes --state-dir {state_dir} --json",
                     f"setup repair --yes --network-mode tun --trust-mode local_ca --state-dir {state_dir} --json",
                     f"setup status --network-mode tun --trust-mode local_ca --state-dir {state_dir} --json",
+                ],
+            )
+
+    def test_agent_repair_smoke_accepts_environment_confirmation_and_modes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            app_dir = temp_path / "DAM.app"
+            dam_bin = app_dir / "Contents" / "MacOS" / "dam"
+            calls_path = temp_path / "dam-calls.txt"
+            state_dir = temp_path / "fixture-state"
+            bin_dir.mkdir()
+            dam_bin.parent.mkdir(parents=True)
+
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
+            dam_bin.write_text(
+                textwrap.dedent(
+                    f"""
+                    #!/usr/bin/env sh
+                    printf '%s\\n' "$*" >> {str(calls_path)!r}
+                    exit 0
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            dam_bin.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "DAM_INSTALL_DIR": str(temp_path),
+                    "DAM_AGENT_CONFIRM_MUTATION": "1",
+                    "DAM_AGENT_NETWORK_MODE": "explicit_proxy",
+                    "DAM_AGENT_TRUST_MODE": "disabled",
+                    "DAM_AGENT_STATE_DIR": str(state_dir),
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                }
+            )
+            subprocess.run(
+                [str(BUILD_SCRIPT), "agent-repair-smoke"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            self.assertEqual(
+                calls_path.read_text(encoding="utf-8").splitlines(),
+                [
+                    f"setup rescue --yes --state-dir {state_dir} --json",
+                    f"setup repair --yes --network-mode explicit_proxy --trust-mode disabled --state-dir {state_dir} --json",
+                    f"setup status --network-mode explicit_proxy --trust-mode disabled --state-dir {state_dir} --json",
                 ],
             )
 
