@@ -781,6 +781,39 @@ async fn doctor_reports_config_required_route_as_degraded() {
     }));
 }
 
+#[tokio::test]
+async fn doctor_redacts_supported_sensitive_values_from_proxy_health_surfaces() {
+    let proxy_url = spawn_health(dam_api::ProxyReport {
+        operation_id: None,
+        target: Some("test".to_string()),
+        upstream: Some("https://api.example.test".to_string()),
+        state: dam_api::ProxyState::Protected,
+        message: "last protected request saw alice@example.com and 123-45-6789".to_string(),
+        diagnostics: vec![dam_api::Diagnostic::new(
+            dam_api::DiagnosticSeverity::Warning,
+            "proxy_trace",
+            "upstream echoed alice@example.com and 123-45-6789",
+        )],
+    })
+    .await;
+    let config = proxy_config("https://api.example.test", "openai-compatible");
+
+    let report = doctor_report(
+        &config,
+        &DoctorOptions {
+            proxy_url: Some(proxy_url),
+            ..DoctorOptions::default()
+        },
+    )
+    .await;
+    let json = serde_json::to_string(&report).unwrap();
+
+    assert!(!json.contains("alice@example.com"));
+    assert!(!json.contains("123-45-6789"));
+    assert!(json.contains("[email]"));
+    assert!(json.contains("[ssn]"));
+}
+
 fn test_daemon_state(pid: u32) -> dam_daemon::DaemonState {
     dam_daemon::DaemonState {
         version: 6,

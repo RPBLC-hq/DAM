@@ -2048,7 +2048,7 @@ async fn proxy_runtime_component(
 
     let state = proxy_state_to_health(report.state);
     for diagnostic in &report.diagnostics {
-        diagnostics.push(diagnostic.clone());
+        diagnostics.push(sanitize_public_diagnostic(diagnostic));
     }
     dam_api::ComponentHealth {
         component: "proxy_runtime".to_string(),
@@ -2056,9 +2056,35 @@ async fn proxy_runtime_component(
         message: format!(
             "proxy reports {}: {}",
             proxy_state_tag(report.state),
-            report.message
+            sanitize_public_text(&report.message)
         ),
     }
+}
+
+fn sanitize_public_diagnostic(diagnostic: &dam_api::Diagnostic) -> dam_api::Diagnostic {
+    dam_api::Diagnostic {
+        severity: diagnostic.severity,
+        code: diagnostic.code.clone(),
+        message: sanitize_public_text(&diagnostic.message),
+    }
+}
+
+fn sanitize_public_text(text: &str) -> String {
+    let detections = dam_detect::detect(text);
+    if detections.is_empty() {
+        return text.to_string();
+    }
+
+    let replacements = detections
+        .into_iter()
+        .map(|detection| dam_core::Replacement {
+            span: detection.span,
+            text: format!("[{}]", detection.kind.tag()),
+            mode: dam_core::ReplacementMode::Redacted,
+            reference: None,
+        })
+        .collect::<Vec<_>>();
+    dam_redact::redact(text, &replacements)
 }
 
 fn proxy_state_to_health(state: dam_api::ProxyState) -> dam_api::HealthState {

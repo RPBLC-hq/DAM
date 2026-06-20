@@ -14,12 +14,8 @@ import {
 import { ApiError, api, apiPost } from '@/lib/api/client'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { resolveSurface } from '@/lib/surface'
-import {
-  errorMessageKey,
-  stateMessageKey,
-  stepHintKey,
-  stepLabelKey,
-} from './connect-copy'
+import { errorMessageKey, stepHintKey, stepLabelKey } from './connect-copy'
+import { connectStatusMessageKey } from './status-summary'
 import type { ConnectView, PendingRequest, PendingRequestsView, SetupStep } from './types'
 
 const CONNECT_QUERY_KEY = ['connect'] as const
@@ -287,7 +283,7 @@ function DisconnectedState({
 
 function StatusLine({ view }: { view: ConnectView }) {
   const { t } = useI18n()
-  const label = t(stateMessageKey(view.state))
+  const label = t(connectStatusMessageKey(view))
 
   return (
     <div className="dam-connect__status">

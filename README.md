@@ -98,10 +98,12 @@ cargo build -p dam -p dam-web -p dam-tray
 cargo run -p dam-tray
 ```
 
-Headless setup, app profiles (Claude, ChatGPT, …), and every routing/trust
-flag are in [docs/dam.md](docs/dam.md),
+Headless setup, the MVP-visible app profiles (Claude and ChatGPT), and every
+routing/trust flag are in [docs/dam.md](docs/dam.md),
 [docs/dam-tray.md](docs/dam-tray.md), and
-[docs/dam-integrations.md](docs/dam-integrations.md).
+[docs/dam-integrations.md](docs/dam-integrations.md). Imported/custom profile
+JSON remains opt-in and is documented in those module docs rather than treated
+as part of the default visible MVP catalog.
 
 ## How It Works
 
@@ -154,6 +156,7 @@ Full pipeline, resolve path, and control/diagnostics flows are in
 | Use the web UI / tray | [docs/dam-web.md](docs/dam-web.md) · [docs/dam-tray.md](docs/dam-tray.md) |
 | Drive DAM from an agent | [docs/dam-mcp.md](docs/dam-mcp.md) · [docs/dam-api.md](docs/dam-api.md) |
 | What's detected | [docs/dam-detect.md](docs/dam-detect.md) · [docs/dam-policy.md](docs/dam-policy.md) |
+| Prepare a security review | [docs/security-review-bundle.md](docs/security-review-bundle.md) |
 | Build & release | [docs/build-release.md](docs/build-release.md) |
 | Module map & architecture | [docs/README.md](docs/README.md) |
 
