@@ -130,7 +130,7 @@ dam disconnect
 
 The npm package entry point is a small Node wrapper around native DAM binaries. It does not own protection behavior.
 
-The package exposes shims for `dam`, `damctl`, `dam-web`, `dam-proxy`, `dam-mcp`, and `dam-tray`. `dam package-doctor --json` validates that the installed shims resolve to native binaries. `dam doctor --json` is forwarded to the native `dam` binary and reports local readiness.
+The package exposes shims for `dam`, `damctl`, `dam-web`, `dam-proxy`, `dam-mcp`, and `dam-tray`. `dam package-doctor --json` validates that the installed shims resolve to native binaries. `dam doctor --json` is forwarded to the native `dam` binary and reports local readiness. `scripts/dam-build.sh agent-npm-readiness` is the maintainer-side probe that stages current-platform native binaries, verifies the `npm pack --dry-run --ignore-scripts --json` payload, and reports registry/auth blockers without publishing.
 
 The previous one-shot `npx @rpblc/dam claude` and `npx @rpblc/dam codex --api` trial launchers have been removed because they depended on provider base-url rewriting. Use the installed `dam connect` / tray flow for protected traffic interception.
 

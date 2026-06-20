@@ -37,6 +37,8 @@ Commands:
   release-macos Run checks, build signed DAM.app, notarize, staple, and zip it
   deploy-local  Build signed DAM.app and copy it to /Applications or --install-dir
   agent-check   Run the standard verification suite plus repo whitespace checks
+  agent-npm-readiness
+               Stage npm native binaries, validate the package payload, and report publish blockers
   detector-bench
                 Run the synthetic DAM detector benchmark harness
   agent-protection-smoke
@@ -257,6 +259,149 @@ cmd_agent_check() {
   else
     printf 'Skipped git diff --check because %s is not a git checkout.\n' "$ROOT"
   fi
+}
+
+package_manifest_field() {
+  local field="$1"
+  node -e "const fs = require('fs'); const manifest = JSON.parse(fs.readFileSync(process.argv[1], 'utf8')); const value = manifest[process.argv[2]]; if (value === undefined) process.exit(1); if (typeof value === 'string') { process.stdout.write(value); } else { process.stdout.write(JSON.stringify(value)); }" "$ROOT/package.json" "$field"
+}
+
+check_semver_greater() {
+  python3 - "$1" "$2" <<'PY'
+import sys
+
+
+def parse(version: str) -> tuple[list[int], str]:
+    normalized = version.strip().lstrip("v")
+    core, _, prerelease = normalized.partition("-")
+    parts = [int(part) if part.isdigit() else 0 for part in core.split(".") if part]
+    return parts, prerelease
+
+
+local_parts, local_pre = parse(sys.argv[1])
+remote_parts, remote_pre = parse(sys.argv[2])
+width = max(len(local_parts), len(remote_parts), 3)
+local_parts.extend([0] * (width - len(local_parts)))
+remote_parts.extend([0] * (width - len(remote_parts)))
+
+if local_parts > remote_parts:
+    raise SystemExit(0)
+if local_parts < remote_parts:
+    raise SystemExit(1)
+if local_pre and not remote_pre:
+    raise SystemExit(1)
+if not local_pre and remote_pre:
+    raise SystemExit(0)
+if local_pre > remote_pre:
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+verify_npm_pack_payload() {
+  local platform_dir="$1"
+  python3 -c 'import json, sys
+platform_dir = sys.argv[1]
+payload = json.load(sys.stdin)
+entries = payload if isinstance(payload, list) else [payload]
+if not entries:
+    print("npm pack output was empty", file=sys.stderr)
+    raise SystemExit(1)
+files = {entry.get("path") for entry in entries[0].get("files", [])}
+expected = [
+    f"npm/native/{platform_dir}/dam",
+    f"npm/native/{platform_dir}/damctl",
+    f"npm/native/{platform_dir}/dam-web",
+    f"npm/native/{platform_dir}/dam-proxy",
+    f"npm/native/{platform_dir}/dam-mcp",
+    f"npm/native/{platform_dir}/dam-tray",
+]
+missing = [path for path in expected if path not in files]
+if missing:
+    print("missing staged native package files:", file=sys.stderr)
+    for path in missing:
+        print(path, file=sys.stderr)
+    raise SystemExit(1)
+print(entries[0].get("filename", ""))' "$platform_dir"
+}
+
+cmd_agent_npm_readiness() {
+  local package_name local_version registry_url platform_dir doctor_output pack_output pack_filename
+  local registry_version owners whoami_output blockers=()
+
+  cmd_npm_native
+
+  package_name="$(package_manifest_field name)"
+  local_version="$(package_manifest_field version)"
+  registry_url="$(npm config get registry)"
+  platform_dir="$(node -p "process.platform + '-' + process.arch")"
+
+  if ! doctor_output="$(node "$ROOT/npm/bin/dam.js" package-doctor --json)"; then
+    printf '%s\n' "$doctor_output"
+    echo "npm package-doctor failed" >&2
+    exit 1
+  fi
+
+  if ! pack_output="$(npm pack --dry-run --ignore-scripts --json)"; then
+    printf '%s\n' "$pack_output"
+    echo "npm pack --dry-run failed" >&2
+    exit 1
+  fi
+
+  if ! pack_filename="$(printf '%s' "$pack_output" | verify_npm_pack_payload "$platform_dir")"; then
+    blockers+=("npm pack payload is missing one or more staged native binaries for $platform_dir")
+  fi
+
+  registry_version="unknown"
+  if registry_version="$(npm view "$package_name" version --json 2>/dev/null | python3 -c 'import json, sys
+payload = json.load(sys.stdin)
+if isinstance(payload, str):
+    print(payload)
+else:
+    print(json.dumps(payload))')"; then
+    if [[ -n "$registry_version" ]] && ! check_semver_greater "$local_version" "$registry_version"; then
+      blockers+=("local package version $local_version is not greater than published npm version $registry_version")
+    fi
+  else
+    registry_version="unavailable"
+    blockers+=("unable to read current npm registry version for $package_name")
+  fi
+
+  owners="$(npm owner ls "$package_name" 2>/dev/null || true)"
+  if [[ -z "$owners" ]]; then
+    owners="unavailable"
+  fi
+
+  if whoami_output="$(npm whoami 2>&1)"; then
+    :
+  else
+    whoami_output="missing"
+    blockers+=("npm publish auth is not configured on this machine; run npm adduser or configure a publish token for $package_name")
+  fi
+
+  printf 'DAM agent npm readiness\n'
+  printf 'package: %s\n' "$package_name"
+  printf 'local_version: %s\n' "$local_version"
+  printf 'registry: %s\n' "$registry_url"
+  printf 'registry_version: %s\n' "$registry_version"
+  printf 'platform_dir: %s\n' "$platform_dir"
+  printf 'package_doctor_state: ready\n'
+  printf 'pack_file: %s\n' "$pack_filename"
+  printf 'pack_native_files_present: %s\n' "$( [[ -n "$pack_filename" ]] && printf yes || printf no )"
+  printf 'npm_owners: %s\n' "$owners"
+  printf 'npm_auth: %s\n' "$whoami_output"
+
+  if (( ${#blockers[@]} == 0 )); then
+    printf 'blockers: none\n'
+    return 0
+  fi
+
+  printf 'blockers:\n'
+  local blocker
+  for blocker in "${blockers[@]}"; do
+    printf '  - %s\n' "$blocker"
+  done
+  return 1
 }
 
 cmd_detector_bench() {
@@ -639,6 +784,7 @@ case "$COMMAND" in
   release-macos) cmd_release_macos ;;
   deploy-local) cmd_deploy_local ;;
   agent-check) cmd_agent_check ;;
+  agent-npm-readiness) cmd_agent_npm_readiness ;;
   detector-bench) cmd_detector_bench ;;
   agent-protection-smoke) cmd_agent_protection_smoke ;;
   agent-recovery-smoke) cmd_agent_recovery_smoke ;;
