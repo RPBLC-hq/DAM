@@ -1527,6 +1527,51 @@ async fn paused_protection_bypasses_explicit_provider_requests() {
     assert_eq!(upstream_seen.lock().unwrap().as_deref(), Some(body));
 }
 
+#[tokio::test]
+async fn short_http_requests_recheck_protection_state_between_requests() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let config = proxy_config(upstream);
+    let dir = tempfile::tempdir().unwrap();
+    let control_path = dir.path().join("protection.state");
+    std::fs::write(&control_path, "disabled\n").unwrap();
+    let mut interception = transparent_config(dir.path().to_path_buf());
+    interception.protection_control_path = Some(control_path.clone());
+    let proxy = spawn_app(build_app_with_interception(config, Some(interception)).unwrap()).await;
+    let client = reqwest::Client::new();
+
+    let bypass_body = r#"{"input":"alice@example.com"}"#;
+    let bypass_response = client
+        .post(format!("{proxy}/v1/chat/completions"))
+        .header(header::AUTHORIZATION, "Bearer local")
+        .body(bypass_body)
+        .send()
+        .await
+        .unwrap();
+
+    assert!(bypass_response.status().is_success());
+    assert_eq!(upstream_seen.lock().unwrap().as_deref(), Some(bypass_body));
+
+    std::fs::write(&control_path, "enabled\n").unwrap();
+
+    let protected_body = r#"{"input":"bob@example.com"}"#;
+    let protected_response = client
+        .post(format!("{proxy}/v1/chat/completions"))
+        .header(header::AUTHORIZATION, "Bearer local")
+        .body(protected_body)
+        .send()
+        .await
+        .unwrap();
+
+    assert!(protected_response.status().is_success());
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains("bob@example.com"));
+    assert!(upstream_body.contains("[email:"));
+    let response_body = protected_response.text().await.unwrap();
+    assert!(response_body.contains("bob@example.com"));
+    assert!(!response_body.contains("[email:"));
+}
+
 #[test]
 fn protection_control_reads_json_and_legacy_disabled_state() {
     let dir = tempfile::tempdir().unwrap();
