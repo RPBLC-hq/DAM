@@ -4,6 +4,7 @@ import { BracketMark, ProtectionMark } from '@rpblc/design'
 
 import { api } from '@/lib/api/client'
 import { useI18n } from '@/lib/i18n'
+import { connectNavLabelKey } from '@/features/connect/status-summary'
 import type { Surface } from '@/lib/surface'
 import type { ConnectView } from '@/features/connect/types'
 
@@ -54,6 +55,7 @@ export function BrandActions({ surface: _surface }: { surface: Surface }) {
 
   const pendingCount = connect.data?.pending_count ?? 0
   const isProtected = connect.data?.state === 'protected'
+  const navStateLabel = connect.data ? t(connectNavLabelKey(connect.data)) : t('nav.off')
 
   return (
     <div className="dam-brand-actions">
@@ -64,7 +66,7 @@ export function BrandActions({ surface: _surface }: { surface: Surface }) {
           label={t('nav.protected')}
         />
       ) : (
-        <span className="dam-app-nav__off">{t('nav.off')}</span>
+        <span className="dam-app-nav__off">{navStateLabel}</span>
       )}
       {pendingCount > 0 && (
         <Link

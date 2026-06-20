@@ -7,6 +7,12 @@ export type MessageKey =
   | 'nav.content'
   | 'nav.protected'
   | 'nav.off'
+  | 'nav.paused'
+  | 'nav.connecting'
+  | 'nav.setupNeeded'
+  | 'nav.approvalNeeded'
+  | 'nav.repairNeeded'
+  | 'nav.attention'
   | 'nav.pendingRequests'
   | 'nav.insights'
   | 'nav.wallet'
@@ -89,6 +95,14 @@ export type MessageKey =
   | 'connect.pausedStatus'
   | 'connect.degradedStatus'
   | 'connect.setupStatus'
+  | 'connect.summary.requested'
+  | 'connect.summary.waiting_for_approval'
+  | 'connect.summary.waiting_for_reboot'
+  | 'connect.summary.configured'
+  | 'connect.summary.enabled'
+  | 'connect.summary.connected'
+  | 'connect.summary.rolled_back'
+  | 'connect.summary.failed'
   | 'connect.nothingAsking'
   | 'connect.protectedFor'
   | 'connect.systemMode'
@@ -344,6 +358,12 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'nav.content': 'DAM content',
     'nav.protected': 'protected',
     'nav.off': 'off',
+    'nav.paused': 'paused',
+    'nav.connecting': 'connecting',
+    'nav.setupNeeded': 'setup needed',
+    'nav.approvalNeeded': 'approval needed',
+    'nav.repairNeeded': 'repair needed',
+    'nav.attention': 'attention',
     'nav.pendingRequests': 'pending requests',
     'nav.insights': 'Insights',
     'nav.wallet': 'Wallet',
@@ -429,6 +449,20 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.pausedStatus': 'Protection is paused. Local clients can keep their endpoint.',
     'connect.degradedStatus': 'Protection needs attention. DAM is still here.',
     'connect.setupStatus': 'Finish local setup before DAM can protect this device.',
+    'connect.summary.requested': 'DAM setup was requested. Continue the handoff on this device.',
+    'connect.summary.waiting_for_approval':
+      'macOS is waiting for your approval before DAM can continue setup.',
+    'connect.summary.waiting_for_reboot':
+      'Restart this Mac so DAM can finish turning protection on.',
+    'connect.summary.configured':
+      'DAM is configured locally. Finish enabling protection on this device.',
+    'connect.summary.enabled':
+      'DAM is enabled locally. Finish connecting protection on this device.',
+    'connect.summary.connected':
+      'DAM is connected locally. Finish the remaining trust steps on this device.',
+    'connect.summary.rolled_back':
+      'DAM rolled protection back to keep this device safe. Repair is needed.',
+    'connect.summary.failed': 'DAM hit a local setup failure. Repair is needed before protection can continue.',
     'connect.nothingAsking': 'no new requests',
     'connect.protectedFor': 'Protected for',
     'connect.systemMode': 'system proxy · local CA',
@@ -732,6 +766,12 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'nav.content': 'Contenu DAM',
     'nav.protected': 'protégé',
     'nav.off': 'arrêt',
+    'nav.paused': 'en pause',
+    'nav.connecting': 'connexion en cours',
+    'nav.setupNeeded': 'configuration requise',
+    'nav.approvalNeeded': 'approbation requise',
+    'nav.repairNeeded': 'réparation requise',
+    'nav.attention': 'attention',
     'nav.pendingRequests': 'demandes en attente',
     'nav.insights': 'Aperçu',
     'nav.wallet': 'Portefeuille',
@@ -817,6 +857,21 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'connect.pausedStatus': 'La protection est en pause. Les clients locaux gardent leur point d’accès.',
     'connect.degradedStatus': 'La protection demande une attention. DAM reste présent.',
     'connect.setupStatus': 'Terminez la configuration locale avant que DAM protège cet appareil.',
+    'connect.summary.requested': 'La configuration de DAM a été demandée. Continuez la procédure sur cet appareil.',
+    'connect.summary.waiting_for_approval':
+      'macOS attend votre approbation avant que DAM puisse continuer la configuration.',
+    'connect.summary.waiting_for_reboot':
+      'Redémarrez ce Mac pour que DAM puisse terminer l’activation de la protection.',
+    'connect.summary.configured':
+      'DAM est configuré localement. Terminez l’activation de la protection sur cet appareil.',
+    'connect.summary.enabled':
+      'DAM est activé localement. Terminez la connexion de la protection sur cet appareil.',
+    'connect.summary.connected':
+      'DAM est connecté localement. Terminez les dernières étapes de confiance sur cet appareil.',
+    'connect.summary.rolled_back':
+      'DAM a annulé la protection pour garder cet appareil sûr. Une réparation est nécessaire.',
+    'connect.summary.failed':
+      'DAM a rencontré un échec de configuration locale. Une réparation est nécessaire avant de poursuivre la protection.',
     'connect.nothingAsking': 'aucune nouvelle demande',
     'connect.protectedFor': 'Protégé depuis',
     'connect.systemMode': 'proxy système · AC locale',
