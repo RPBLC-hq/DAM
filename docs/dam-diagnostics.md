@@ -45,6 +45,12 @@ The setup plan also includes `next_action`, the first `blocked` step when setup 
 
 `setup_repair` combines `setup_rescue` preview/apply with a fresh `setup_plan` so humans and agents can run one local recovery check and immediately get the next setup action. `setup_diagnostics_export` returns an offline bundle with `doctor_report`, `setup_plan`, and a rescue preview. Neither function contacts remote providers; only confirmed repair apply mutates local daemon/routing state through the same rescue contract.
 
+## Privacy boundary for report surfaces
+
+`doctor_report` and `setup_diagnostics_export` are non-reveal support surfaces. They may describe local readiness, proxy state, setup next steps, and reduced-protection warnings, but they must not surface raw protected values from protected traffic. If proxy health messages or diagnostics accidentally include supported sensitive values, `dam-diagnostics` redacts them before forwarding the report to CLI, web, or MCP consumers.
+
+Intentional reveal remains outside this crate: vault/Wallet/value-detail flows and other explicit local control surfaces may resolve or display protected values under their own scoped contracts.
+
 ## Boundaries
 
 The crate does not:
