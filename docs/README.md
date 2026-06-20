@@ -8,6 +8,10 @@ Deferred security and product-design work is tracked in [parking-lot.md](parking
 
 DAM is designed for macOS, Linux, and Windows. Platform-specific routing, trust, tray, and packaging implementations may land in staged slices, but partial or delayed platform behavior must be tracked in [parking-lot.md](parking-lot.md) or the relevant module parking-lot doc.
 
+## Operational Guides
+
+- [security-review-bundle](security-review-bundle.md): local synthetic-data-only trust/evidence checklist for reviewers.
+
 ## Modules
 
 - [dam-core](dam-core.md): shared contracts, reference generation, replacement planning, policy actions, log event shape.

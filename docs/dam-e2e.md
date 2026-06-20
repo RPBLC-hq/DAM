@@ -53,6 +53,13 @@ python3 scripts/rpblc_dam_local_llm_e2e_smoke.py --upstream http://127.0.0.1:808
 
 The script builds `dam-proxy`, starts it on loopback with temporary vault/log SQLite files, sends synthetic email/SSN values through DAM to the local OpenAI-compatible upstream, verifies exact echo resolution on the trusted client side, verifies a token-transformation prompt that asks the model to insert whitespace after reference opening brackets cannot reconstruct the raw values, fails if the local activity log database contains the synthetic values, and removes the temp directory unless `--keep-temp` is passed. Exit code `2` means the local upstream or binary prerequisite is unavailable; exit code `1` means DAM failed the smoke check.
 
+When no local model endpoint is listening, use the deterministic loopback fake upstream instead of skipping the proxy path:
+
+```bash
+python3 scripts/dam_fake_openai_upstream.py --port 18080
+DAM_AGENT_E2E_UPSTREAM=http://127.0.0.1:18080 scripts/dam-build.sh agent-protection-smoke
+```
+
 ## Rules
 
 - Use synthetic data only.
