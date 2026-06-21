@@ -33,7 +33,7 @@ Connect action wiring is intentionally narrow in this slice: browser-hosted `con
 
 ## Activity
 
-`GET /api/v1/activity?since=&after_id=&limit=&decision=&q=` reads `dam-log` through its bounded indexed query API and maps person-facing events into the CTZN activity feed. When `since` is omitted, the API defaults to the last hour so the Activity view does not open as a full log dump; use `since=0` for all time. The API accepts an id cursor for future incremental callers and caps returned Activity rows so repeated refreshes stay cheap on local machines. The React Activity duration selector is available on web and tray and defaults to `1h`. The mapper currently includes:
+`GET /api/v1/activity?since=&after_id=&limit=&decision=&q=` reads `dam-log` through its bounded indexed query API and maps person-facing events into the CTZN activity feed. When `since` is omitted, the API defaults to the last hour so the Activity view does not open as a full log dump; use `since=0` for all time. The API accepts an id cursor for future incremental callers and caps returned Activity rows so repeated refreshes stay cheap on local machines. The React Activity duration selector is available on web and tray and defaults to `1h`; its `today` shortcut resolves to the current UTC midnight so Connect’s blocked-today tile and the denied Activity filter share the same day window. The mapper currently includes:
 
 - `policy_decision.allow` → `granted`
 - `redaction.*` → `sealed`
