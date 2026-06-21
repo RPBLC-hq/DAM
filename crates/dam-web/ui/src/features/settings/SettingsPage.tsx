@@ -15,6 +15,10 @@ import {
 import { ApiError, api, apiPost } from '@/lib/api/client'
 import { useI18n, type Locale, type MessageKey } from '@/lib/i18n'
 import { useThemePreference, type ThemePreference } from '@/lib/theme'
+import {
+  normalizeDetectorSettings,
+  type AppDetectorSetting,
+} from './detectors'
 
 type StopResult = { ok: boolean }
 
@@ -26,6 +30,7 @@ type AppSetting = {
   profile: string
   profiles: string[]
   install_state: string
+  detectors: AppDetectorSetting[]
   target_path?: string
 }
 
@@ -165,6 +170,7 @@ function AppRow({ app }: { app: AppSetting }) {
   const queryClient = useQueryClient()
   const [optimistic, setOptimistic] = useState<boolean | null>(null)
   const checked = optimistic ?? app.enabled
+  const detectors = normalizeDetectorSettings(app.detectors)
 
   const enableApp = useMutation({
     mutationFn: () =>
@@ -195,12 +201,22 @@ function AppRow({ app }: { app: AppSetting }) {
       queryClient.setQueryData(SETTINGS_QUERY_KEY, next)
     },
   })
+  const setDetectors = useMutation({
+    mutationFn: (nextDetectors: AppDetectorSetting[]) =>
+      apiPost<SettingsView>(`/settings/apps/${app.id}`, {
+        detectors: nextDetectors.map(({ key, enabled }) => ({ key, enabled })),
+      }),
+    onSuccess: (next) => {
+      queryClient.setQueryData(SETTINGS_QUERY_KEY, next)
+    },
+  })
 
   const installLabel = appInstallLabel(app.install_state, t)
   const toggling = enableApp.isPending || disableApp.isPending
+  const detectorUpdating = setDetectors.isPending
   const status = toggling ? 'pending' : appStatus(app.install_state, checked)
   const blocked = app.install_state === 'modified'
-  const error = enableApp.error ?? disableApp.error ?? setProfile.error
+  const error = enableApp.error ?? disableApp.error ?? setProfile.error ?? setDetectors.error
   const errorCode = error instanceof ApiError ? error.message : undefined
 
   return (
@@ -258,6 +274,29 @@ function AppRow({ app }: { app: AppSetting }) {
             <span>{t('settings.appsInstallState')}</span>
             <code>{installLabel}</code>
           </p>
+          {detectors.length > 0 && (
+            <div className="dam-settings__rows">
+              {detectors.map((detector) => (
+                <Toggle
+                  key={detector.key}
+                  size="sm"
+                  label={detector.label}
+                  helper={t('settings.appsDetectorHint')}
+                  checked={detector.enabled}
+                  disabled={blocked || detectorUpdating}
+                  onCheckedChange={(next) =>
+                    setDetectors.mutate(
+                      detectors.map((current) =>
+                        current.key === detector.key
+                          ? { ...current, enabled: next }
+                          : current,
+                      ),
+                    )
+                  }
+                />
+              ))}
+            </div>
+          )}
           {blocked && (
             <p className="dam-settings__app-warning">{t('settings.appsModified')}</p>
           )}
@@ -273,6 +312,7 @@ function AppRow({ app }: { app: AppSetting }) {
                     enableApp.reset()
                     disableApp.reset()
                     setProfile.reset()
+                    setDetectors.reset()
                   }}
                 >
                   {t('settings.dismiss')}
