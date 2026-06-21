@@ -613,6 +613,36 @@ fn network_ai_routes_config_is_rejected_with_profile_migration_message() {
 }
 
 #[test]
+fn consent_direct_access_durations_must_be_usable() {
+    let zero_pending = load_with_env(
+        &ConfigOverrides::default(),
+        env(&[("DAM_CONSENT_PENDING_TIMEOUT_SECONDS", "0")]),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        zero_pending,
+        ConfigError::InvalidValue {
+            field: "consent.pending_timeout_seconds",
+            ..
+        }
+    ));
+
+    let short_max = load_with_env(
+        &ConfigOverrides::default(),
+        env(&[("DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS", "29")]),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        short_max,
+        ConfigError::InvalidValue {
+            field: "consent.max_request_duration_seconds",
+            ..
+        }
+    ));
+    assert!(short_max.to_string().contains(">= 30"));
+}
+
+#[test]
 fn cli_overrides_env() {
     let config = load_with_env(
         &ConfigOverrides {

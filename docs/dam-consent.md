@@ -59,7 +59,7 @@ DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS
 - Direct value-access states are `pending`, `approved`, `denied`, `expired`, `revoked`, and `consumed`.
 - Pending requests expire after `pending_timeout_seconds` if no approver acts.
 - Approved direct-access grants are single-use and expire at the earlier of their approved grant deadline or an explicit revoke.
-- `resolve_direct_access_request` fails closed: it returns no raw value for pending, denied, expired, revoked, consumed, actor-mismatch, or vault-read-failure cases.
+- `resolve_direct_access_request` fails closed: it returns no raw value for pending, denied, expired, revoked, consumed, actor-mismatch, vault-read-failure, or vault-value-changed cases.
 - Consent emits non-sensitive `consent` log events when passthrough matching allows a value; the direct value-access first slice does not add raw-value logging surfaces.
 - The SQLite store keeps `id`, `kind`, `value_fingerprint`, optional `vault_key`, TTL timestamps, source, and optional reason for passthrough grants, plus a separate direct-access request/grant table with non-sensitive request metadata.
 

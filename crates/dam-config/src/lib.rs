@@ -1019,6 +1019,15 @@ fn validate(config: &DamConfig) -> Result<(), ConfigError> {
             "consent.default_ttl_seconds",
             config.consent.default_ttl_seconds,
         )?;
+        require_non_zero(
+            "consent.pending_timeout_seconds",
+            config.consent.pending_timeout_seconds,
+        )?;
+        require_at_least(
+            "consent.max_request_duration_seconds",
+            config.consent.max_request_duration_seconds,
+            30,
+        )?;
     }
 
     validate_traffic(&config.traffic)?;
@@ -1404,6 +1413,22 @@ fn require_non_zero(field: &'static str, value: u64) -> Result<(), ConfigError> 
             field,
             value.to_string(),
             "expected a positive integer",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn require_at_least(field: &'static str, value: u64, minimum: u64) -> Result<(), ConfigError> {
+    if value < minimum {
+        let message = match minimum {
+            30 => "expected an integer >= 30",
+            _ => "expected a larger integer",
+        };
+        Err(ConfigError::invalid_value(
+            field,
+            value.to_string(),
+            message,
         ))
     } else {
         Ok(())

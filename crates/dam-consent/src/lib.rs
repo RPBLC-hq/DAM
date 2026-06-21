@@ -573,6 +573,28 @@ impl ConsentStore {
                 outcome_reason: Some("vault_value_missing".to_string()),
             }));
         };
+        if fingerprint(current.kind, &value) != current.value_fingerprint {
+            conn.execute(
+                "
+                UPDATE direct_access_requests
+                SET status = ?2,
+                    decision_reason = COALESCE(decision_reason, ?3)
+                WHERE request_id = ?1
+                ",
+                params![
+                    current.request_id,
+                    DirectAccessStatus::Revoked.tag(),
+                    "grant_value_changed"
+                ],
+            )?;
+            let request = query_direct_access_request(&conn, request_id)?
+                .expect("request exists after fingerprint mismatch update");
+            return Ok(Some(DirectAccessResolveResult {
+                request,
+                value: None,
+                outcome_reason: Some("grant_value_changed".to_string()),
+            }));
+        }
 
         let next_count = current.resolve_count + 1;
         let next_status = if next_count >= current.max_resolves {
@@ -592,14 +614,37 @@ impl ConsentStore {
                 status = ?3,
                 decision_reason = ?4
             WHERE request_id = ?1
+              AND actor_id = ?5
+              AND status = ?6
+              AND resolve_count = ?7
+              AND max_resolves = ?8
+              AND value_fingerprint = ?9
             ",
             params![
                 current.request_id,
                 next_count as i64,
                 next_status.tag(),
-                next_reason
+                next_reason,
+                actor_id,
+                DirectAccessStatus::Approved.tag(),
+                current.resolve_count as i64,
+                current.max_resolves as i64,
+                current.value_fingerprint,
             ],
         )?;
+        if conn.changes() == 0 {
+            let request = query_direct_access_request(&conn, request_id)?
+                .expect("request exists after failed atomic resolve update");
+            let outcome_reason = request
+                .decision_reason
+                .clone()
+                .or_else(|| Some(request.status.tag().to_string()));
+            return Ok(Some(DirectAccessResolveResult {
+                request,
+                value: None,
+                outcome_reason,
+            }));
+        }
         let request = query_direct_access_request(&conn, request_id)?
             .expect("request exists after resolve update");
         Ok(Some(DirectAccessResolveResult {

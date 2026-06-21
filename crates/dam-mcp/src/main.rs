@@ -1,4 +1,5 @@
 use serde_json::{Value, json};
+use sha2::Digest;
 use std::env;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -532,23 +533,46 @@ fn open_vault(config: &dam_config::DamConfig) -> Result<dam_vault::Vault, String
 }
 
 fn bound_actor_binding() -> Option<ActorBinding> {
-    let actor_id = env::var("DAM_MCP_ACTOR_ID").ok();
-    let label = env::var("DAM_MCP_ACTOR_LABEL").ok();
+    bound_actor_binding_from_values(
+        env::var("DAM_MCP_ACTOR_ID").ok(),
+        env::var("DAM_MCP_ACTOR_LABEL").ok(),
+    )
+}
+
+fn bound_actor_binding_from_values(
+    actor_id: Option<String>,
+    label: Option<String>,
+) -> Option<ActorBinding> {
+    let actor_id = actor_id.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    });
+    let label = label.and_then(|value| {
+        let trimmed = value.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    });
     match (actor_id, label) {
-        (Some(actor_id), Some(label))
-            if !actor_id.trim().is_empty() && !label.trim().is_empty() =>
-        {
-            Some(ActorBinding { actor_id, label })
-        }
-        (None, Some(label)) if !label.trim().is_empty() => Some(ActorBinding {
-            actor_id: format!(
-                "mcp-actor:{}",
-                dam_consent::fingerprint(dam_core::SensitiveType::Email, &label)
-            ),
+        (Some(actor_id), Some(label)) => Some(ActorBinding { actor_id, label }),
+        (Some(actor_id), None) => Some(ActorBinding {
+            label: actor_id.clone(),
+            actor_id,
+        }),
+        (None, Some(label)) => Some(ActorBinding {
+            actor_id: label_bound_actor_id(&label),
             label,
         }),
-        _ => None,
+        (None, None) => None,
     }
+}
+
+fn label_bound_actor_id(label: &str) -> String {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"dam-mcp-actor-v1\0");
+    hasher.update(label.trim().as_bytes());
+    format!(
+        "mcp-actor:{}",
+        bs58::encode(sha2::Digest::finalize(hasher)).into_string()
+    )
 }
 
 fn request_lookup_id(arguments: &Value) -> Result<String, String> {

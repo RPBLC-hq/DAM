@@ -74,6 +74,24 @@ fn direct_access_tools_require_actor_binding_and_validate_duration() {
 }
 
 #[test]
+fn direct_access_tools_accept_id_only_actor_binding_and_hash_label_only_binding() {
+    let id_only = bound_actor_binding_from_values(Some("actor-1".to_string()), None).unwrap();
+    assert_eq!(id_only.actor_id, "actor-1");
+    assert_eq!(id_only.label, "actor-1");
+
+    let label_only = bound_actor_binding_from_values(None, Some(" Codex ".to_string())).unwrap();
+    assert_eq!(label_only.label, "Codex");
+    assert_eq!(label_only.actor_id, label_bound_actor_id("Codex"));
+    assert_ne!(
+        label_only.actor_id,
+        format!(
+            "mcp-actor:{}",
+            dam_consent::fingerprint(SensitiveType::Email, "Codex")
+        )
+    );
+}
+
+#[test]
 fn direct_access_request_status_and_resolve_flow() {
     let dir = tempfile::tempdir().unwrap();
     let vault_path = dir.path().join("vault.db");

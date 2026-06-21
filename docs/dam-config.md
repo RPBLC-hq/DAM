@@ -37,6 +37,8 @@ backend = "sqlite"
 path = "consent.db"
 default_ttl_seconds = 86400
 mcp_write_enabled = true
+pending_timeout_seconds = 60
+max_request_duration_seconds = 86400
 
 [policy]
 default_action = "tokenize"
@@ -144,6 +146,8 @@ export DAM_CONSENT_ENABLED=true
 export DAM_CONSENT_PATH=/var/lib/dam/consent.db
 export DAM_CONSENT_DEFAULT_TTL_SECONDS=86400
 export DAM_CONSENT_MCP_WRITE_ENABLED=true
+export DAM_CONSENT_PENDING_TIMEOUT_SECONDS=60
+export DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS=86400
 export DAM_POLICY_DEFAULT_ACTION=tokenize
 export DAM_POLICY_DEDUPLICATE_REPLACEMENTS=true
 export DAM_POLICY_SSN_ACTION=redact
@@ -181,6 +185,8 @@ DAM_CONSENT_PATH
 DAM_CONSENT_SQLITE_PATH
 DAM_CONSENT_DEFAULT_TTL_SECONDS
 DAM_CONSENT_MCP_WRITE_ENABLED
+DAM_CONSENT_PENDING_TIMEOUT_SECONDS
+DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS
 ```
 
 Supported vault env keys:

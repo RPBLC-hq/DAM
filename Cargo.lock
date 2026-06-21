@@ -609,6 +609,7 @@ dependencies = [
 name = "dam-mcp"
 version = "0.1.0"
 dependencies = [
+ "bs58",
  "dam-config",
  "dam-consent",
  "dam-core",
@@ -619,6 +620,7 @@ dependencies = [
  "dam-vault",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
 ]

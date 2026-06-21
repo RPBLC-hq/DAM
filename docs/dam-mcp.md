@@ -71,6 +71,8 @@ max_request_duration_seconds = 86400
 
 Set `mcp_write_enabled = false` to restrict to read-only behavior: `dam_consent_list` and `dam_consent_request_status` remain available; `dam_consent_grant`, `dam_consent_revoke`, `dam_consent_request`, and `dam_resolve_if_consented` are hidden and disabled.
 
+`pending_timeout_seconds` must stay positive. `max_request_duration_seconds` must be at least 30 seconds so the bounded direct-access request flow stays usable and consistent with the MCP minimum request duration.
+
 ## Direct value-access flow
 
 `dam_consent_request` creates a pending request bound to the local MCP actor. The caller must supply:
@@ -82,6 +84,11 @@ Set `mcp_write_enabled = false` to restrict to read-only behavior: `dam_consent_
 - optional `correlation_id`
 
 The request stays metadata-only until approved by a local control surface or API harness. The MCP server itself does **not** auto-approve requests.
+
+Actor binding comes from `DAM_MCP_ACTOR_LABEL` and/or `DAM_MCP_ACTOR_ID`:
+- if both are set, DAM uses the explicit ID and label as provided;
+- if only `DAM_MCP_ACTOR_ID` is set, DAM accepts it and uses that same value as the display label;
+- if only `DAM_MCP_ACTOR_LABEL` is set, DAM derives a stable local hashed actor ID from the trimmed label.
 
 `dam_consent_request_status` returns the current non-sensitive state for a `request_id` or `grant_id`.
 

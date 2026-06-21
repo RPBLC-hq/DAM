@@ -402,6 +402,59 @@ fn direct_access_request_denial_and_actor_mismatch_fail_closed() {
 }
 
 #[test]
+fn direct_access_request_revoke_if_vault_value_changes_before_resolve() {
+    let vault = dam_vault::Vault::open_in_memory().unwrap();
+    let store = ConsentStore::open_in_memory().unwrap();
+    let reference = Reference::generate(SensitiveType::Email);
+    vault
+        .write(&VaultRecord {
+            reference: reference.clone(),
+            kind: SensitiveType::Email,
+            value: "alice@example.test".to_string(),
+        })
+        .unwrap();
+
+    let request = store
+        .create_direct_access_request(
+            &CreateDirectAccessRequest {
+                vault_key: reference.key(),
+                actor_id: "actor-1".to_string(),
+                requesting_actor: "Codex".to_string(),
+                purpose: "fill local email field".to_string(),
+                reason: None,
+                requested_duration_seconds: 60,
+                pending_timeout_seconds: 60,
+                correlation_id: None,
+            },
+            &vault,
+        )
+        .unwrap();
+    store
+        .approve_direct_access_request(&request.request_id, 60, None)
+        .unwrap()
+        .unwrap();
+    vault
+        .write(&VaultRecord {
+            reference: reference.clone(),
+            kind: SensitiveType::Email,
+            value: "mallory@example.test".to_string(),
+        })
+        .unwrap();
+
+    let resolved = store
+        .resolve_direct_access_request(&request.request_id, "actor-1", &vault)
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.value, None);
+    assert_eq!(resolved.request.status, DirectAccessStatus::Revoked);
+    assert_eq!(
+        resolved.outcome_reason.as_deref(),
+        Some("grant_value_changed")
+    );
+    assert_eq!(resolved.request.resolve_count, 0);
+}
+
+#[test]
 fn direct_access_request_persists_and_expires_after_restart() {
     let dir = tempfile::tempdir().unwrap();
     let consent_path = dir.path().join("consent.db");
