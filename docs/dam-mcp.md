@@ -69,7 +69,7 @@ pending_timeout_seconds = 60
 max_request_duration_seconds = 86400
 ```
 
-Set `mcp_write_enabled = false` to expose list-only behavior.
+Set `mcp_write_enabled = false` to restrict to read-only behavior: `dam_consent_list` and `dam_consent_request_status` remain available; `dam_consent_grant`, `dam_consent_revoke`, `dam_consent_request`, and `dam_resolve_if_consented` are hidden and disabled.
 
 ## Direct value-access flow
 

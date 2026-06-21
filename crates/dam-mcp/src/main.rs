@@ -130,6 +130,17 @@ fn tools(config: &dam_config::DamConfig) -> Vec<Value> {
             "description": "List DAM passthrough consents.",
             "inputSchema": { "type": "object", "properties": {} }
         }),
+        json!({
+            "name": "dam_consent_request_status",
+            "description": "Inspect a pending or resolved DAM direct value-access request.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "request_id": { "type": "string" },
+                    "grant_id": { "type": "string" }
+                }
+            }
+        }),
     ];
 
     if config.consent.mcp_write_enabled {
@@ -172,17 +183,6 @@ fn tools(config: &dam_config::DamConfig) -> Vec<Value> {
                     "correlation_id": { "type": "string" }
                 },
                 "required": ["vault_key", "purpose", "duration_seconds"]
-            }
-        }));
-        tools.push(json!({
-            "name": "dam_consent_request_status",
-            "description": "Inspect a pending or resolved DAM direct value-access request.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "request_id": { "type": "string" },
-                    "grant_id": { "type": "string" }
-                }
             }
         }));
         tools.push(json!({
@@ -313,9 +313,7 @@ fn call_tool_with_actor(
         "dam_consent_request" if config.consent.mcp_write_enabled => {
             dam_consent_request_tool(config, arguments, actor)
         }
-        "dam_consent_request_status" if config.consent.mcp_write_enabled => {
-            dam_consent_request_status_tool(config, arguments)
-        }
+        "dam_consent_request_status" => dam_consent_request_status_tool(config, arguments),
         "dam_resolve_if_consented" if config.consent.mcp_write_enabled => {
             dam_resolve_if_consented_tool(config, arguments, actor)
         }

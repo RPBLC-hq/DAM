@@ -156,6 +156,87 @@ fn direct_access_request_status_and_resolve_flow() {
 }
 
 #[test]
+fn status_tool_available_when_mcp_write_disabled() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault_path = dir.path().join("vault.db");
+    let consent_path = dir.path().join("consent.db");
+    let mut config = dam_config::DamConfig::default();
+    config.vault.sqlite_path = vault_path.clone();
+    config.consent.sqlite_path = consent_path.clone();
+    config.consent.pending_timeout_seconds = 60;
+    config.consent.max_request_duration_seconds = 300;
+
+    let vault = dam_vault::Vault::open(&vault_path).unwrap();
+    let reference = Reference::generate(SensitiveType::Email);
+    vault
+        .write(&VaultRecord {
+            reference: reference.clone(),
+            kind: SensitiveType::Email,
+            value: "alice@example.test".to_string(),
+        })
+        .unwrap();
+
+    let store = dam_consent::ConsentStore::open(&consent_path).unwrap();
+    let request = store
+        .create_direct_access_request(
+            &dam_consent::CreateDirectAccessRequest {
+                vault_key: reference.key(),
+                actor_id: "actor-1".to_string(),
+                requesting_actor: "Codex".to_string(),
+                purpose: "fill local form".to_string(),
+                reason: None,
+                requested_duration_seconds: 60,
+                pending_timeout_seconds: 60,
+                correlation_id: None,
+            },
+            &vault,
+        )
+        .unwrap();
+
+    config.consent.mcp_write_enabled = false;
+
+    let tool_list = tools(&config);
+    let tool_names: Vec<_> = tool_list
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert!(
+        tool_names.contains(&"dam_consent_request_status"),
+        "status tool should be in list even when mcp_write_enabled=false"
+    );
+    assert!(
+        !tool_names.contains(&"dam_consent_request"),
+        "request tool should not be listed when mcp_write_enabled=false"
+    );
+
+    let status_json = call_tool_with_actor(
+        &config,
+        "dam_consent_request_status",
+        &json!({ "request_id": request.request_id }),
+        None,
+    )
+    .unwrap();
+    let status: Value = serde_json::from_str(&status_json).unwrap();
+    assert_eq!(status["status"], "pending");
+
+    let err = call_tool_with_actor(
+        &config,
+        "dam_consent_request",
+        &json!({
+            "vault_key": reference.key(),
+            "purpose": "fill local form",
+            "duration_seconds": 60
+        }),
+        Some(ActorBinding {
+            actor_id: "actor-1".to_string(),
+            label: "Codex".to_string(),
+        }),
+    )
+    .unwrap_err();
+    assert!(err.contains("unknown or disabled"));
+}
+
+#[test]
 fn parses_content_length_messages() {
     let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
     let input = format!("Content-Length: {}\r\n\r\n{}", body.len(), body);
