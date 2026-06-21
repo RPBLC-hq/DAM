@@ -23,6 +23,8 @@ fn defaults_are_local_development_safe() {
     assert_eq!(config.consent.sqlite_path, PathBuf::from("consent.db"));
     assert_eq!(config.consent.default_ttl_seconds, 86_400);
     assert!(config.consent.mcp_write_enabled);
+    assert_eq!(config.consent.pending_timeout_seconds, 60);
+    assert_eq!(config.consent.max_request_duration_seconds, 86_400);
     assert_eq!(
         config
             .traffic
@@ -120,6 +122,8 @@ fn config_file_values_are_loaded() {
             path = "file-consent.db"
             default_ttl_seconds = 3600
             mcp_write_enabled = false
+            pending_timeout_seconds = 120
+            max_request_duration_seconds = 1800
 
             [policy]
             default_action = "redact"
@@ -174,6 +178,8 @@ fn config_file_values_are_loaded() {
     assert_eq!(config.consent.sqlite_path, PathBuf::from("file-consent.db"));
     assert_eq!(config.consent.default_ttl_seconds, 3600);
     assert!(!config.consent.mcp_write_enabled);
+    assert_eq!(config.consent.pending_timeout_seconds, 120);
+    assert_eq!(config.consent.max_request_duration_seconds, 1800);
     assert_eq!(config.policy.default_action, PolicyAction::Redact);
     assert!(!config.policy.deduplicate_replacements);
     assert_eq!(
@@ -248,6 +254,8 @@ fn env_overrides_config_file() {
             ("DAM_CONSENT_PATH", "env-consent.db"),
             ("DAM_CONSENT_DEFAULT_TTL_SECONDS", "7200"),
             ("DAM_CONSENT_MCP_WRITE_ENABLED", "false"),
+            ("DAM_CONSENT_PENDING_TIMEOUT_SECONDS", "90"),
+            ("DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS", "600"),
             ("DAM_POLICY_DEDUPLICATE_REPLACEMENTS", "false"),
             ("DAM_TRAFFIC_ENABLED_APPS", "anthropic-api, chatgpt-web"),
             ("DAM_PROXY_ENABLED", "true"),
@@ -267,6 +275,8 @@ fn env_overrides_config_file() {
     assert_eq!(config.consent.sqlite_path, PathBuf::from("env-consent.db"));
     assert_eq!(config.consent.default_ttl_seconds, 7200);
     assert!(!config.consent.mcp_write_enabled);
+    assert_eq!(config.consent.pending_timeout_seconds, 90);
+    assert_eq!(config.consent.max_request_duration_seconds, 600);
     assert!(!config.policy.deduplicate_replacements);
     assert_eq!(
         config.traffic.enabled_app_ids,

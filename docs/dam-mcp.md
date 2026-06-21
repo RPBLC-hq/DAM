@@ -2,7 +2,7 @@
 
 `dam-mcp` is the first local MCP server for agent-managed DAM operations.
 
-It currently exposes local install/status tools, rescue/repair preview/apply, offline diagnostics export, and consent tools over stdio:
+It currently exposes local install/status tools, rescue/repair preview/apply, offline diagnostics export, passthrough-consent tools, and the first bounded direct value-access slice over stdio:
 
 - `dam_status`
 - `dam_setup_plan`
@@ -13,12 +13,13 @@ It currently exposes local install/status tools, rescue/repair preview/apply, of
 - `dam_consent_list`
 - `dam_consent_grant`
 - `dam_consent_revoke`
-
-`dam_consent_request` is parked until `dam-notify` exists.
+- `dam_consent_request`
+- `dam_consent_request_status`
+- `dam_resolve_if_consented`
 
 ## Stable Handles
 
-Grant uses `vault_key`, not bracket display references:
+Grant and request tools use `vault_key`, not bracket display references:
 
 ```json
 {
@@ -44,7 +45,10 @@ Claude/ChatGPT MCP config can point at the installed binary:
   "mcpServers": {
     "dam": {
       "command": "dam-mcp",
-      "args": ["--config", "dam.toml"]
+      "args": ["--config", "dam.toml"],
+      "env": {
+        "DAM_MCP_ACTOR_LABEL": "Codex"
+      }
     }
   }
 }
@@ -61,6 +65,33 @@ Consent write tools are enabled by default through:
 ```toml
 [consent]
 mcp_write_enabled = true
+pending_timeout_seconds = 60
+max_request_duration_seconds = 86400
 ```
 
-Set it to `false` to expose list-only behavior.
+Set `mcp_write_enabled = false` to expose list-only behavior.
+
+## Direct value-access flow
+
+`dam_consent_request` creates a pending request bound to the local MCP actor. The caller must supply:
+
+- `vault_key`
+- `purpose`
+- `duration_seconds` (minimum 30 seconds, capped by `consent.max_request_duration_seconds`)
+- optional `reason`
+- optional `correlation_id`
+
+The request stays metadata-only until approved by a local control surface or API harness. The MCP server itself does **not** auto-approve requests.
+
+`dam_consent_request_status` returns the current non-sensitive state for a `request_id` or `grant_id`.
+
+`dam_resolve_if_consented` returns a raw value only when all of these are true:
+
+- the request is approved and not expired;
+- the current MCP actor binding matches the approved actor;
+- the backing vault row is still readable; and
+- the single-use grant has not already been consumed.
+
+Otherwise it returns request metadata plus a stable denial/expiry reason and no raw value.
+
+`dam_consent_revoke` now accepts passthrough `consent_id` values and direct-access `request_id`/`grant_id` values.

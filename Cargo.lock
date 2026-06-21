@@ -454,6 +454,7 @@ dependencies = [
  "dam-vault",
  "rusqlite",
  "sha2",
+ "tempfile",
  "thiserror 2.0.18",
  "uuid",
 ]
@@ -610,6 +611,7 @@ version = "0.1.0"
 dependencies = [
  "dam-config",
  "dam-consent",
+ "dam-core",
  "dam-daemon",
  "dam-diagnostics",
  "dam-net",
@@ -617,6 +619,7 @@ dependencies = [
  "dam-vault",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

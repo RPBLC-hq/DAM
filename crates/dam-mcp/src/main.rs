@@ -4,10 +4,17 @@ use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+const MIN_DIRECT_ACCESS_DURATION_SECONDS: u64 = 30;
 
 #[derive(Debug, Clone, Default)]
 struct CliArgs {
     config: dam_config::ConfigOverrides,
+}
+
+#[derive(Debug, Clone)]
+struct ActorBinding {
+    actor_id: String,
+    label: String,
 }
 
 fn main() {
@@ -141,11 +148,52 @@ fn tools(config: &dam_config::DamConfig) -> Vec<Value> {
         }));
         tools.push(json!({
             "name": "dam_consent_revoke",
-            "description": "Revoke a DAM passthrough consent by consent id.",
+            "description": "Revoke a DAM passthrough consent or direct-access request/grant.",
             "inputSchema": {
                 "type": "object",
-                "properties": { "consent_id": { "type": "string" } },
-                "required": ["consent_id"]
+                "properties": {
+                    "consent_id": { "type": "string" },
+                    "request_id": { "type": "string" },
+                    "grant_id": { "type": "string" },
+                    "reason": { "type": "string" }
+                }
+            }
+        }));
+        tools.push(json!({
+            "name": "dam_consent_request",
+            "description": "Create a pending DAM direct value-access request bound to the local MCP actor.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "vault_key": { "type": "string" },
+                    "purpose": { "type": "string" },
+                    "duration_seconds": { "type": "integer" },
+                    "reason": { "type": "string" },
+                    "correlation_id": { "type": "string" }
+                },
+                "required": ["vault_key", "purpose", "duration_seconds"]
+            }
+        }));
+        tools.push(json!({
+            "name": "dam_consent_request_status",
+            "description": "Inspect a pending or resolved DAM direct value-access request.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "request_id": { "type": "string" },
+                    "grant_id": { "type": "string" }
+                }
+            }
+        }));
+        tools.push(json!({
+            "name": "dam_resolve_if_consented",
+            "description": "Return a raw value only when an active DAM direct-access grant authorizes this MCP actor.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "request_id": { "type": "string" },
+                    "grant_id": { "type": "string" }
+                }
             }
         }));
     }
@@ -185,6 +233,15 @@ fn call_tool(
     name: &str,
     arguments: &Value,
 ) -> Result<String, String> {
+    call_tool_with_actor(config, name, arguments, bound_actor_binding())
+}
+
+fn call_tool_with_actor(
+    config: &dam_config::DamConfig,
+    name: &str,
+    arguments: &Value,
+    actor: Option<ActorBinding>,
+) -> Result<String, String> {
     match name {
         "dam_status" => dam_status_tool(),
         "dam_setup_plan" => dam_setup_plan_tool(config),
@@ -195,7 +252,14 @@ fn call_tool(
         "dam_consent_list" => {
             let store = open_consent_store(config)?;
             let entries = store.list().map_err(|error| error.to_string())?;
-            Ok(serde_json::to_string(&json!({ "consents": entries_to_json(&entries) })).unwrap())
+            let direct_access = store
+                .list_direct_access_requests()
+                .map_err(|error| error.to_string())?;
+            Ok(serde_json::to_string(&json!({
+                "consents": entries_to_json(&entries),
+                "direct_access_requests": direct_access.iter().map(direct_access_request_to_json).collect::<Vec<_>>()
+            }))
+            .unwrap())
         }
         "dam_consent_grant" if config.consent.mcp_write_enabled => {
             let store = open_consent_store(config)?;
@@ -219,16 +283,42 @@ fn call_tool(
         }
         "dam_consent_revoke" if config.consent.mcp_write_enabled => {
             let store = open_consent_store(config)?;
-            let consent_id = arguments
-                .get("consent_id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "consent_id is required".to_string())?;
+            if let Some(consent_id) = arguments.get("consent_id").and_then(Value::as_str) {
+                let revoked = store
+                    .revoke(consent_id)
+                    .map_err(|error| error.to_string())?;
+                return Ok(serde_json::to_string(
+                    &json!({ "revoked": revoked, "kind": "passthrough" }),
+                )
+                .unwrap());
+            }
+            let request_id = request_lookup_id(arguments)?;
             let revoked = store
-                .revoke(consent_id)
-                .map_err(|error| error.to_string())?;
-            Ok(serde_json::to_string(&json!({ "revoked": revoked })).unwrap())
+                .revoke_direct_access_request(
+                    &request_id,
+                    arguments
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                )
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| "request_id or grant_id not found".to_string())?;
+            Ok(serde_json::to_string(&json!({
+                "revoked": true,
+                "kind": "direct_access",
+                "request": direct_access_request_to_json(&revoked)
+            }))
+            .unwrap())
         }
-        "dam_consent_request" => Err("dam_consent_request is parked until dam-notify".to_string()),
+        "dam_consent_request" if config.consent.mcp_write_enabled => {
+            dam_consent_request_tool(config, arguments, actor)
+        }
+        "dam_consent_request_status" if config.consent.mcp_write_enabled => {
+            dam_consent_request_status_tool(config, arguments)
+        }
+        "dam_resolve_if_consented" if config.consent.mcp_write_enabled => {
+            dam_resolve_if_consented_tool(config, arguments, actor)
+        }
         _ => Err("unknown or disabled tool".to_string()),
     }
 }
@@ -269,6 +359,104 @@ fn dam_setup_export_diagnostics_tool(config: &dam_config::DamConfig) -> Result<S
         &dam_diagnostics::SetupPlanOptions::default(),
     ))?;
     Ok(serde_json::to_string(&export).unwrap())
+}
+
+fn dam_consent_request_tool(
+    config: &dam_config::DamConfig,
+    arguments: &Value,
+    actor: Option<ActorBinding>,
+) -> Result<String, String> {
+    let actor = actor.ok_or_else(|| {
+        "direct value-access tools require DAM_MCP_ACTOR_LABEL or DAM_MCP_ACTOR_ID actor binding"
+            .to_string()
+    })?;
+    let vault_key = arguments
+        .get("vault_key")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "vault_key is required".to_string())?;
+    let purpose = arguments
+        .get("purpose")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "purpose is required".to_string())?;
+    let duration_seconds = arguments
+        .get("duration_seconds")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "duration_seconds is required".to_string())?;
+    if duration_seconds < MIN_DIRECT_ACCESS_DURATION_SECONDS {
+        return Err(format!(
+            "duration_seconds must be at least {MIN_DIRECT_ACCESS_DURATION_SECONDS}"
+        ));
+    }
+    if duration_seconds > config.consent.max_request_duration_seconds {
+        return Err(format!(
+            "duration_seconds must be <= {}",
+            config.consent.max_request_duration_seconds
+        ));
+    }
+
+    let store = open_consent_store(config)?;
+    let vault = open_vault(config)?;
+    let request = store
+        .create_direct_access_request(
+            &dam_consent::CreateDirectAccessRequest {
+                vault_key: vault_key.to_string(),
+                actor_id: actor.actor_id,
+                requesting_actor: actor.label,
+                purpose: purpose.to_string(),
+                reason: arguments
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                requested_duration_seconds: duration_seconds,
+                pending_timeout_seconds: config.consent.pending_timeout_seconds,
+                correlation_id: arguments
+                    .get("correlation_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            },
+            &vault,
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(serde_json::to_string(&direct_access_request_to_json(&request)).unwrap())
+}
+
+fn dam_consent_request_status_tool(
+    config: &dam_config::DamConfig,
+    arguments: &Value,
+) -> Result<String, String> {
+    let store = open_consent_store(config)?;
+    let request_id = request_lookup_id(arguments)?;
+    let request = store
+        .direct_access_request(&request_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "request_id or grant_id not found".to_string())?;
+    Ok(serde_json::to_string(&direct_access_request_to_json(&request)).unwrap())
+}
+
+fn dam_resolve_if_consented_tool(
+    config: &dam_config::DamConfig,
+    arguments: &Value,
+    actor: Option<ActorBinding>,
+) -> Result<String, String> {
+    let actor = actor.ok_or_else(|| {
+        "direct value-access tools require DAM_MCP_ACTOR_LABEL or DAM_MCP_ACTOR_ID actor binding"
+            .to_string()
+    })?;
+    let store = open_consent_store(config)?;
+    let vault = open_vault(config)?;
+    let request_id = request_lookup_id(arguments)?;
+    let result = store
+        .resolve_direct_access_request(&request_id, &actor.actor_id, &vault)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "request_id or grant_id not found".to_string())?;
+    Ok(serde_json::to_string(&json!({
+        "request": direct_access_request_to_json(&result.request),
+        "outcome_reason": result.outcome_reason,
+        "value": result.value,
+    }))
+    .unwrap())
 }
 
 fn confirmed_apply(arguments: &Value) -> Result<bool, String> {
@@ -345,8 +533,59 @@ fn open_vault(config: &dam_config::DamConfig) -> Result<dam_vault::Vault, String
     }
 }
 
+fn bound_actor_binding() -> Option<ActorBinding> {
+    let actor_id = env::var("DAM_MCP_ACTOR_ID").ok();
+    let label = env::var("DAM_MCP_ACTOR_LABEL").ok();
+    match (actor_id, label) {
+        (Some(actor_id), Some(label))
+            if !actor_id.trim().is_empty() && !label.trim().is_empty() =>
+        {
+            Some(ActorBinding { actor_id, label })
+        }
+        (None, Some(label)) if !label.trim().is_empty() => Some(ActorBinding {
+            actor_id: format!(
+                "mcp-actor:{}",
+                dam_consent::fingerprint(dam_core::SensitiveType::Email, &label)
+            ),
+            label,
+        }),
+        _ => None,
+    }
+}
+
+fn request_lookup_id(arguments: &Value) -> Result<String, String> {
+    arguments
+        .get("request_id")
+        .and_then(Value::as_str)
+        .or_else(|| arguments.get("grant_id").and_then(Value::as_str))
+        .map(str::to_string)
+        .ok_or_else(|| "request_id or grant_id is required".to_string())
+}
+
 fn entries_to_json(entries: &[dam_consent::ConsentEntry]) -> Vec<Value> {
     entries.iter().map(entry_to_json).collect()
+}
+
+fn direct_access_request_to_json(entry: &dam_consent::DirectAccessRequest) -> Value {
+    json!({
+        "request_id": entry.request_id,
+        "grant_id": entry.grant_id,
+        "status": entry.status.tag(),
+        "kind": entry.kind.tag(),
+        "vault_key": entry.vault_key,
+        "requesting_actor": entry.requesting_actor,
+        "purpose": entry.purpose,
+        "reason": entry.reason,
+        "decision_reason": entry.decision_reason,
+        "requested_duration_seconds": entry.requested_duration_seconds,
+        "pending_expires_at": entry.pending_expires_at,
+        "grant_expires_at": entry.grant_expires_at,
+        "created_at": entry.created_at,
+        "decided_at": entry.decided_at,
+        "max_resolves": entry.max_resolves,
+        "resolve_count": entry.resolve_count,
+        "correlation_id": entry.correlation_id,
+    })
 }
 
 fn entry_to_json(entry: &dam_consent::ConsentEntry) -> Value {

@@ -108,6 +108,8 @@ pub struct ConsentConfig {
     pub sqlite_path: PathBuf,
     pub default_ttl_seconds: u64,
     pub mcp_write_enabled: bool,
+    pub pending_timeout_seconds: u64,
+    pub max_request_duration_seconds: u64,
 }
 
 impl Default for ConsentConfig {
@@ -118,6 +120,8 @@ impl Default for ConsentConfig {
             sqlite_path: PathBuf::from("consent.db"),
             default_ttl_seconds: 86_400,
             mcp_write_enabled: true,
+            pending_timeout_seconds: 60,
+            max_request_duration_seconds: 86_400,
         }
     }
 }
@@ -656,6 +660,12 @@ fn merge_raw(
         if let Some(mcp_write_enabled) = consent.mcp_write_enabled {
             config.consent.mcp_write_enabled = mcp_write_enabled;
         }
+        if let Some(pending_timeout_seconds) = consent.pending_timeout_seconds {
+            config.consent.pending_timeout_seconds = pending_timeout_seconds;
+        }
+        if let Some(max_request_duration_seconds) = consent.max_request_duration_seconds {
+            config.consent.max_request_duration_seconds = max_request_duration_seconds;
+        }
     }
 
     if let Some(policy) = raw.policy {
@@ -788,6 +798,14 @@ fn merge_env(config: &mut DamConfig, env: &BTreeMap<String, String>) -> Result<(
     }
     if let Some(value) = env.get("DAM_CONSENT_MCP_WRITE_ENABLED") {
         config.consent.mcp_write_enabled = parse_bool("DAM_CONSENT_MCP_WRITE_ENABLED", value)?;
+    }
+    if let Some(value) = env.get("DAM_CONSENT_PENDING_TIMEOUT_SECONDS") {
+        config.consent.pending_timeout_seconds =
+            parse_u64("DAM_CONSENT_PENDING_TIMEOUT_SECONDS", value)?;
+    }
+    if let Some(value) = env.get("DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS") {
+        config.consent.max_request_duration_seconds =
+            parse_u64("DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS", value)?;
     }
 
     if let Some(value) = env.get("DAM_POLICY_DEFAULT_ACTION") {
@@ -1435,6 +1453,8 @@ struct RawConsentConfig {
     path: Option<PathBuf>,
     default_ttl_seconds: Option<u64>,
     mcp_write_enabled: Option<bool>,
+    pending_timeout_seconds: Option<u64>,
+    max_request_duration_seconds: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
