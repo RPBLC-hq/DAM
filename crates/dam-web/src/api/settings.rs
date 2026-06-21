@@ -276,18 +276,14 @@ fn apply_detector_preferences_to_config(
     integration_state_dir: &FsPath,
 ) -> Result<(), WebError> {
     let allowed = allowed_detector_keys();
-    let mut traffic_app_ids = BTreeSet::new();
     for profile_id in profile_ids {
-        for app_id in dam_integrations::traffic_app_ids_for_profile_ids_from_state(
+        let traffic_app_ids = dam_integrations::traffic_app_ids_for_profile_ids_from_state(
             std::slice::from_ref(profile_id),
             integration_state_dir,
         )
         .map_err(settings_error)?
-        {
-            traffic_app_ids.insert(app_id);
-        }
-    }
-    for profile_id in profile_ids {
+        .into_iter()
+        .collect::<BTreeSet<_>>();
         let Some(profile_preferences) = preferences.profiles.get(profile_id) else {
             continue;
         };

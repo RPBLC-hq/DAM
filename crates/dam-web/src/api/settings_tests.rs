@@ -288,6 +288,14 @@ fn detector_preferences_persist_and_relax_only_selected_kinds() {
         Some(&dam_net::SensitiveDataAction::Allow)
     );
     assert_eq!(anthropic_api.outbound.filter.types.get("phone"), None);
+    let openai_api = config
+        .traffic
+        .profile
+        .apps
+        .iter()
+        .find(|app| app.id == "openai-api")
+        .unwrap();
+    assert_eq!(openai_api.outbound.filter.types.get("email"), None);
 }
 
 #[test]
