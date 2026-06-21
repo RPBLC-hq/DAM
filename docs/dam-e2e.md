@@ -60,6 +60,26 @@ python3 scripts/dam_fake_openai_upstream.py --port 18080
 DAM_AGENT_E2E_UPSTREAM=http://127.0.0.1:18080 scripts/dam-build.sh agent-protection-smoke
 ```
 
+For low-risk VPS dogfooding proof, keep DAM in explicit-proxy mode only and verify the shared proxy + Activity + pending-consent path together:
+
+```bash
+python3 scripts/dam_fake_openai_upstream.py --port 18080
+DAM_AGENT_E2E_UPSTREAM=http://127.0.0.1:18080 \
+DAM_AGENT_STATE_DIR="$HOME/.dam-hermes" \
+DAM_AGENT_E2E_WEB_ADDR=127.0.0.1:2896 \
+scripts/dam-build.sh agent-dogfood-verify
+```
+
+That verifier starts loopback `dam-proxy` and `dam-web` against the same state directory, proves the upstream saw DAM tokens rather than raw synthetic values, checks `/api/v1/activity?since=0` for rendered evidence without raw leakage, and exercises the local pending-consent request path with `/api/v1/requests/trigger` plus `allow-once`. It does **not** enable system proxy, `tun`, or trust-store mutation.
+
+To route agent HTTP clients through this mode, print the explicit proxy exports and source them in the agent shell or service environment:
+
+```bash
+python3 scripts/dam_vps_dogfood_verify.py env
+```
+
+For a persistent VPS watchdog, supervise the loopback `dam-proxy` and `dam-web` processes separately with a user-level service manager and run `agent-dogfood-verify` from cron/timer as the daily synthetic proof. Keep the runtime loopback-only, keep state under `~/.dam-hermes`, and alert only when the verifier returns blocked or failed status.
+
 ## Rules
 
 - Use synthetic data only.

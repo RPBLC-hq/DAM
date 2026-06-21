@@ -15,6 +15,7 @@ scripts/dam-build.sh deploy-local --mode development
 scripts/dam-build.sh agent-check
 scripts/dam-build.sh agent-npm-readiness
 scripts/dam-build.sh agent-protection-smoke
+scripts/dam-build.sh agent-dogfood-verify
 scripts/dam-build.sh agent-recovery-smoke --network-mode tun --trust-mode local_ca [--state-dir PATH]
 scripts/dam-build.sh agent-repair-smoke --network-mode tun --trust-mode local_ca --confirm-mutation [--state-dir PATH]
 scripts/dam-build.sh agent-install --skip-checks
@@ -40,6 +41,8 @@ scripts/dam-build.sh agent-status --network-mode tun --trust-mode local_ca [--st
 `agent-npm-readiness` is the local/read-only npm installability probe. It stages current-platform native binaries under `npm/native/<platform>-<arch>/`, runs `dam package-doctor --json`, verifies that `npm pack --dry-run --ignore-scripts --json` includes the staged binaries, reports the current registry owner and published version for `@rpblc/dam`, and fails closed when the local package version is not publishable or this machine lacks npm publish auth. It does not publish, mutate system routing/trust, or require package credentials in repository files.
 
 `agent-protection-smoke` runs the local API-through-DAM protection smoke test against a loopback OpenAI-compatible upstream. By default it uses local llama.cpp at `http://127.0.0.1:8080`, builds and runs `target/debug/dam-proxy` on `127.0.0.1:7831`, uses temporary vault/activity SQLite stores, sends synthetic email/SSN values only, verifies trusted-side resolution, verifies the model can transform only DAM references by inserting whitespace after reference opening brackets, checks the activity log for raw synthetic leaks, then terminates the proxy and removes the temporary stores. If `dam-proxy` exits before becoming healthy, the command fails with the captured exit code and stdout/stderr tail so port/config problems are actionable. It does not change system network settings or call paid providers. Set `DAM_AGENT_E2E_BINARY` to test a specific proxy binary, `DAM_AGENT_E2E_BUILD=0` to reuse an existing binary, or `DAM_AGENT_E2E_KEEP_TEMP=1` to retain temporary smoke-test stores for debugging.
+
+`agent-dogfood-verify` runs the low-risk VPS dogfooding verifier. It builds and starts loopback `dam-proxy` plus `dam-web` against one shared state directory, sends synthetic OpenAI-compatible traffic through DAM to prove upstream tokenization and trusted-side resolve, checks the Activity API for rendered evidence without raw-log leakage, and exercises the local pending-consent request flow via `/api/v1/requests/trigger` and `allow-once`. The command stays in explicit-proxy mode only: no system proxy, `tun`, or trust-store mutation. Use `DAM_AGENT_E2E_UPSTREAM` for the remote or loopback OpenAI-compatible endpoint, `DAM_AGENT_E2E_WEB_ADDR` for the isolated web proof port, `DAM_AGENT_STATE_DIR` for a persistent dogfood state directory such as `~/.dam-hermes`, `DAM_AGENT_E2E_WEB_BINARY` to pin a specific `dam-web` binary, and `DAM_AGENT_E2E_KEEP_TEMP=1` to retain an otherwise-temporary verification state directory.
 
 `agent-recovery-smoke` runs the installed app's read-only recovery probes without changing routing or daemon state: `dam setup rescue --dry-run --json`, `dam setup repair --dry-run --network-mode <mode> --trust-mode <mode> --json`, and `dam setup export-diagnostics --network-mode <mode> --trust-mode <mode> --json`. It uses the same `--network-mode`, `--trust-mode`, `--state-dir`, `DAM_AGENT_NETWORK_MODE`, `DAM_AGENT_TRUST_MODE`, and `DAM_AGENT_STATE_DIR` inputs as `agent-status` for setup repair planning and diagnostics export. Use it after `agent-install` when validating that the installed release artifact can explain and preview recovery actions before any mutating rescue/repair is attempted; pass `--state-dir` when validating retained or fixture state instead of the live user state.
 
@@ -82,10 +85,13 @@ Use this matrix when validating release-path recovery without guessing which com
 - `DAM_AGENT_CONFIRM_MUTATION`: set to `1` to allow the mutating `agent-repair-smoke` command.
 - `DAM_AGENT_E2E_UPSTREAM`: local OpenAI-compatible upstream for `agent-protection-smoke`, default `http://127.0.0.1:8080`.
 - `DAM_AGENT_E2E_LISTEN`: loopback listen address for the smoke proxy, default `127.0.0.1:7831`.
+- `DAM_AGENT_E2E_WEB_ADDR`: loopback listen address for `agent-dogfood-verify` web proof, default `127.0.0.1:2896`.
 - `DAM_AGENT_E2E_STARTUP_TIMEOUT`: smoke proxy startup timeout in seconds, default `30`.
 - `DAM_AGENT_E2E_HTTP_TIMEOUT`: smoke request timeout in seconds, default `60`.
 - `DAM_AGENT_E2E_SMOKE_SCRIPT`: verifier script path, default `scripts/rpblc_dam_local_llm_e2e_smoke.py`.
+- `DAM_AGENT_E2E_VERIFY_SCRIPT`: VPS dogfood verifier path, default `scripts/dam_vps_dogfood_verify.py`.
 - `DAM_AGENT_E2E_BINARY`: `dam-proxy` binary path for the smoke test, default `target/debug/dam-proxy`.
+- `DAM_AGENT_E2E_WEB_BINARY`: `dam-web` binary path for the VPS dogfood verifier, default `target/debug/dam-web`.
 - `DAM_AGENT_E2E_BUILD`: set to `0` to skip the default smoke-test `cargo build -p dam-proxy` step.
 - `DAM_AGENT_E2E_KEEP_TEMP`: set to `1` to retain the smoke-test temporary vault/log directory for debugging.
 
