@@ -90,6 +90,48 @@ fn redacted_today_count_uses_current_utc_day_redaction_rows() {
 }
 
 #[test]
+fn blocked_today_count_uses_denied_activity_taxonomy() {
+    let today = 2 * 86_400 + 60;
+    let yesterday = today - 86_400;
+    let entries = vec![
+        log_entry(
+            1,
+            today,
+            "policy_decision",
+            Some("block"),
+            "email",
+            "policy denied the request",
+        ),
+        log_entry(
+            2,
+            today,
+            "proxy_failure",
+            Some("provider_down"),
+            "provider",
+            "provider down counts as denied activity",
+        ),
+        log_entry(
+            3,
+            today,
+            "redaction",
+            Some("redacted"),
+            "email",
+            "redaction is sealed, not denied",
+        ),
+        log_entry(
+            4,
+            yesterday,
+            "policy_decision",
+            Some("block"),
+            "email",
+            "yesterday should not count",
+        ),
+    ];
+
+    assert_eq!(blocked_today_count(&entries, today), 2);
+}
+
+#[test]
 fn apps_mediated_count_reads_enabled_integrations() {
     let dir = tempfile::tempdir().unwrap();
     let integration_state_dir = dir.path().join("integrations");

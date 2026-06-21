@@ -18,6 +18,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::AppState;
+use crate::activity_map::{Decision, derive_event_with_actor};
 use crate::error::{Ok, WebError, WebErrorCode, WebResult};
 use crate::events_bus::EventTopic;
 
@@ -48,9 +49,9 @@ pub struct ConnectView {
 pub struct ConnectCounts {
     pub grants: u64,
     pub redacted_today: u64,
-    // Legacy wire name kept for older local clients. It now mirrors
-    // redacted_today because the Connect tile is a redaction dividend,
-    // not a provider-failure counter.
+    // The product-facing Connect tile is "blocked today". Keep the
+    // separate redaction dividend count on the wire for any older
+    // local clients that still surface it elsewhere.
     pub blocked_today: u64,
     pub apps_mediated: u64,
 }
@@ -182,14 +183,13 @@ pub async fn get(State(state): State<AppState>) -> WebResult<ConnectView> {
 }
 
 fn connect_counts(state: &AppState) -> ConnectCounts {
-    let redacted_today = redacted_today_count(
-        &state.logs.list().unwrap_or_default(),
-        now_unix_secs().unwrap_or_default(),
-    );
+    let logs = state.logs.list().unwrap_or_default();
+    let now = now_unix_secs().unwrap_or_default();
+    let redacted_today = redacted_today_count(&logs, now);
     ConnectCounts {
         grants: active_grants_count(state.consent_store.as_deref()),
         redacted_today,
-        blocked_today: redacted_today,
+        blocked_today: blocked_today_count(&logs, now),
         apps_mediated: apps_mediated_count().unwrap_or_default(),
     }
 }
@@ -227,6 +227,20 @@ fn redacted_today_count(entries: &[dam_log::LogEntry], now: i64) -> u64 {
                     entry.action.as_deref(),
                     Some("tokenized") | Some("redacted")
                 )
+        })
+        .count() as u64
+}
+
+fn blocked_today_count(entries: &[dam_log::LogEntry], now: i64) -> u64 {
+    let today = epoch_day(now);
+    entries
+        .iter()
+        .filter(|entry| epoch_day(entry.timestamp) == today)
+        .filter(|entry| {
+            matches!(
+                derive_event_with_actor(entry, None).map(|event| event.decision),
+                Some(Decision::Denied)
+            )
         })
         .count() as u64
 }
