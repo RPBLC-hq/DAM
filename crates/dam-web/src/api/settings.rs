@@ -269,6 +269,27 @@ fn set_profile_detector_preferences(
     write_detector_preferences(state_dir, &preferences)
 }
 
+fn set_profile_detectors_in_state_dir<F>(
+    state_dir: &FsPath,
+    profile_id: &str,
+    detectors: &[DetectorPatch],
+    mut reconcile: F,
+) -> Result<(), WebError>
+where
+    F: FnMut() -> Result<ReconcileOutcome, WebError>,
+{
+    let previous_preferences = read_detector_preferences(state_dir)?;
+    set_profile_detector_preferences(state_dir, profile_id, detectors)?;
+    match reconcile() {
+        Ok(ReconcileOutcome::Reconciled | ReconcileOutcome::SetupPending) => Ok(()),
+        Err(error) => {
+            let _ = write_detector_preferences(state_dir, &previous_preferences);
+            let _ = reconcile();
+            Err(error)
+        }
+    }
+}
+
 fn apply_detector_preferences_to_config(
     config: &mut dam_config::DamConfig,
     profile_ids: &[String],
@@ -425,14 +446,11 @@ fn set_profile_detectors(
     detectors: &[DetectorPatch],
 ) -> Result<(), WebError> {
     let state_dir = dam_state_dir()?;
-    set_profile_detector_preferences(&state_dir, profile_id, detectors)?;
-    match reconcile_running_capture_scope(state, &state_dir) {
-        Ok(ReconcileOutcome::Reconciled | ReconcileOutcome::SetupPending) => {
-            state.events.notify(EventTopic::ConnectUpdate);
-            Ok(())
-        }
-        Err(error) => Err(error),
-    }
+    set_profile_detectors_in_state_dir(&state_dir, profile_id, detectors, || {
+        reconcile_running_capture_scope(state, &state_dir)
+    })?;
+    state.events.notify(EventTopic::ConnectUpdate);
+    Ok(())
 }
 
 fn set_app_enabled_in_state_dir(

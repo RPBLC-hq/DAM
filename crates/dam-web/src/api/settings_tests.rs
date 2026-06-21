@@ -299,6 +299,45 @@ fn detector_preferences_persist_and_relax_only_selected_kinds() {
 }
 
 #[test]
+fn detector_preference_write_rolls_back_on_reconcile_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+
+    set_profile_detector_preferences(
+        &state_dir,
+        "claude",
+        &[DetectorPatch {
+            key: "email".into(),
+            enabled: false,
+        }],
+    )
+    .unwrap();
+
+    let mut reconcile_calls = 0;
+    let error = set_profile_detectors_in_state_dir(
+        &state_dir,
+        "claude",
+        &[DetectorPatch {
+            key: "email".into(),
+            enabled: true,
+        }],
+        || {
+            reconcile_calls += 1;
+            Err(WebError::new(WebErrorCode::DaemonUnreachable))
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code, WebErrorCode::DaemonUnreachable);
+    assert_eq!(reconcile_calls, 2);
+    let prefs = read_detector_preferences(&state_dir).unwrap();
+    assert_eq!(
+        prefs.profiles.get("claude").unwrap().disabled_kinds,
+        vec!["email".to_string()]
+    );
+}
+
+#[test]
 fn pending_network_extension_approval_keeps_profile_toggle_state() {
     assert_eq!(
         network_extension_result_to_reconcile_outcome(
