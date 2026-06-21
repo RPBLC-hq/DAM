@@ -152,6 +152,51 @@ class DamBuildScriptTests(unittest.TestCase):
                 ],
             )
 
+    def test_agent_dogfood_verify_allocates_isolated_loopback_web_addr_when_unset(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "argv.txt"
+            stub_path = Path(temp_dir) / "verify_stub.py"
+            stub_path.write_text(
+                textwrap.dedent(
+                    f"""
+                    import pathlib
+                    import sys
+                    pathlib.Path({str(output_path)!r}).write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
+                    raise SystemExit(0)
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "DAM_AGENT_E2E_VERIFY_SCRIPT": str(stub_path),
+                    "DAM_AGENT_E2E_UPSTREAM": "http://127.0.0.1:18080",
+                    "DAM_AGENT_E2E_LISTEN": "127.0.0.1:17828",
+                    "DAM_AGENT_STATE_DIR": "/tmp/dam-hermes",
+                    "DAM_AGENT_E2E_BUILD": "0",
+                    "DAM_AGENT_E2E_KEEP_TEMP": "1",
+                }
+            )
+            env.pop("DAM_AGENT_E2E_WEB_ADDR", None)
+            subprocess.run(
+                [str(BUILD_SCRIPT), "agent-dogfood-verify"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            argv = output_path.read_text(encoding="utf-8").splitlines()
+            web_addr = argv[argv.index("--web-addr") + 1]
+            host, port = web_addr.split(":", 1)
+            self.assertEqual(host, "127.0.0.1")
+            self.assertNotEqual(web_addr, "127.0.0.1:2896")
+            self.assertGreater(int(port), 0)
+
     def test_agent_status_rejects_invalid_setup_probe_modes_before_macos_checks(self):
         result = subprocess.run(
             [

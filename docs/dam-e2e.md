@@ -66,11 +66,10 @@ For low-risk VPS dogfooding proof, keep DAM in explicit-proxy mode only and veri
 python3 scripts/dam_fake_openai_upstream.py --port 18080
 DAM_AGENT_E2E_UPSTREAM=http://127.0.0.1:18080 \
 DAM_AGENT_STATE_DIR="$HOME/.dam-hermes" \
-DAM_AGENT_E2E_WEB_ADDR=127.0.0.1:2896 \
 scripts/dam-build.sh agent-dogfood-verify
 ```
 
-That verifier starts loopback `dam-proxy` and `dam-web` against the same state directory, proves the upstream saw DAM tokens rather than raw synthetic values, checks `/api/v1/activity?since=0` for rendered evidence without raw leakage, and exercises the local pending-consent request path with `/api/v1/requests/trigger` plus `allow-once`. It does **not** enable system proxy, `tun`, or trust-store mutation.
+That verifier starts loopback `dam-proxy` and `dam-web` against the same state directory, proves the upstream saw DAM tokens rather than raw synthetic values, checks `/api/v1/activity?since=0&after_id=<baseline>` so the feed must include evidence from the current verification run rather than stale rows, and exercises the local pending-consent request path with `/api/v1/requests/trigger` plus `allow-once`. It does **not** enable system proxy, `tun`, or trust-store mutation. By default `scripts/dam-build.sh agent-dogfood-verify` allocates an isolated free loopback web port for the temporary proof `dam-web`; set `DAM_AGENT_E2E_WEB_ADDR` only when you need to pin a specific isolated address.
 
 To route agent HTTP clients through this mode, print the explicit proxy exports and source them in the agent shell or service environment:
 

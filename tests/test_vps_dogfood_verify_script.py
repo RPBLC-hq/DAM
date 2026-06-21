@@ -1,4 +1,5 @@
 import importlib.util
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -104,6 +105,33 @@ class DamVpsDogfoodVerifyScriptTests(unittest.TestCase):
         self.assertIn("example.test", payload["value_preview"])
         self.assertIn("purpose", payload)
         self.assertEqual(payload["expires_in_sec"], 600)
+
+    def test_allocate_loopback_addr_returns_loopback_host_with_ephemeral_port(self):
+        verify = load_module()
+
+        addr = verify.allocate_loopback_addr()
+
+        host, port = addr.split(":", 1)
+        self.assertEqual(host, "127.0.0.1")
+        self.assertGreater(int(port), 0)
+
+    def test_max_log_row_id_and_activity_url_support_current_run_cursor(self):
+        verify = load_module()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_db = Path(temp_dir) / "log.db"
+            with sqlite3.connect(log_db) as connection:
+                connection.execute("create table log_events (id integer primary key, kind text)")
+                connection.execute("insert into log_events (kind) values ('redaction.email')")
+                connection.execute("insert into log_events (kind) values ('redaction.ssn')")
+                connection.commit()
+
+            self.assertEqual(verify.max_log_row_id(log_db), 2)
+
+        self.assertEqual(
+            verify.activity_url("http://127.0.0.1:12896", after_id=2),
+            "http://127.0.0.1:12896/api/v1/activity?since=0&after_id=2",
+        )
 
 
 if __name__ == "__main__":

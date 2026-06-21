@@ -17,7 +17,7 @@ AGENT_E2E_UPSTREAM="${DAM_AGENT_E2E_UPSTREAM:-http://127.0.0.1:8080}"
 AGENT_E2E_LISTEN="${DAM_AGENT_E2E_LISTEN:-127.0.0.1:7831}"
 AGENT_E2E_STARTUP_TIMEOUT="${DAM_AGENT_E2E_STARTUP_TIMEOUT:-30}"
 AGENT_E2E_HTTP_TIMEOUT="${DAM_AGENT_E2E_HTTP_TIMEOUT:-60}"
-AGENT_E2E_WEB_ADDR="${DAM_AGENT_E2E_WEB_ADDR:-127.0.0.1:2896}"
+AGENT_E2E_WEB_ADDR="${DAM_AGENT_E2E_WEB_ADDR:-}"
 AGENT_E2E_SMOKE_SCRIPT="${DAM_AGENT_E2E_SMOKE_SCRIPT:-$ROOT/scripts/rpblc_dam_local_llm_e2e_smoke.py}"
 AGENT_E2E_VERIFY_SCRIPT="${DAM_AGENT_E2E_VERIFY_SCRIPT:-$ROOT/scripts/dam_vps_dogfood_verify.py}"
 AGENT_E2E_BINARY="${DAM_AGENT_E2E_BINARY:-$ROOT/target/debug/dam-proxy}"
@@ -112,6 +112,16 @@ run() {
   printf ' %q' "$@"
   printf '\n'
   "$@"
+}
+
+allocate_loopback_addr() {
+  python3 - <<'PY'
+import socket
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    host, port = sock.getsockname()
+print(f"{host}:{port}")
+PY
 }
 
 require_macos() {
@@ -444,12 +454,16 @@ cmd_agent_dogfood_verify() {
     echo "missing VPS dogfood verifier script: $AGENT_E2E_VERIFY_SCRIPT" >&2
     exit 1
   fi
+  local web_addr="$AGENT_E2E_WEB_ADDR"
+  if [[ -z "$web_addr" ]]; then
+    web_addr="$(allocate_loopback_addr)"
+  fi
   local verify_args=(
     "$AGENT_E2E_VERIFY_SCRIPT"
     verify
     --upstream "$AGENT_E2E_UPSTREAM"
     --listen "$AGENT_E2E_LISTEN"
-    --web-addr "$AGENT_E2E_WEB_ADDR"
+    --web-addr "$web_addr"
     --proxy-binary "$AGENT_E2E_BINARY"
     --web-binary "$AGENT_E2E_WEB_BINARY"
     --startup-timeout "$AGENT_E2E_STARTUP_TIMEOUT"

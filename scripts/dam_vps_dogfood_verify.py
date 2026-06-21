@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import signal
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -28,7 +29,6 @@ SYNTHETIC_EMAIL = "alex.sandbox@example.test"
 SYNTHETIC_SSN = "123-45-6789"
 DEFAULT_UPSTREAM = "http://127.0.0.1:8080"
 DEFAULT_LISTEN = "127.0.0.1:7828"
-DEFAULT_WEB_ADDR = "127.0.0.1:2896"
 DEFAULT_STATE_DIR = Path.home() / ".dam-hermes"
 
 
@@ -93,6 +93,13 @@ def proxy_env(listen: str) -> dict[str, str]:
         "ALL_PROXY": proxy_url,
         "NO_PROXY": "127.0.0.1,localhost",
     }
+
+
+def allocate_loopback_addr() -> str:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        host, port = sock.getsockname()
+    return f"{host}:{port}"
 
 
 def pending_request_payload() -> dict[str, Any]:
@@ -270,6 +277,19 @@ def count_log_rows(log_db: Path) -> int:
             return 0
 
 
+def max_log_row_id(log_db: Path) -> int:
+    if not log_db.exists():
+        return 0
+    with sqlite3.connect(log_db) as connection:
+        try:
+            row = connection.execute("select coalesce(max(id), 0) from log_events").fetchone()
+        except sqlite3.DatabaseError:
+            return 0
+    if not row:
+        return 0
+    return int(row[0] or 0)
+
+
 def raw_values_in_file(path: Path) -> list[str]:
     if not path.exists():
         return []
@@ -292,6 +312,13 @@ def assert_activity_feed(feed: dict[str, Any]) -> int:
         raise AssertionError(f"activity feed did not contain any events: {feed!r}")
     assert_no_raw_values_in_text(json.dumps(feed), surface="activity API")
     return len(events)
+
+
+def activity_url(base_url: str, *, after_id: int | None = None) -> str:
+    url = f"{base_url}/api/v1/activity?since=0"
+    if after_id is not None:
+        url += f"&after_id={after_id}"
+    return url
 
 
 def run_pending_request_flow(web_base_url: str, *, timeout: float) -> dict[str, Any]:
@@ -380,8 +407,9 @@ def run_verify(args: argparse.Namespace) -> dict[str, Any]:
 
     proxy_process: subprocess.Popen[str] | None = None
     web_process: subprocess.Popen[str] | None = None
+    web_addr = args.web_addr or allocate_loopback_addr()
     proxy_base = f"http://{args.listen}"
-    web_base = f"http://{args.web_addr}"
+    web_base = f"http://{web_addr}"
     try:
         proxy_process = subprocess.Popen(
             proxy_command(binary=proxy_binary, listen=args.listen, upstream=upstream, paths=paths),
@@ -394,7 +422,7 @@ def run_verify(args: argparse.Namespace) -> dict[str, Any]:
         proxy_health = wait_for_proxy(proxy_base, timeout=args.startup_timeout, process=proxy_process)
 
         web_process = subprocess.Popen(
-            web_command(binary=web_binary, addr=args.web_addr, paths=paths),
+            web_command(binary=web_binary, addr=web_addr, paths=paths),
             cwd=Path.cwd(),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -402,6 +430,7 @@ def run_verify(args: argparse.Namespace) -> dict[str, Any]:
             start_new_session=True,
         )
         wait_for_web(web_base, timeout=args.startup_timeout, process=web_process)
+        baseline_log_id = max_log_row_id(paths.log_db)
 
         exact_text = response_text(
             post_json(
@@ -422,7 +451,7 @@ def run_verify(args: argparse.Namespace) -> dict[str, Any]:
         assert_transformed_token_only(transformed_text)
 
         activity_feed = envelope_data(
-            get_json(f"{web_base}/api/v1/activity?since=0", timeout=args.http_timeout)
+            get_json(activity_url(web_base, after_id=baseline_log_id), timeout=args.http_timeout)
         )
         activity_event_count = assert_activity_feed(activity_feed)
         consent = run_pending_request_flow(web_base, timeout=args.http_timeout)
@@ -467,7 +496,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     verify_parser = subparsers.add_parser("verify", help="run proxy/activity/consent verification")
     verify_parser.add_argument("--upstream", default=DEFAULT_UPSTREAM)
     verify_parser.add_argument("--listen", default=DEFAULT_LISTEN)
-    verify_parser.add_argument("--web-addr", default=DEFAULT_WEB_ADDR)
+    verify_parser.add_argument("--web-addr", default=None)
     verify_parser.add_argument("--state-dir", default=None)
     verify_parser.add_argument("--proxy-binary", default="target/debug/dam-proxy")
     verify_parser.add_argument("--web-binary", default="target/debug/dam-web")
@@ -481,7 +510,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         args.command = "verify"
         args.upstream = DEFAULT_UPSTREAM
         args.listen = DEFAULT_LISTEN
-        args.web_addr = DEFAULT_WEB_ADDR
+        args.web_addr = None
         args.state_dir = None
         args.proxy_binary = "target/debug/dam-proxy"
         args.web_binary = "target/debug/dam-web"
