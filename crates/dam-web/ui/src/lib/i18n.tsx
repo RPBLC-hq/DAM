@@ -117,6 +117,8 @@ export type MessageKey =
   | 'request.deny'
   | 'connect.grants'
   | 'connect.grantsAria'
+  | 'connect.blockedToday'
+  | 'connect.blockedTodayAria'
   | 'connect.redactedToday'
   | 'connect.redactedTodayAria'
   | 'connect.appsMediated'
@@ -478,6 +480,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'request.deny': 'deny',
     'connect.grants': 'allowed',
     'connect.grantsAria': 'open allowed wallet values',
+    'connect.blockedToday': 'blocked today',
+    'connect.blockedTodayAria': 'open blocked activity',
     'connect.redactedToday': 'redacted today',
     'connect.redactedTodayAria': 'open redacted activity',
     'connect.appsMediated': 'apps mediated',
@@ -889,6 +893,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'request.deny': 'refuser',
     'connect.grants': 'autorisés',
     'connect.grantsAria': 'voir les valeurs autorisées du portefeuille',
+    'connect.blockedToday': 'bloqués aujourd’hui',
+    'connect.blockedTodayAria': 'voir l’activité bloquée',
     'connect.redactedToday': 'masqués aujourd’hui',
     'connect.redactedTodayAria': 'voir l’activité masquée',
     'connect.appsMediated': 'apps encadrées',

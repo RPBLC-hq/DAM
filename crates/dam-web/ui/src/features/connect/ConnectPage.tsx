@@ -570,7 +570,7 @@ function CountsRow({
   formatNumber: (value: number) => string
 }) {
   const { t } = useI18n()
-  const redactedToday = view.counts.redacted_today ?? view.counts.blocked_today
+  const blockedToday = view.counts.blocked_today
 
   return (
     <ul className="dam-connect__counts" aria-label={t('connect.countsLabel')}>
@@ -588,12 +588,12 @@ function CountsRow({
       <li className="dam-connect__counts-cell--link">
         <Link
           to="/activity"
-          search={{ decision: 'sealed', since: 'today' }}
+          search={{ decision: 'denied', since: 'today' }}
           className="dam-connect__counts-link"
-          aria-label={t('connect.redactedTodayAria')}
+          aria-label={t('connect.blockedTodayAria')}
         >
-          <b>{formatNumber(redactedToday)}</b>
-          <span>{t('connect.redactedToday')}</span>
+          <b>{formatNumber(blockedToday)}</b>
+          <span>{t('connect.blockedToday')}</span>
         </Link>
       </li>
       <li className="dam-connect__counts-cell--link">
