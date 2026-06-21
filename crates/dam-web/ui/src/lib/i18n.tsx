@@ -198,6 +198,7 @@ export type MessageKey =
   | 'settings.appsProfile'
   | 'settings.appsTarget'
   | 'settings.appsInstallState'
+  | 'settings.appsDetectorHint'
   | 'settings.appsModified'
   | 'settings.installState.applied'
   | 'settings.installState.modified'
@@ -584,6 +585,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'settings.appsProfile': 'profile',
     'settings.appsTarget': 'profile file',
     'settings.appsInstallState': 'profile state',
+    'settings.appsDetectorHint':
+      'Each profile starts with DAM’s current protection defaults. Turning one off allows that kind for this app only.',
     'settings.appsModified':
       'A profile file changed outside DAM. Review the file before changing it.',
     'settings.installState.applied': 'saved',
@@ -993,6 +996,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'settings.appsProfile': 'profil',
     'settings.appsTarget': 'fichier profil',
     'settings.appsInstallState': 'état du profil',
+    'settings.appsDetectorHint':
+      'Chaque profil démarre avec les protections actuelles de DAM. Désactiver une détection autorise ce type pour cette app seulement.',
     'settings.appsModified':
       'Un fichier profil a changé hors de DAM. Vérifiez le fichier avant de le modifier.',
     'settings.installState.applied': 'enregistré',
