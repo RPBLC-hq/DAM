@@ -37,6 +37,8 @@ backend = "sqlite"
 path = "consent.db"
 default_ttl_seconds = 86400
 mcp_write_enabled = true
+pending_timeout_seconds = 60
+max_request_duration_seconds = 86400
 
 [policy]
 default_action = "tokenize"
@@ -78,6 +80,8 @@ header = "authorization"
 scheme = "Bearer"
 strip_headers = ["authorization"]
 ```
+
+`consent.pending_timeout_seconds` controls how long a direct MCP value-access request can remain pending before DAM expires it. It must be a positive integer. `consent.max_request_duration_seconds` caps approved direct value-access grants and must be at least 30 seconds so MCP request validation and config load-time validation fail coherently.
 
 Provider values are labels used to match traffic-profile routes to proxy targets. Each `proxy.targets.upstream` must be an absolute `http://` or `https://` origin URL with a host, no embedded userinfo credentials, and no path, query string, or fragment; optional ports must be valid numeric TCP ports, and IPv6 literals must use bracket syntax such as `https://[::1]:8443`. DAM rejects relative values, unsupported schemes, hostless URLs, userinfo credentials, path/query/fragment components, malformed IPv6 authorities, and invalid ports before the proxy starts so configured forwarding remains pinned to an explicit upstream origin. The local proxy can accept multiple configured targets; `dam-router` selects the default target for direct app-layer requests and selects a specific target only when `dam-proxy` passes in a matched traffic-profile route. It no longer infers providers from request paths or provider headers. Caller-auth headers and optional target-key injection are target/profile data. Settings-created generic website profiles are not wired in the current app.
 
@@ -144,6 +148,8 @@ export DAM_CONSENT_ENABLED=true
 export DAM_CONSENT_PATH=/var/lib/dam/consent.db
 export DAM_CONSENT_DEFAULT_TTL_SECONDS=86400
 export DAM_CONSENT_MCP_WRITE_ENABLED=true
+export DAM_CONSENT_PENDING_TIMEOUT_SECONDS=60
+export DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS=86400
 export DAM_POLICY_DEFAULT_ACTION=tokenize
 export DAM_POLICY_DEDUPLICATE_REPLACEMENTS=true
 export DAM_POLICY_SSN_ACTION=redact
@@ -181,6 +187,8 @@ DAM_CONSENT_PATH
 DAM_CONSENT_SQLITE_PATH
 DAM_CONSENT_DEFAULT_TTL_SECONDS
 DAM_CONSENT_MCP_WRITE_ENABLED
+DAM_CONSENT_PENDING_TIMEOUT_SECONDS
+DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS
 ```
 
 Supported vault env keys:

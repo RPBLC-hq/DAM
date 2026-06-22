@@ -1,5 +1,5 @@
 use super::*;
-use dam_core::{VaultRecord, VaultWriter};
+use dam_core::{Reference, SensitiveType, VaultRecord, VaultWriter};
 
 #[test]
 fn grant_and_match_active_value() {
