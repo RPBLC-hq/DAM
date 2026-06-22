@@ -337,3 +337,102 @@ fn direct_access_request_persists_and_expires_after_restart() {
     assert_eq!(resolved.request.status, DirectAccessStatus::Expired);
     assert_eq!(resolved.outcome_reason.as_deref(), Some("grant_expired"));
 }
+
+#[test]
+fn direct_access_approval_does_not_overwrite_terminal_state_across_store_instances() {
+    let dir = tempfile::tempdir().unwrap();
+    let consent_path = dir.path().join("consent.db");
+    let vault_path = dir.path().join("vault.db");
+    let vault = dam_vault::Vault::open(&vault_path).unwrap();
+    let reference = Reference::generate(SensitiveType::Email);
+    vault
+        .write(&VaultRecord {
+            reference: reference.clone(),
+            kind: SensitiveType::Email,
+            value: "alice@example.test".to_string(),
+        })
+        .unwrap();
+
+    let primary = ConsentStore::open(&consent_path).unwrap();
+    let request = primary
+        .create_direct_access_request(
+            &CreateDirectAccessRequest {
+                vault_key: reference.key(),
+                actor_id: "actor-1".to_string(),
+                requesting_actor: "Codex".to_string(),
+                purpose: "fill local email field".to_string(),
+                reason: None,
+                requested_duration_seconds: 45,
+                pending_timeout_seconds: 60,
+                correlation_id: None,
+            },
+            &vault,
+        )
+        .unwrap();
+
+    let competing = ConsentStore::open(&consent_path).unwrap();
+    let stale_pending = primary
+        .direct_access_request(&request.request_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(stale_pending.status, DirectAccessStatus::Pending);
+
+    let revoked = competing
+        .revoke_direct_access_request(&request.request_id, Some("request_revoked".to_string()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(revoked.status, DirectAccessStatus::Revoked);
+
+    let after_approve = primary
+        .approve_direct_access_request(&request.request_id, 45, Some("approved".to_string()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(after_approve.status, DirectAccessStatus::Revoked);
+    assert_eq!(
+        after_approve.decision_reason.as_deref(),
+        Some("request_revoked")
+    );
+    assert!(after_approve.grant_id.is_none());
+    assert!(after_approve.grant_expires_at.is_none());
+}
+
+#[test]
+fn direct_access_approval_is_capped_to_requested_duration() {
+    let vault = dam_vault::Vault::open_in_memory().unwrap();
+    let store = ConsentStore::open_in_memory().unwrap();
+    let reference = Reference::generate(SensitiveType::Email);
+    vault
+        .write(&VaultRecord {
+            reference: reference.clone(),
+            kind: SensitiveType::Email,
+            value: "alice@example.test".to_string(),
+        })
+        .unwrap();
+
+    let request = store
+        .create_direct_access_request(
+            &CreateDirectAccessRequest {
+                vault_key: reference.key(),
+                actor_id: "actor-1".to_string(),
+                requesting_actor: "Codex".to_string(),
+                purpose: "fill local email field".to_string(),
+                reason: None,
+                requested_duration_seconds: 45,
+                pending_timeout_seconds: 60,
+                correlation_id: None,
+            },
+            &vault,
+        )
+        .unwrap();
+
+    let approved = store
+        .approve_direct_access_request(&request.request_id, 120, Some("approved".to_string()))
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(approved.status, DirectAccessStatus::Approved);
+    assert_eq!(
+        approved.grant_expires_at.unwrap() - approved.decided_at.unwrap(),
+        45
+    );
+}

@@ -161,6 +161,7 @@ pub(crate) fn approve_request(
         return Ok(Some(current));
     }
     let grant_id = generate_grant_id();
+    let bounded_duration_seconds = grant_duration_seconds.min(current.requested_duration_seconds);
     conn.execute(
         "
         UPDATE direct_access_requests
@@ -170,6 +171,7 @@ pub(crate) fn approve_request(
             decided_at = ?5,
             grant_expires_at = ?6
         WHERE request_id = ?1
+          AND status = ?7
         ",
         params![
             current.request_id,
@@ -177,9 +179,13 @@ pub(crate) fn approve_request(
             DirectAccessStatus::Approved.tag(),
             decision_reason,
             now,
-            now + grant_duration_seconds as i64,
+            now + bounded_duration_seconds as i64,
+            DirectAccessStatus::Pending.tag(),
         ],
     )?;
+    if conn.changes() == 0 {
+        return query_request(conn, request_id);
+    }
     query_request(conn, request_id)
 }
 
