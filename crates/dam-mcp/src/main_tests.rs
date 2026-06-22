@@ -131,6 +131,7 @@ fn direct_access_request_status_and_resolve_flow() {
     let request: Value = serde_json::from_str(&request_json).unwrap();
     let request_id = request["request_id"].as_str().unwrap().to_string();
     assert_eq!(request["status"], "pending");
+    assert_eq!(request["requesting_actor"], Value::Null);
 
     let status_json = call_tool_with_actor(
         &config,
@@ -141,6 +142,14 @@ fn direct_access_request_status_and_resolve_flow() {
     .unwrap();
     let status: Value = serde_json::from_str(&status_json).unwrap();
     assert_eq!(status["status"], "pending");
+    assert_eq!(status["requesting_actor"], Value::Null);
+
+    let list_json =
+        call_tool_with_actor(&config, "dam_consent_list", &json!({}), Some(actor.clone())).unwrap();
+    let list: Value = serde_json::from_str(&list_json).unwrap();
+    let listed_request = &list["direct_access_requests"][0];
+    assert_eq!(listed_request["request_id"], request_id);
+    assert_eq!(listed_request["requesting_actor"], Value::Null);
 
     let store = dam_consent::ConsentStore::open(&consent_path).unwrap();
     store
@@ -158,6 +167,7 @@ fn direct_access_request_status_and_resolve_flow() {
     let resolved: Value = serde_json::from_str(&resolve_json).unwrap();
     assert_eq!(resolved["value"], "alice@example.test");
     assert_eq!(resolved["request"]["status"], "consumed");
+    assert_eq!(resolved["request"]["requesting_actor"], Value::Null);
 
     let denied_json = call_tool_with_actor(
         &config,

@@ -90,7 +90,7 @@ Actor binding comes from `DAM_MCP_ACTOR_LABEL` and/or `DAM_MCP_ACTOR_ID`:
 - if only `DAM_MCP_ACTOR_ID` is set, DAM accepts it and uses that same value as the display label;
 - if only `DAM_MCP_ACTOR_LABEL` is set, DAM derives a stable local hashed actor ID from the trimmed label.
 
-`dam_consent_request_status` returns the current non-sensitive state for a `request_id` or `grant_id`.
+`dam_consent_request_status` returns the current non-sensitive state for a `request_id` or `grant_id`. MCP status/list/resolve metadata intentionally omit actor binding material (`requesting_actor`, derived actor IDs, fingerprints) so one local MCP client cannot learn enough from another client's pending request to impersonate and consume a grant.
 
 `dam_resolve_if_consented` returns a raw value only when all of these are true:
 
