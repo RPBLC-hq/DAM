@@ -345,12 +345,21 @@ pub fn setup_plan(
         // deterministic.
         launch_at_login_setup_step(&state_dir, options.network_mode),
     ];
-    steps.extend(routing_setup_steps(
+    let routing_steps = routing_setup_steps(
         options.network_mode,
         &state_dir,
         options.config_path.as_ref(),
         has_active_routes,
-    ));
+    );
+    let delayed_routing_steps = if options.network_mode == dam_net::CaptureMode::Tun {
+        let (routing_prerequisites, delayed_steps) =
+            split_tun_capture_activation_steps(routing_steps);
+        steps.extend(routing_prerequisites);
+        delayed_steps
+    } else {
+        steps.extend(routing_steps);
+        Vec::new()
+    };
     steps.push(local_ca_setup_step(
         options.trust_mode,
         &state_dir,
@@ -361,22 +370,15 @@ pub fn setup_plan(
         options.trust_mode,
         &state_dir,
     ));
+    steps.extend(delayed_routing_steps);
 
-    let state = if steps
-        .iter()
-        .any(|step| step.status == SetupStepStatus::Blocked)
-    {
-        SetupPlanState::Blocked
-    } else if steps
-        .iter()
-        .any(|step| step.status == SetupStepStatus::Needed)
-    {
-        SetupPlanState::NeedsAction
-    } else {
-        SetupPlanState::Ready
-    };
-    let message = setup_plan_message(state, &steps);
     let next_action = setup_plan_next_action(&steps).cloned();
+    let state = match next_action.as_ref().map(|step| step.status) {
+        Some(SetupStepStatus::Blocked) => SetupPlanState::Blocked,
+        Some(SetupStepStatus::Needed) => SetupPlanState::NeedsAction,
+        Some(SetupStepStatus::Done | SetupStepStatus::Skipped) | None => SetupPlanState::Ready,
+    };
+    let message = setup_plan_message(state, next_action.as_ref());
 
     Ok(SetupPlan {
         state,
@@ -390,6 +392,22 @@ pub fn setup_plan(
         next_action,
         steps,
     })
+}
+
+fn split_tun_capture_activation_steps(steps: Vec<SetupStep>) -> (Vec<SetupStep>, Vec<SetupStep>) {
+    let mut prerequisites = Vec::new();
+    let mut activation = Vec::new();
+    for step in steps {
+        if matches!(
+            step.kind,
+            SetupStepKind::NetworkExtensionEnable | SetupStepKind::NetworkExtensionStart
+        ) {
+            activation.push(step);
+        } else {
+            prerequisites.push(step);
+        }
+    }
+    (prerequisites, activation)
 }
 
 pub fn setup_rescue(options: &SetupRescueOptions) -> Result<SetupRescue, String> {
@@ -1338,7 +1356,11 @@ fn daemon_setup_step(
                     "daemon is already running with network mode {} and trust mode {}; disconnect before changing setup",
                     state.network_mode, state.trust.mode
                 ),
-                command: Some(vec!["dam".to_string(), "disconnect".to_string()]),
+                command: Some(vec![
+                    "dam".to_string(),
+                    "disconnect".to_string(),
+                    "--stop".to_string(),
+                ]),
                 requires_confirmation: true,
                 changes_system: false,
             };
@@ -1386,31 +1408,25 @@ fn daemon_setup_step(
     }
 }
 
-fn setup_plan_message(state: SetupPlanState, steps: &[SetupStep]) -> String {
+fn setup_plan_message(state: SetupPlanState, next_action: Option<&SetupStep>) -> String {
     match state {
         SetupPlanState::Ready => "local AI protection is ready".to_string(),
-        SetupPlanState::Blocked => steps
-            .iter()
-            .find(|step| step.status == SetupStepStatus::Blocked)
+        SetupPlanState::Blocked => next_action
             .map(|step| format!("setup is blocked: {}", step.message))
             .unwrap_or_else(|| "setup is blocked".to_string()),
-        SetupPlanState::NeedsAction => steps
-            .iter()
-            .find(|step| step.status == SetupStepStatus::Needed)
+        SetupPlanState::NeedsAction => next_action
             .map(|step| format!("next setup action: {}", step.message))
             .unwrap_or_else(|| "setup needs action".to_string()),
     }
 }
 
 fn setup_plan_next_action(steps: &[SetupStep]) -> Option<&SetupStep> {
-    steps
-        .iter()
-        .find(|step| step.status == SetupStepStatus::Blocked)
-        .or_else(|| {
-            steps
-                .iter()
-                .find(|step| step.status == SetupStepStatus::Needed)
-        })
+    steps.iter().find(|step| {
+        matches!(
+            step.status,
+            SetupStepStatus::Needed | SetupStepStatus::Blocked
+        )
+    })
 }
 
 fn add_setup_plan_component(

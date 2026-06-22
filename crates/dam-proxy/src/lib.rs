@@ -487,7 +487,8 @@ async fn handle_raw_connect_request(
         return Ok(());
     }
 
-    let readiness = transparent_interception_readiness(&interception, traffic_route);
+    let readiness =
+        transparent_interception_readiness_for_captured_flow(&interception, traffic_route);
     if readiness.readiness != dam_intercept::TlsInterceptionReadiness::Ready {
         record_proxy_event(
             &state,
@@ -1302,7 +1303,10 @@ async fn handle_intercepted_tls_connection(
     upgraded: Upgraded,
     acceptor: TlsAcceptor,
 ) -> Result<(), String> {
-    handle_intercepted_tls_io(state, operation_id, TokioIo::new(upgraded), acceptor, true).await
+    // Hyper has already sent the CONNECT 200 response before handing us
+    // the upgraded stream. The raw transparent listener still passes
+    // `true` so it can acknowledge its own synthesized CONNECT preface.
+    handle_intercepted_tls_io(state, operation_id, TokioIo::new(upgraded), acceptor, false).await
 }
 
 async fn handle_intercepted_tls_io<T>(
@@ -2930,12 +2934,31 @@ fn transparent_interception_readiness(
     interception: &TransparentInterceptionConfig,
     traffic_route: dam_net::TrafficRoute,
 ) -> dam_intercept::RouteTlsInterceptionReadiness {
+    transparent_interception_readiness_with_capture_state(interception, traffic_route, false)
+}
+
+fn transparent_interception_readiness_for_captured_flow(
+    interception: &TransparentInterceptionConfig,
+    traffic_route: dam_net::TrafficRoute,
+) -> dam_intercept::RouteTlsInterceptionReadiness {
+    transparent_interception_readiness_with_capture_state(interception, traffic_route, true)
+}
+
+fn transparent_interception_readiness_with_capture_state(
+    interception: &TransparentInterceptionConfig,
+    traffic_route: dam_net::TrafficRoute,
+    captured_flow: bool,
+) -> dam_intercept::RouteTlsInterceptionReadiness {
+    let system_proxy_active = interception.system_proxy_active
+        || (captured_flow && interception.network_mode == dam_net::CaptureMode::SystemProxy);
+    let tun_active = interception.tun_active
+        || (captured_flow && interception.network_mode == dam_net::CaptureMode::Tun);
     let routing = dam_net::transparent_route_capture_readiness(
         traffic_route.clone(),
         dam_net::TrafficProtocol::Https,
         interception.network_mode,
-        interception.system_proxy_active,
-        interception.tun_active,
+        system_proxy_active,
+        tun_active,
     );
     let trust_report = dam_trust::readiness_for_route(
         &dam_net::decide_transparent_route_with_routes(

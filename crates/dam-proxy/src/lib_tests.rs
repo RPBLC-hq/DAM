@@ -1297,6 +1297,89 @@ async fn transparent_connect_requests_fail_closed_without_tls_runtime() {
 }
 
 #[tokio::test]
+async fn explicit_proxy_connect_tls_starts_tls_immediately_after_hyper_upgrade() {
+    use tokio::io::duplex;
+    use tokio_rustls::TlsConnector;
+    use tokio_rustls::rustls::{
+        ClientConfig, RootCertStore,
+        pki_types::{CertificateDer, ServerName},
+    };
+
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let mut config = proxy_config(upstream);
+    config.proxy.targets[0].name = "openai".to_string();
+    let vault_path = config.vault.sqlite_path.clone();
+
+    let dir = tempfile::tempdir().unwrap();
+    let artifact = dam_trust::generate_local_ca_artifact_at(dir.path(), 1).unwrap();
+    let mut record = artifact.record.clone();
+    record.installed_at_unix = Some(2);
+    let trust = dam_trust::TrustState {
+        mode: dam_trust::TrustMode::LocalCa,
+        local_ca: Some(record),
+        ..dam_trust::TrustState::default()
+    };
+    let interception = TransparentInterceptionConfig {
+        state_dir: dir.path().to_path_buf(),
+        network_mode: dam_net::CaptureMode::ExplicitProxy,
+        system_proxy_active: false,
+        tun_active: false,
+        routes: dam_net::default_traffic_routes(),
+        trust,
+        user_consented: true,
+        protection_control_path: None,
+    };
+    let state = build_state(config, Some(interception.clone())).unwrap();
+    let acceptor = tls_acceptor_for_host(&state, &interception, "api.openai.com").unwrap();
+    let (server_io, client_io) = duplex(64 * 1024);
+    let state_for_server = state.clone();
+    let server = tokio::spawn(async move {
+        handle_intercepted_tls_io(
+            state_for_server,
+            "explicit-proxy-upgrade-test",
+            server_io,
+            acceptor,
+            false,
+        )
+        .await
+    });
+
+    let mut roots = RootCertStore::empty();
+    let ca_der = dam_trust::issue_local_ca_leaf_certificate(dir.path(), "api.openai.com")
+        .unwrap()
+        .ca_certificate_der;
+    roots.add(CertificateDer::from(ca_der)).unwrap();
+    let client_config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(client_config));
+    let server_name = ServerName::try_from("api.openai.com".to_string()).unwrap();
+    let mut tls = connector.connect(server_name, client_io).await.unwrap();
+
+    let body = r#"{"input":"email explicit-proxy@example.com"}"#;
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: api.openai.com\r\nAuthorization: Bearer local\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    tokio::io::AsyncWriteExt::write_all(&mut tls, request.as_bytes())
+        .await
+        .unwrap();
+    let response = read_intercepted_test_response(&mut tls).await;
+
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert!(response.contains("explicit-proxy@example.com"));
+    assert!(!response.contains("[email:"));
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains("explicit-proxy@example.com"));
+    assert!(upstream_body.contains("[email:"));
+    let vault = dam_vault::Vault::open(vault_path).unwrap();
+    assert_eq!(vault.count().unwrap(), 1);
+    assert!(server.await.unwrap().is_ok());
+}
+
+#[tokio::test]
 async fn transparent_connect_passes_unknown_hosts_through_without_inspection() {
     let seen = Arc::new(Mutex::new(Vec::<u8>::new()));
     let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2159,6 +2242,89 @@ async fn transparent_connect_tls_http1_requests_are_protected() {
     let vault = dam_vault::Vault::open(vault_path).unwrap();
     assert_eq!(vault.count().unwrap(), 1);
     assert_eq!(vault.wallet_count().unwrap(), 0);
+    let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn transparent_connect_tun_captured_flow_ignores_stale_startup_routing_readiness() {
+    use tokio_rustls::TlsConnector;
+    use tokio_rustls::rustls::{
+        ClientConfig, RootCertStore,
+        pki_types::{CertificateDer, ServerName},
+    };
+
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_echo_upstream(upstream_seen.clone()).await;
+    let mut config = proxy_config(upstream);
+    config.proxy.targets[0].name = "openai".to_string();
+
+    let dir = tempfile::tempdir().unwrap();
+    let artifact = dam_trust::generate_local_ca_artifact_at(dir.path(), 1).unwrap();
+    let mut record = artifact.record.clone();
+    record.installed_at_unix = Some(2);
+    let trust = dam_trust::TrustState {
+        mode: dam_trust::TrustMode::LocalCa,
+        local_ca: Some(record),
+        ..dam_trust::TrustState::default()
+    };
+    let interception = TransparentInterceptionConfig {
+        state_dir: dir.path().to_path_buf(),
+        network_mode: dam_net::CaptureMode::Tun,
+        system_proxy_active: false,
+        tun_active: false,
+        routes: dam_net::default_traffic_routes(),
+        trust,
+        user_consented: true,
+        protection_control_path: None,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        serve_transparent_with_shutdown(listener, config, interception, async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+        .unwrap();
+    });
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    tokio::io::AsyncWriteExt::write_all(
+        &mut stream,
+        b"CONNECT api.openai.com:443 HTTP/1.1\r\nHost: api.openai.com:443\r\n\r\n",
+    )
+    .await
+    .unwrap();
+    let connect_response = read_until_headers(&mut stream).await;
+    assert!(String::from_utf8_lossy(&connect_response).starts_with("HTTP/1.1 200"));
+
+    let mut roots = RootCertStore::empty();
+    let ca_der = dam_trust::issue_local_ca_leaf_certificate(dir.path(), "api.openai.com")
+        .unwrap()
+        .ca_certificate_der;
+    roots.add(CertificateDer::from(ca_der)).unwrap();
+    let client_config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(client_config));
+    let server_name = ServerName::try_from("api.openai.com".to_string()).unwrap();
+    let mut tls = connector.connect(server_name, stream).await.unwrap();
+
+    let body = r#"{"input":"email stale-routing@example.com"}"#;
+    let request = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: api.openai.com\r\nAuthorization: Bearer local\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    tokio::io::AsyncWriteExt::write_all(&mut tls, request.as_bytes())
+        .await
+        .unwrap();
+    let response = read_intercepted_test_response(&mut tls).await;
+
+    assert!(response.starts_with("HTTP/1.1 200"));
+    assert!(response.contains("stale-routing@example.com"));
+    let upstream_body = upstream_seen.lock().unwrap().clone().unwrap();
+    assert!(!upstream_body.contains("stale-routing@example.com"));
+    assert!(upstream_body.contains("[email:"));
     let _ = shutdown_tx.send(());
 }
 

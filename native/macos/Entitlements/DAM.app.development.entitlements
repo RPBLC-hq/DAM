@@ -2,7 +2,7 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>application-identifier</key>
+	<key>com.apple.application-identifier</key>
 	<string>__TEAM_ID__.com.rpblc.dam</string>
 	<key>com.apple.developer.system-extension.install</key>
 	<true/>
@@ -16,12 +16,9 @@
 	<array>
 		<string>__APP_GROUP_ID__</string>
 	</array>
-	<key>get-task-allow</key>
-	<true/>
 	<key>keychain-access-groups</key>
 	<array>
 		<string>__TEAM_ID__.*</string>
-		<string>com.apple.token</string>
 	</array>
 </dict>
 </plist>

@@ -57,7 +57,7 @@ Failure behavior is a platform-neutral policy:
 - `fail_open` is the consumer default: when DAM is off, paused, unhealthy, unreachable, or not ready for a configured route, traffic passes outside DAM and surfaces as unprotected.
 - `fail_closed` is explicit user/admin or managed-install behavior: configured traffic is blocked when DAM cannot verify protection.
 
-Platform capture backends must apply the policy to new flows and to already-captured flows. Runtime app enablement narrows the active traffic profile; an explicit empty enabled-app selection means no configured flows should be mediated, so platform capture must pass traffic through instead of falling back to bundled defaults. On macOS Network Extension capture, the provider caches local proxy health/routing state for new-flow decisions and closes active configured flows when the local proxy stops reporting `protected`; the client then reconnects through the current policy instead of staying pinned through DAM while it is paused or unhealthy.
+Platform capture backends must apply the policy to new flows and to already-captured flows. Runtime app enablement narrows the active traffic profile; an explicit empty enabled-app selection means no configured flows should be mediated, so platform capture must pass traffic through instead of falling back to bundled defaults. On macOS Network Extension capture, the provider caches local proxy health/routing state for new-flow decisions. In `fail_open`, a health miss makes new configured flows pass through while already-proxied flows continue unless their sockets fail. In `fail_closed`, a health miss blocks new configured flows and closes active configured flows.
 
 ## Traffic Profiles
 

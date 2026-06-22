@@ -21,6 +21,9 @@ use log_rendering::{
 const DEFAULT_LISTEN: &str = "127.0.0.1:7828";
 const DEFAULT_LOG_PATH: &str = "log.db";
 const DAM_WEB_BIN_ENV: &str = "DAM_WEB_BIN";
+const DAM_HEADLESS_ENV: &str = "DAM_HEADLESS";
+const DAM_NO_TRAY_ENV: &str = "DAM_NO_TRAY";
+const CI_ENV: &str = "CI";
 const LOGIN_ITEM_MARKER_RELPATH: &str = "startup/login-item.txt";
 const LOGIN_ITEM_SKIP_MARKER_RELPATH: &str = "startup/login-item-skipped.txt";
 const LAUNCH_AGENT_PLIST_RELPATH: &str = "Library/LaunchAgents/com.rpblc.dam-tray.plist";
@@ -155,6 +158,7 @@ struct ConnectArgs {
     proxy: dam_daemon::ProxyOptions,
     apply_profile_ids: Vec<String>,
     json: bool,
+    start_tray: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -413,7 +417,7 @@ async fn run() -> Result<i32, String> {
 }
 
 async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
-    normalize_connect_state_paths(&mut args.proxy)?;
+    let state_dir = normalize_connect_state_paths(&mut args.proxy)?;
     let mut config = dam_daemon::proxy_config(&args.proxy)?;
     let mut applied_profiles = Vec::new();
     let mut restarted = false;
@@ -421,9 +425,10 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
     match dam_daemon::daemon_status().map_err(|error| error.to_string())? {
         dam_daemon::DaemonStatus::Connected(state) => {
             if !daemon_proxy_targets_match(&state, &config.proxy.targets)
-                || !daemon_transparent_routes_match(&state, &config)
+                || !daemon_transparent_routes_match(&state, &config, &state_dir)
                 || !daemon_runtime_paths_match(&state, &args.proxy)
             {
+                ensure_connect_capture_mode_exclusive(args.proxy.network_mode, &state_dir)?;
                 ensure_connect_transparent_prerequisites(&args.proxy, &config, None)?;
                 if !args.json {
                     println!("DAM profile traffic scope changed; restarting daemon");
@@ -439,6 +444,7 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
                 }
                 args.proxy = proxy_options_for_existing_daemon(&state, &args.proxy);
                 config = dam_daemon::proxy_config(&args.proxy)?;
+                ensure_connect_capture_mode_exclusive(args.proxy.network_mode, &state_dir)?;
                 ensure_connect_transparent_prerequisites(&args.proxy, &config, None)?;
                 if !args.json {
                     println!("DAM daemon executable changed; restarting daemon");
@@ -448,6 +454,7 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
             } else {
                 if connect_setup_change_requested(&state, &args.proxy) {
                     if !state.protection_enabled {
+                        ensure_connect_capture_mode_exclusive(state.network_mode, &state_dir)?;
                         dam_daemon::set_protection_enabled(true)
                             .map_err(|error| error.to_string())?;
                         for profile_id in &args.apply_profile_ids {
@@ -481,6 +488,7 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
                         state.network_mode, state.trust.mode
                     ));
                 }
+                ensure_connect_capture_mode_exclusive(state.network_mode, &state_dir)?;
                 dam_daemon::set_protection_enabled(true).map_err(|error| error.to_string())?;
                 for profile_id in &args.apply_profile_ids {
                     let outcome = apply_connect_profile(profile_id, &state.proxy_url)?;
@@ -512,6 +520,7 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
         dam_daemon::DaemonStatus::Disconnected => {}
     }
 
+    ensure_connect_capture_mode_exclusive(args.proxy.network_mode, &state_dir)?;
     ensure_connect_transparent_prerequisites(&args.proxy, &config, None)?;
 
     for profile_id in &args.apply_profile_ids {
@@ -557,6 +566,12 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
 }
 
 fn finish_connect(args: &ConnectArgs, view: ConnectResultView) -> Result<i32, String> {
+    if let Err(error) = start_tray_after_connect(args)
+        && !args.json
+    {
+        eprintln!("DAM tray launch skipped: {error}");
+    }
+
     if args.json {
         println!(
             "{}",
@@ -576,6 +591,83 @@ fn finish_connect(args: &ConnectArgs, view: ConnectResultView) -> Result<i32, St
     Ok(0)
 }
 
+fn start_tray_after_connect(args: &ConnectArgs) -> Result<(), String> {
+    if !connect_should_start_tray(args.start_tray) {
+        return Ok(());
+    }
+    start_local_tray()
+}
+
+fn connect_should_start_tray(start_tray: bool) -> bool {
+    start_tray
+        && !cfg!(test)
+        && !env_flag_enabled(DAM_HEADLESS_ENV)
+        && !env_flag_enabled(DAM_NO_TRAY_ENV)
+        && !env_flag_enabled(CI_ENV)
+}
+
+fn env_flag_enabled(name: &str) -> bool {
+    std::env::var(name)
+        .map(|value| {
+            let normalized = value.trim().to_ascii_lowercase();
+            !normalized.is_empty() && !matches!(normalized.as_str(), "0" | "false" | "no" | "off")
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn start_local_tray() -> Result<(), String> {
+    let exe = std::env::current_exe()
+        .map_err(|error| format!("failed to locate current DAM executable: {error}"))?;
+    if let Some(app) = macos_app_bundle_for_executable(&exe) {
+        StdCommand::new("open")
+            .arg(app)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| format!("failed to launch DAM.app: {error}"))?;
+        return Ok(());
+    }
+
+    let tray = exe.with_file_name(native_binary_name("dam-tray"));
+    if !tray.is_file() {
+        return Err(format!(
+            "could not find sibling tray binary at {}",
+            tray.display()
+        ));
+    }
+    StdCommand::new(&tray)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("failed to launch {}: {error}", tray.display()))?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn start_local_tray() -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_app_bundle_for_executable(exe: &Path) -> Option<PathBuf> {
+    let macos_dir = exe.parent()?;
+    if macos_dir.file_name()?.to_str()? != "MacOS" {
+        return None;
+    }
+    let contents_dir = macos_dir.parent()?;
+    if contents_dir.file_name()?.to_str()? != "Contents" {
+        return None;
+    }
+    let app_dir = contents_dir.parent()?;
+    if app_dir.extension()?.to_str()? != "app" {
+        return None;
+    }
+    Some(app_dir.to_path_buf())
+}
+
 fn connect_apply_view(outcome: &ConnectApplyOutcome) -> ConnectApplyView {
     ConnectApplyView {
         profile_id: outcome.result.profile_id.clone(),
@@ -585,7 +677,7 @@ fn connect_apply_view(outcome: &ConnectApplyOutcome) -> ConnectApplyView {
     }
 }
 
-fn normalize_connect_state_paths(proxy: &mut dam_daemon::ProxyOptions) -> Result<(), String> {
+fn normalize_connect_state_paths(proxy: &mut dam_daemon::ProxyOptions) -> Result<PathBuf, String> {
     let paths = dam_daemon::state_paths().map_err(|error| error.to_string())?;
     std::fs::create_dir_all(&paths.state_dir).map_err(|error| {
         format!(
@@ -605,7 +697,47 @@ fn normalize_connect_state_paths(proxy: &mut dam_daemon::ProxyOptions) -> Result
             .as_deref()
             .unwrap_or_else(|| Path::new(DEFAULT_CONSENT_PATH)),
     ));
+    Ok(paths.state_dir)
+}
+
+fn ensure_connect_capture_mode_exclusive(
+    network_mode: dam_net::CaptureMode,
+    state_dir: &Path,
+) -> Result<(), String> {
+    if network_mode == dam_net::CaptureMode::Tun {
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = dam_net_macos::network_extension_status(state_dir).map_err(|error| {
+            format!("failed to inspect stale Network Extension capture: {error}")
+        })?;
+        if !connect_should_remove_network_extension(&status) {
+            return Ok(());
+        }
+
+        dam_net_macos::remove_network_extension(state_dir).map_err(|error| {
+            format!(
+                "DAM cannot start in {network_mode} mode while macOS Network Extension capture is still installed: {error}\nRun `dam network remove-network-extension --yes` first."
+            )
+        })?;
+    }
+
+    let _ = state_dir;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn connect_should_remove_network_extension(
+    status: &dam_net_macos::MacosNetworkExtensionResult,
+) -> bool {
+    status.record.is_some()
+        || status
+            .manager_status
+            .as_ref()
+            .map(|manager| manager.configured || manager.enabled || manager.connected)
+            .unwrap_or(false)
 }
 
 fn state_runtime_path(state_dir: &Path, path: &Path) -> PathBuf {
@@ -792,6 +924,7 @@ fn daemon_proxy_targets_match(
 fn daemon_transparent_routes_match(
     state: &dam_daemon::DaemonState,
     config: &dam_config::DamConfig,
+    state_dir: &Path,
 ) -> bool {
     let current_routes = state
         .transparent_routes
@@ -805,6 +938,34 @@ fn daemon_transparent_routes_match(
             .collect::<BTreeSet<_>>();
 
     current_routes == requested_routes
+        && daemon_transparent_routing_readiness_matches_current(state, state_dir)
+}
+
+fn daemon_transparent_routing_readiness_matches_current(
+    state: &dam_daemon::DaemonState,
+    state_dir: &Path,
+) -> bool {
+    let system_proxy_active = state.network_mode == dam_net::CaptureMode::SystemProxy
+        && dam_net_macos::system_proxy_installed(state_dir);
+    let tun_active = state.network_mode == dam_net::CaptureMode::Tun
+        && dam_net_macos::network_extension_active(state_dir);
+    let expected = dam_net::transparent_capture_readiness_for_routes(
+        &state.transparent_routes,
+        state.network_mode,
+        system_proxy_active,
+        tun_active,
+    )
+    .into_iter()
+    .map(route_capture_readiness_identity)
+    .collect::<BTreeSet<_>>();
+    let current = state
+        .transparent_routing_readiness
+        .iter()
+        .cloned()
+        .map(route_capture_readiness_identity)
+        .collect::<BTreeSet<_>>();
+
+    current == expected
 }
 
 fn route_identity(route: &dam_net::TrafficRoute) -> (String, String, String, String, &'static str) {
@@ -815,6 +976,40 @@ fn route_identity(route: &dam_net::TrafficRoute) -> (String, String, String, Str
         route.upstream.clone(),
         route.adapter.tag(),
     )
+}
+
+fn route_capture_readiness_identity(
+    readiness: dam_net::TransparentRouteCaptureReadiness,
+) -> (
+    String,
+    String,
+    String,
+    String,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+) {
+    let route = readiness.route;
+    (
+        route.host,
+        route.provider,
+        route.target_name,
+        route.upstream,
+        route.adapter.tag(),
+        traffic_protocol_tag(readiness.protocol),
+        readiness.mode.tag(),
+        readiness.readiness.tag(),
+    )
+}
+
+fn traffic_protocol_tag(protocol: dam_net::TrafficProtocol) -> &'static str {
+    match protocol {
+        dam_net::TrafficProtocol::Http => "http",
+        dam_net::TrafficProtocol::Https => "https",
+        dam_net::TrafficProtocol::WebSocket => "web_socket",
+        dam_net::TrafficProtocol::Unknown => "unknown",
+    }
 }
 
 fn legacy_daemon_proxy_target_set(
@@ -1715,6 +1910,7 @@ fn parse_connect_command(
     }
 
     let (args, json) = split_json_flag(args, "connect")?;
+    let (args, start_tray) = split_connect_tray_flags(&args)?;
     let expanded = expand_connect_profile_args(&args, &connect_profiles)?;
     let explicit_upstream = last_option_value(&expanded.args, "--upstream");
     let mut proxy = dam_daemon::parse_proxy_options(expanded.args)?;
@@ -1743,8 +1939,29 @@ fn parse_connect_command(
             proxy,
             apply_profile_ids: expanded.apply_profile_ids,
             json,
+            start_tray,
         }),
     })
+}
+
+fn split_connect_tray_flags(args: &[String]) -> Result<(Vec<String>, bool), String> {
+    let mut filtered = Vec::new();
+    let mut start_tray = true;
+    for arg in args {
+        match arg.as_str() {
+            "--headless" | "--no-tray" => start_tray = false,
+            "--tray" => start_tray = true,
+            value
+                if value.starts_with("--headless=")
+                    || value.starts_with("--no-tray=")
+                    || value.starts_with("--tray=") =>
+            {
+                return Err(format!("{value} does not take a value"));
+            }
+            _ => filtered.push(arg.clone()),
+        }
+    }
+    Ok((filtered, start_tray))
 }
 
 fn parse_daemon_run_command(args: &[String]) -> Result<Cli, String> {
@@ -3811,8 +4028,6 @@ fn ensure_connect_transparent_prerequisites(
             dam_diagnostics::SetupStepKind::SystemProxy
                 | dam_diagnostics::SetupStepKind::NetworkExtension
                 | dam_diagnostics::SetupStepKind::NetworkExtensionConfiguration
-                | dam_diagnostics::SetupStepKind::NetworkExtensionEnable
-                | dam_diagnostics::SetupStepKind::NetworkExtensionStart
                 | dam_diagnostics::SetupStepKind::LinuxTransparentProxy
                 | dam_diagnostics::SetupStepKind::WindowsFilteringPlatform
                 | dam_diagnostics::SetupStepKind::LocalCa
@@ -4087,7 +4302,7 @@ fn usage() -> &'static str {
 
 fn usage_connect() -> String {
     format!(
-        "Usage: dam connect [--profile PROFILE] [--apply] [--json] [DAM_OPTIONS]\n\nStarts a background DAM proxy daemon for proxy/interception routing. Enabled app profiles select daemon targets automatically. --apply additionally ensures selected DAM profile files before connecting.\n\nDAM options:\n  --profile <id>          Use integration profile daemon defaults\n  --apply                 Ensure selected or enabled DAM profile files before connecting\n  --json                  Print a stable machine-readable connect result\n  --config <path>         Load DAM config file before daemon overrides\n  --listen <addr>         Local proxy listen address (default: 127.0.0.1:7828)\n  --network-mode <mode>   Control-plane network mode: explicit_proxy, system_proxy, or tun\n  --trust-mode <mode>     Control-plane trust mode: disabled or local_ca\n  --target-name <name>    Low-level proxy target name\n  --provider <provider>   Low-level target label\n  --upstream <url>        Low-level target upstream URL\n  --target <json>         Internal repeated target JSON\n  --db <path>             Vault SQLite path (default: vault.db)\n  --log <path>            Log SQLite path (default: log.db)\n  --consent-db <path>     Consent SQLite path (default: consent.db)\n  --no-log                Disable DAM log writes\n  --no-resolve-inbound    Leave DAM references unresolved in inbound responses\n  --resolve-inbound       Restore DAM references in inbound responses (default)\n\nKnown profiles: {}",
+        "Usage: dam connect [--profile PROFILE] [--apply] [--json] [--headless|--no-tray] [DAM_OPTIONS]\n\nStarts a background DAM proxy daemon for proxy/interception routing and launches the local tray unless running headless. Enabled app profiles select daemon targets automatically. --apply additionally ensures selected DAM profile files before connecting.\n\nDAM options:\n  --profile <id>          Use integration profile daemon defaults\n  --apply                 Ensure selected or enabled DAM profile files before connecting\n  --json                  Print a stable machine-readable connect result\n  --headless, --no-tray   Do not launch the DAM tray after connecting\n  --tray                  Launch the DAM tray after connecting (default)\n  --config <path>         Load DAM config file before daemon overrides\n  --listen <addr>         Local proxy listen address (default: 127.0.0.1:7828)\n  --network-mode <mode>   Control-plane network mode: explicit_proxy, system_proxy, or tun\n  --trust-mode <mode>     Control-plane trust mode: disabled or local_ca\n  --target-name <name>    Low-level proxy target name\n  --provider <provider>   Low-level target label\n  --upstream <url>        Low-level target upstream URL\n  --target <json>         Internal repeated target JSON\n  --db <path>             Vault SQLite path (default: vault.db)\n  --log <path>            Log SQLite path (default: log.db)\n  --consent-db <path>     Consent SQLite path (default: consent.db)\n  --no-log                Disable DAM log writes\n  --no-resolve-inbound    Leave DAM references unresolved in inbound responses\n  --resolve-inbound       Restore DAM references in inbound responses (default)\n\nKnown profiles: {}",
         dam_integrations::profile_ids().join(", ")
     )
 }

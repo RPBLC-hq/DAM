@@ -3,6 +3,117 @@ use super::*;
 const OPENAI_API_UPSTREAM: &str = "https://api.openai.com";
 const ANTHROPIC_UPSTREAM: &str = "https://api.anthropic.com";
 
+#[cfg(target_os = "macos")]
+static MACOS_NE_HELPER_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(target_os = "macos")]
+struct MacosNeHelperEnvGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    _temp: tempfile::TempDir,
+    previous_helper: Option<std::ffi::OsString>,
+    previous_bundle_id: Option<std::ffi::OsString>,
+}
+
+#[cfg(target_os = "macos")]
+impl MacosNeHelperEnvGuard {
+    fn without_helper() -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let lock = MACOS_NE_HELPER_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_helper = std::env::var_os("DAM_MACOS_NE_HELPER");
+        let previous_bundle_id = std::env::var_os("DAM_MACOS_NE_BUNDLE_ID");
+        unsafe {
+            std::env::remove_var("DAM_MACOS_NE_HELPER");
+            std::env::set_var(
+                "DAM_MACOS_NE_BUNDLE_ID",
+                "com.rpblc.dam.test.network-extension",
+            );
+        }
+
+        Self {
+            _lock: lock,
+            _temp: temp,
+            previous_helper,
+            previous_bundle_id,
+        }
+    }
+
+    fn stateful() -> Self {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let helper = temp.path().join("helper.sh");
+        let state = temp.path().join("manager-state");
+        std::fs::write(
+            &helper,
+            format!(
+                r#"#!/bin/sh
+state={state}
+case "$1" in
+  install)
+    printf 'installed\n' > "$state"
+    exit 0
+    ;;
+  remove)
+    rm -f "$state"
+    exit 0
+    ;;
+  status)
+    if [ -f "$state" ]; then
+      printf 'enabled com.rpblc.dam.test.network-extension connected\n'
+    else
+      printf 'not_installed com.rpblc.dam.test.network-extension\n'
+    fi
+    exit 0
+    ;;
+esac
+exit 0
+"#,
+                state = state.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let lock = MACOS_NE_HELPER_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous_helper = std::env::var_os("DAM_MACOS_NE_HELPER");
+        let previous_bundle_id = std::env::var_os("DAM_MACOS_NE_BUNDLE_ID");
+        unsafe {
+            std::env::set_var("DAM_MACOS_NE_HELPER", &helper);
+            std::env::set_var(
+                "DAM_MACOS_NE_BUNDLE_ID",
+                "com.rpblc.dam.test.network-extension",
+            );
+        }
+
+        Self {
+            _lock: lock,
+            _temp: temp,
+            previous_helper,
+            previous_bundle_id,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for MacosNeHelperEnvGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.previous_helper {
+                Some(value) => std::env::set_var("DAM_MACOS_NE_HELPER", value),
+                None => std::env::remove_var("DAM_MACOS_NE_HELPER"),
+            }
+            match &self.previous_bundle_id {
+                Some(value) => std::env::set_var("DAM_MACOS_NE_BUNDLE_ID", value),
+                None => std::env::remove_var("DAM_MACOS_NE_BUNDLE_ID"),
+            }
+        }
+    }
+}
+
 fn expected_profile_network_mode() -> dam_net::CaptureMode {
     #[cfg(target_os = "linux")]
     {
@@ -82,6 +193,36 @@ fn parses_connect_with_low_level_provider_label() {
     assert_eq!(args.proxy.network_mode, dam_net::CaptureMode::ExplicitProxy);
     assert_eq!(args.proxy.trust_mode, dam_trust::TrustMode::Disabled);
     assert!(args.json);
+    assert!(args.start_tray);
+}
+
+#[test]
+fn parses_connect_headless_suppresses_tray_launch() {
+    let cli = parse_cli([
+        "connect".to_string(),
+        "--headless".to_string(),
+        "--json".to_string(),
+    ])
+    .unwrap();
+
+    let CommandKind::Connect(args) = cli.command else {
+        panic!("expected connect");
+    };
+    assert!(args.json);
+    assert!(!args.start_tray);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_app_bundle_detection_uses_installed_app_parent() {
+    assert_eq!(
+        macos_app_bundle_for_executable(Path::new("/Applications/DAM.app/Contents/MacOS/dam")),
+        Some(PathBuf::from("/Applications/DAM.app"))
+    );
+    assert_eq!(
+        macos_app_bundle_for_executable(Path::new("/tmp/target/debug/dam")),
+        None
+    );
 }
 
 #[test]
@@ -334,6 +475,50 @@ fn daemon_runtime_paths_detect_split_state() {
     };
 
     assert!(!daemon_runtime_paths_match(&state, &proxy));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn daemon_transparent_routes_match_rejects_stale_tun_routing_readiness() {
+    let _helper = MacosNeHelperEnvGuard::stateful();
+    let state_dir = tempfile::tempdir().unwrap();
+    dam_net_macos::install_network_extension_for_hosts(
+        state_dir.path(),
+        &["api.openai.com".to_string()],
+    )
+    .unwrap();
+    let mut state = test_daemon_state(
+        dam_net::CaptureMode::Tun,
+        dam_trust::TrustMode::LocalCa,
+        true,
+    );
+    state.transparent_routes = dam_net::default_traffic_routes();
+    state.transparent_routing_readiness = dam_net::transparent_capture_readiness_for_routes(
+        &state.transparent_routes,
+        dam_net::CaptureMode::Tun,
+        false,
+        false,
+    );
+    let config = dam_config::DamConfig::default();
+
+    assert!(!daemon_transparent_routes_match(
+        &state,
+        &config,
+        state_dir.path()
+    ));
+
+    state.transparent_routing_readiness = dam_net::transparent_capture_readiness_for_routes(
+        &state.transparent_routes,
+        dam_net::CaptureMode::Tun,
+        false,
+        true,
+    );
+
+    assert!(daemon_transparent_routes_match(
+        &state,
+        &config,
+        state_dir.path()
+    ));
 }
 
 #[test]
@@ -686,6 +871,47 @@ fn connect_preflight_allows_default_explicit_proxy_setup() {
         .unwrap();
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn non_tun_connect_cleanup_removes_stale_network_extension_capture() {
+    let _helper = MacosNeHelperEnvGuard::stateful();
+    let dir = tempfile::tempdir().unwrap();
+    dam_net_macos::install_network_extension_for_hosts(
+        dir.path(),
+        &["chatgpt.com".to_string(), "chat.openai.com".to_string()],
+    )
+    .unwrap();
+    assert!(dam_net_macos::network_extension_active(dir.path()));
+
+    ensure_connect_capture_mode_exclusive(dam_net::CaptureMode::ExplicitProxy, dir.path()).unwrap();
+
+    let status = dam_net_macos::network_extension_status(dir.path()).unwrap();
+    assert!(status.record.is_none());
+    assert!(
+        status
+            .manager_status
+            .as_ref()
+            .is_some_and(|manager| !manager.configured && !manager.enabled && !manager.connected)
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn tun_connect_cleanup_keeps_network_extension_capture() {
+    let _helper = MacosNeHelperEnvGuard::stateful();
+    let dir = tempfile::tempdir().unwrap();
+    dam_net_macos::install_network_extension_for_hosts(
+        dir.path(),
+        &["chatgpt.com".to_string(), "chat.openai.com".to_string()],
+    )
+    .unwrap();
+
+    ensure_connect_capture_mode_exclusive(dam_net::CaptureMode::Tun, dir.path()).unwrap();
+
+    assert!(dam_net_macos::network_extension_installed(dir.path()));
+    assert!(dam_net_macos::network_extension_active(dir.path()));
+}
+
 #[test]
 fn connect_preflight_blocks_missing_system_proxy_setup() {
     let dir = tempfile::tempdir().unwrap();
@@ -775,6 +1001,37 @@ fn connect_preflight_blocks_missing_network_extension_configuration() {
 
     assert!(error.contains("configuration"));
     assert!(error.contains("dam network install-network-extension"));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn connect_preflight_allows_tun_daemon_before_network_extension_start() {
+    let _helper = MacosNeHelperEnvGuard::without_helper();
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+    let paths = dam_net_macos::MacosNetworkExtensionPaths::for_state_dir(&state_dir);
+    std::fs::create_dir_all(&paths.directory).unwrap();
+    std::fs::write(
+        &paths.state_path,
+        r#"{
+  "version": 1,
+  "bundle_identifier": "com.rpblc.dam.test.network-extension",
+  "team_identifier": null,
+  "protected_hosts": ["api.openai.com"],
+  "installed_at_unix": 1778800000,
+  "active": false,
+  "activation_method": "network_extension_enabled_needs_start",
+  "pending_reboot": false
+}"#,
+    )
+    .unwrap();
+    let options = dam_daemon::ProxyOptions {
+        network_mode: dam_net::CaptureMode::Tun,
+        ..dam_daemon::ProxyOptions::default()
+    };
+    let config = dam_daemon::proxy_config(&options).unwrap();
+
+    ensure_connect_transparent_prerequisites(&options, &config, Some(state_dir)).unwrap();
 }
 
 #[test]

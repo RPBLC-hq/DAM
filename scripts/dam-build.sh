@@ -600,10 +600,10 @@ cmd_agent_status() {
   if [[ -n "$AGENT_STATE_DIR" ]]; then
     state_args=(--state-dir "$AGENT_STATE_DIR")
   fi
-  status_try failures "$dam_bin" doctor --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
-  status_try failures "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
-  status_try failures "$dam_bin" setup next-action --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
-  status_try failures "$dam_bin" setup export-diagnostics --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
+  status_try failures "$dam_bin" doctor --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" ${state_args[@]+"${state_args[@]}"} --json
+  status_try failures "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" ${state_args[@]+"${state_args[@]}"} --json
+  status_try failures "$dam_bin" setup next-action --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" ${state_args[@]+"${state_args[@]}"} --json
+  status_try failures "$dam_bin" setup export-diagnostics --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" ${state_args[@]+"${state_args[@]}"} --json
   status_try failures "$dam_bin" status --json
 
   printf 'status_probe_failures: %s\n' "$failures"
@@ -653,9 +653,9 @@ cmd_agent_recovery_smoke() {
   if [[ -n "$AGENT_STATE_DIR" ]]; then
     state_args=(--state-dir "$AGENT_STATE_DIR")
   fi
-  run "$dam_bin" setup rescue --dry-run "${state_args[@]}" --json
-  run "$dam_bin" setup repair --dry-run --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
-  run "$dam_bin" setup export-diagnostics --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
+  run "$dam_bin" setup rescue --dry-run ${state_args[@]+"${state_args[@]}"} --json
+  run "$dam_bin" setup repair --dry-run --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" ${state_args[@]+"${state_args[@]}"} --json
+  run "$dam_bin" setup export-diagnostics --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" ${state_args[@]+"${state_args[@]}"} --json
 }
 
 cmd_agent_repair_smoke() {
@@ -673,9 +673,9 @@ cmd_agent_repair_smoke() {
   if [[ -n "$AGENT_STATE_DIR" ]]; then
     state_args=(--state-dir "$AGENT_STATE_DIR")
   fi
-  run "$dam_bin" setup rescue --yes "${state_args[@]}" --json
-  run "$dam_bin" setup repair --yes --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
-  run "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
+  run "$dam_bin" setup rescue --yes ${state_args[@]+"${state_args[@]}"} --json
+  run "$dam_bin" setup repair --yes --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" ${state_args[@]+"${state_args[@]}"} --json
+  run "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" ${state_args[@]+"${state_args[@]}"} --json
 }
 
 cmd_agent_install() {

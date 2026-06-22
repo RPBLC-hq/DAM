@@ -370,15 +370,15 @@ mod macos {
         wait_for_tcp(&addr, Duration::from_secs(8))?;
 
         // Auto-resume on launch when there's evidence the user has
-        // already set DAM up in a prior session. Without this,
-        // launch-at-login would bring the menu-bar app back after a
-        // reboot but leave the protection daemon down — the user would
-        // open the popover and find DAM "disconnected" again, even
-        // though they'd already done the setup work.
+        // already set DAM up in a prior session, but the daemon process
+        // itself is gone. Without this, launch-at-login would bring the
+        // menu-bar app back after a reboot but leave the protection daemon
+        // down — the user would open the popover and find DAM
+        // "disconnected" again, even though they'd already done the setup
+        // work.
         //
         // We trigger when:
-        //   - a daemon state file exists (Stale = pid gone after
-        //     reboot, Connected = somehow already up), OR
+        //   - a stale daemon state file exists (pid gone after reboot), OR
         //   - the macOS Network Extension record exists (active or
         //     pending_reboot — both mean the user got past the NE
         //     install step).
@@ -394,12 +394,11 @@ mod macos {
         // appropriate step current for the popover to show. All
         // failures are swallowed — the popover is still useful, and
         // the user can retry from the welcome checklist.
-        let should_auto_resume =
-            matches!(
-                dam_daemon::daemon_status(),
-                Ok(dam_daemon::DaemonStatus::Stale(_) | dam_daemon::DaemonStatus::Connected(_))
-            ) || dam_net_macos::network_extension_active(&data_paths.state_dir)
-                || dam_net_macos::network_extension_pending_reboot(&data_paths.state_dir);
+        let should_auto_resume = dam_daemon::daemon_status()
+            .map(|status| should_auto_resume_from_status(&status))
+            .unwrap_or(false)
+            || dam_net_macos::network_extension_active(&data_paths.state_dir)
+            || dam_net_macos::network_extension_pending_reboot(&data_paths.state_dir);
 
         if should_auto_resume {
             let _ = connect_dam(&dam_bin, &data_paths, cli.config_path.as_ref());
@@ -808,9 +807,36 @@ mod macos {
         data_paths: &DataPaths,
         config_path: Option<&PathBuf>,
     ) -> Result<ConnectOutcome, String> {
+        connect_dam_with_daemon_recovery(dam_bin, data_paths, config_path, true)
+    }
+
+    fn connect_dam_with_daemon_recovery(
+        dam_bin: &PathBuf,
+        data_paths: &DataPaths,
+        config_path: Option<&PathBuf>,
+        allow_daemon_recovery: bool,
+    ) -> Result<ConnectOutcome, String> {
         let setup_plan = tray_setup_plan(data_paths, config_path)?;
         if let Some(step) = selected_setup_step(&setup_plan) {
             if step.status == dam_diagnostics::SetupStepStatus::Blocked {
+                if allow_daemon_recovery
+                    && is_bundled()
+                    && step.kind == dam_diagnostics::SetupStepKind::Daemon
+                    && step.detail == dam_diagnostics::SetupStepDetail::Mismatch
+                {
+                    run_dam_command(
+                        dam_bin,
+                        data_paths,
+                        &stop_daemon_args(),
+                        "stop mismatched DAM daemon",
+                    )?;
+                    return connect_dam_with_daemon_recovery(
+                        dam_bin,
+                        data_paths,
+                        config_path,
+                        false,
+                    );
+                }
                 return Err(format!("DAM setup is blocked: {}", step.message));
             }
             return run_setup_step(dam_bin, data_paths, config_path, step.kind);
@@ -830,6 +856,10 @@ mod macos {
         setup_plan: &dam_diagnostics::SetupPlan,
     ) -> Option<&dam_diagnostics::SetupStep> {
         setup_plan.next_action.as_ref()
+    }
+
+    fn should_auto_resume_from_status(status: &dam_daemon::DaemonStatus) -> bool {
+        matches!(status, dam_daemon::DaemonStatus::Stale(_))
     }
 
     fn tray_setup_plan(
@@ -1175,7 +1205,7 @@ mod macos {
         config_path: Option<&PathBuf>,
         has_active_profile: bool,
     ) -> Vec<String> {
-        let mut args = vec!["connect".to_string()];
+        let mut args = vec!["connect".to_string(), "--headless".to_string()];
         if has_active_profile {
             args.push("--apply".to_string());
         }
@@ -1216,6 +1246,14 @@ mod macos {
             ]);
         }
         args
+    }
+
+    fn stop_daemon_args() -> Vec<String> {
+        vec![
+            "disconnect".to_string(),
+            "--stop".to_string(),
+            "--json".to_string(),
+        ]
     }
 
     fn enabled_profile_selected(dam_bin: &PathBuf, data_paths: &DataPaths) -> Result<bool, String> {

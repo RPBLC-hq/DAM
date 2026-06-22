@@ -1,6 +1,7 @@
 //! CTZN-facing activity feed and per-event evidence.
 
 use axum::extract::{Path, Query, State};
+use dam_core::Reference;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -79,6 +80,7 @@ pub async fn list(
 
     let actors = operation_actors(&entries);
     let profile_labels = profile_labels_by_target(&state);
+    let mut value_cache = HashMap::<String, Option<String>>::new();
     let mut summary = ActivitySummary::default();
     let mut events = Vec::new();
     for entry in &entries {
@@ -105,12 +107,12 @@ pub async fn list(
             .get(&ev.actor)
             .cloned()
             .unwrap_or_else(|| ev.actor.clone());
+        let value = activity_value_for_entry(&state, entry, &mut value_cache);
         if !q.is_empty()
             && !profile.to_lowercase().contains(&q)
             && !ev.kind.to_lowercase().contains(&q)
             && !decision_tag(ev.decision).contains(&q)
-            && !entry
-                .value
+            && !value
                 .as_deref()
                 .map(|value| value.to_lowercase().contains(&q))
                 .unwrap_or(false)
@@ -133,7 +135,7 @@ pub async fn list(
             day: ev.day,
             profile,
             kind: ev.kind,
-            value: entry.value.clone(),
+            value,
             reference: entry.reference.clone(),
             decision: ev.decision,
             purpose: ev.purpose,
@@ -214,6 +216,11 @@ pub async fn detail(
             label: "value".into(),
             value: value.clone(),
         });
+    } else if let Some(value) = value_for_reference(&state, entry.reference.as_deref()) {
+        items.push(EvidenceItem {
+            label: "value".into(),
+            value,
+        });
     }
     if let Some(reference) = &entry.reference {
         items.push(EvidenceItem {
@@ -257,6 +264,38 @@ fn operation_actors(entries: &[dam_log::LogEntry]) -> HashMap<String, String> {
             actor_from_message(&entry.message).map(|actor| (entry.operation_id.clone(), actor))
         })
         .collect()
+}
+
+fn activity_value_for_entry(
+    state: &AppState,
+    entry: &dam_log::LogEntry,
+    cache: &mut HashMap<String, Option<String>>,
+) -> Option<String> {
+    if let Some(value) = entry
+        .value
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        return Some(value.to_string());
+    }
+
+    let reference = entry.reference.as_deref()?.trim();
+    if reference.is_empty() {
+        return None;
+    }
+
+    if let Some(value) = cache.get(reference) {
+        return value.clone();
+    }
+
+    let value = value_for_reference(state, Some(reference));
+    cache.insert(reference.to_string(), value.clone());
+    value
+}
+
+fn value_for_reference(state: &AppState, reference: Option<&str>) -> Option<String> {
+    let reference = Reference::parse_key(reference?)?;
+    state.vault.get(&reference.key()).ok().flatten()
 }
 
 fn profile_labels_by_target(state: &AppState) -> HashMap<String, String> {

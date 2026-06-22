@@ -128,7 +128,7 @@ public final class DAMTransparentProxyProvider: NETransparentProxyProvider, @unc
         return true
     }
 
-    private enum FlowAction: Equatable {
+    enum FlowAction: Equatable {
         case handle
         case passThrough
         case block
@@ -166,7 +166,7 @@ public final class DAMTransparentProxyProvider: NETransparentProxyProvider, @unc
     private func enforceCurrentFlowAction() {
         let action = Self.flowAction(runtimeConfiguration)
         setCachedFlowAction(action)
-        guard action != .handle, !activeFlows.isEmpty else {
+        guard Self.shouldCancelActiveFlows(for: action), !activeFlows.isEmpty else {
             return
         }
         logger.notice("Closing \(self.activeFlows.count, privacy: .public) active DAM flows because protection is not ready")
@@ -177,8 +177,15 @@ public final class DAMTransparentProxyProvider: NETransparentProxyProvider, @unc
         }
     }
 
-    private static func flowAction(_ configuration: DAMProxyRuntimeConfiguration) -> FlowAction {
-        if localProxyIsProtected(configuration) {
+    static func flowAction(_ configuration: DAMProxyRuntimeConfiguration) -> FlowAction {
+        flowAction(proxyHealthState: proxyHealthState(configuration), configuration: configuration)
+    }
+
+    static func flowAction(
+        proxyHealthState: String?,
+        configuration: DAMProxyRuntimeConfiguration
+    ) -> FlowAction {
+        if proxyHealthState == "protected" {
             return .handle
         }
         switch configuration.routingFailurePolicy {
@@ -187,6 +194,10 @@ public final class DAMTransparentProxyProvider: NETransparentProxyProvider, @unc
         case .failClosed:
             return .block
         }
+    }
+
+    static func shouldCancelActiveFlows(for action: FlowAction) -> Bool {
+        action == .block
     }
 
     static func includedNetworkRules(for configuration: DAMProxyRuntimeConfiguration) -> [NENetworkRule] {
@@ -241,10 +252,6 @@ public final class DAMTransparentProxyProvider: NETransparentProxyProvider, @unc
             protocol: .TCP,
             direction: .outbound
         )
-    }
-
-    private static func localProxyIsProtected(_ configuration: DAMProxyRuntimeConfiguration) -> Bool {
-        proxyHealthState(configuration) == "protected"
     }
 
     private static func proxyHealthState(_ configuration: DAMProxyRuntimeConfiguration) -> String? {

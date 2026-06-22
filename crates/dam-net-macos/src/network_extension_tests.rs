@@ -253,7 +253,7 @@ fn recovery_gate_rolls_back_when_live_status_is_not_connected() {
 }
 
 #[test]
-fn status_preserves_recovery_gate_rolled_back_record() {
+fn status_requires_system_extension_before_recovery_gate_rolled_back_record() {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().unwrap();
@@ -286,12 +286,12 @@ fn status_preserves_recovery_gate_rolled_back_record() {
 
     assert_eq!(
         status.record.unwrap().activation_method,
-        "network_extension_recovery_gate_rolled_back"
+        "system_extension_needs_user_approval"
     );
 }
 
 #[test]
-fn status_preserves_empty_scope_record_when_manager_is_disabled() {
+fn status_requires_system_extension_before_empty_scope_record() {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().unwrap();
@@ -325,7 +325,7 @@ fn status_preserves_empty_scope_record_when_manager_is_disabled() {
 
     assert_eq!(
         record.activation_method,
-        "network_extension_empty_scope_no_capture"
+        "system_extension_needs_user_approval"
     );
     assert!(!record.active);
     assert!(record.protected_hosts.is_empty());
@@ -333,6 +333,47 @@ fn status_preserves_empty_scope_record_when_manager_is_disabled() {
     assert!(manager.configured);
     assert!(!manager.enabled);
     assert!(!manager.connected);
+}
+
+#[test]
+fn current_system_extension_preserves_inactive_manager_labels() {
+    let mut record = MacosNetworkExtensionStateRecord {
+        version: STATE_VERSION,
+        bundle_identifier: DEFAULT_BUNDLE_ID.to_string(),
+        team_identifier: None,
+        protected_hosts: Vec::new(),
+        installed_at_unix: 2_000,
+        active: false,
+        activation_method: "network_extension_empty_scope_no_capture".to_string(),
+        pending_reboot: false,
+    };
+    let disabled_status = MacosNetworkExtensionManagerStatus {
+        configured: true,
+        enabled: false,
+        connection_status: "disconnected".to_string(),
+        connected: false,
+        message: "macOS Network Extension live status: disabled disconnected".to_string(),
+    };
+
+    assert_eq!(
+        manager_status_activation_method_for_state(
+            Some(&record),
+            &disabled_status,
+            MacosSystemExtensionState::Enabled
+        ),
+        "network_extension_empty_scope_no_capture"
+    );
+
+    record.protected_hosts = vec!["api.openai.com".to_string()];
+    record.activation_method = "network_extension_recovery_gate_rolled_back".to_string();
+    assert_eq!(
+        manager_status_activation_method_for_state(
+            Some(&record),
+            &disabled_status,
+            MacosSystemExtensionState::Enabled
+        ),
+        "network_extension_recovery_gate_rolled_back"
+    );
 }
 
 #[test]
@@ -596,6 +637,44 @@ fn connected_manager_with_stale_system_extension_requires_activation() {
             MacosSystemExtensionState::Enabled
         ),
         "app_owned_system_extension_native_helper_config"
+    );
+}
+
+#[test]
+fn rolled_back_manager_with_stale_system_extension_requires_activation() {
+    let record = MacosNetworkExtensionStateRecord {
+        version: STATE_VERSION,
+        bundle_identifier: DEFAULT_BUNDLE_ID.to_string(),
+        team_identifier: None,
+        protected_hosts: vec!["api.openai.com".to_string()],
+        installed_at_unix: 2_000,
+        active: false,
+        activation_method: "network_extension_start_failed_rolled_back".to_string(),
+        pending_reboot: false,
+    };
+    let status = MacosNetworkExtensionManagerStatus {
+        configured: true,
+        enabled: false,
+        connection_status: "disconnected".to_string(),
+        connected: false,
+        message: "macOS Network Extension live status: disabled disconnected".to_string(),
+    };
+
+    assert_eq!(
+        manager_status_activation_method_for_state(
+            Some(&record),
+            &status,
+            MacosSystemExtensionState::Unknown
+        ),
+        "system_extension_needs_user_approval"
+    );
+    assert_eq!(
+        manager_status_activation_method_for_state(
+            Some(&record),
+            &status,
+            MacosSystemExtensionState::Enabled
+        ),
+        "network_extension_start_failed_rolled_back"
     );
 }
 

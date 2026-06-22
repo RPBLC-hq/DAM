@@ -148,6 +148,80 @@ async fn activity_uses_redaction_event_for_sealed_activity_without_policy_duplic
 }
 
 #[tokio::test]
+async fn activity_resolves_tokenized_reference_value_from_vault() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    let reference = Reference::generate(SensitiveType::Email);
+    vault
+        .put(&reference.key(), "tokenized@example.test")
+        .unwrap();
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::Redaction,
+            "replacement applied with tokenized reference",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_reference(reference.clone())
+        .with_action("tokenized"),
+    )
+    .unwrap();
+
+    let response = list(
+        State(test_state(vault, logs)),
+        Query(ActivityQuery {
+            since: Some(0),
+            q: Some("tokenized@example.test".to_string()),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.data.events.len(), 1);
+    let event = &response.data.events[0];
+    assert_eq!(event.kind, "email");
+    assert_eq!(event.value.as_deref(), Some("tokenized@example.test"));
+    assert_eq!(event.reference.as_deref(), Some(reference.key().as_str()));
+    assert!(matches!(event.decision, Decision::Sealed));
+}
+
+#[tokio::test]
+async fn activity_detail_resolves_tokenized_reference_value_from_vault() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    let reference = Reference::generate(SensitiveType::Email);
+    vault
+        .put(&reference.key(), "detail-token@example.test")
+        .unwrap();
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::Redaction,
+            "replacement applied with tokenized reference",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_reference(reference)
+        .with_action("tokenized"),
+    )
+    .unwrap();
+
+    let response = detail(State(test_state(vault, logs)), Path(1))
+        .await
+        .unwrap();
+
+    assert!(
+        response
+            .data
+            .items
+            .iter()
+            .any(|item| { item.label == "value" && item.value == "detail-token@example.test" })
+    );
+}
+
+#[tokio::test]
 async fn activity_shows_consent_outcome_without_wallet_lookup() {
     let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
     let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());

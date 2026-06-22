@@ -789,6 +789,14 @@ fn manager_status_activation_method_for_state(
     status: &MacosNetworkExtensionManagerStatus,
     system_extension_state: MacosSystemExtensionState,
 ) -> &'static str {
+    let extension_activation_method = system_extension_activation_method(
+        system_extension_state,
+        "app_owned_system_extension_native_helper_config",
+    );
+    if extension_activation_method != "app_owned_system_extension_native_helper_config" {
+        return extension_activation_method;
+    }
+
     if !status.connected
         && let Some(record) = record
     {

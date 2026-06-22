@@ -74,8 +74,34 @@ fn native_connect_args_include_state_paths_and_dev_modes() {
         "--consent-db",
         "/tmp/dam-state/consent.db"
     ));
+    assert!(args.contains(&"--headless".to_string()));
     assert!(arg_pair_exists(&args, "--network-mode", "explicit_proxy"));
     assert!(arg_pair_exists(&args, "--trust-mode", "disabled"));
+}
+
+#[test]
+fn native_stop_daemon_args_stop_instead_of_pause() {
+    assert_eq!(
+        stop_daemon_args(),
+        vec![
+            "disconnect".to_string(),
+            "--stop".to_string(),
+            "--json".to_string()
+        ]
+    );
+}
+
+#[test]
+fn tray_launch_auto_resume_only_for_stale_daemon_state() {
+    assert!(should_auto_resume_from_status(
+        &dam_daemon::DaemonStatus::Stale(test_daemon_state())
+    ));
+    assert!(!should_auto_resume_from_status(
+        &dam_daemon::DaemonStatus::Connected(test_daemon_state())
+    ));
+    assert!(!should_auto_resume_from_status(
+        &dam_daemon::DaemonStatus::Disconnected
+    ));
 }
 
 #[test]
@@ -207,4 +233,33 @@ fn network_extension_settings_urls_prefer_specific_extension_section() {
 fn arg_pair_exists(args: &[String], name: &str, value: &str) -> bool {
     args.windows(2)
         .any(|pair| pair[0] == name && pair[1] == value)
+}
+
+fn test_daemon_state() -> dam_daemon::DaemonState {
+    dam_daemon::DaemonState {
+        version: 6,
+        pid: 123,
+        executable_path: None,
+        executable_sha256: None,
+        listen: "127.0.0.1:7828".to_string(),
+        proxy_url: "http://127.0.0.1:7828".to_string(),
+        config_path: None,
+        vault_path: PathBuf::from("vault.db"),
+        log_path: Some(PathBuf::from("log.db")),
+        consent_path: Some(PathBuf::from("consent.db")),
+        resolve_inbound: true,
+        target_name: Some("openai".to_string()),
+        target_provider: Some("openai-compatible".to_string()),
+        upstream: Some("https://api.openai.com".to_string()),
+        proxy_targets: Vec::new(),
+        started_at_unix: 0,
+        network_mode: dam_net::CaptureMode::ExplicitProxy,
+        transparent_routes: Vec::new(),
+        transparent_routing_readiness: Vec::new(),
+        trust: dam_trust::TrustState::default(),
+        transparent_trust_readiness: Vec::new(),
+        transparent_interception_readiness: Vec::new(),
+        protection_enabled: true,
+        protection_started_at_unix: None,
+    }
 }

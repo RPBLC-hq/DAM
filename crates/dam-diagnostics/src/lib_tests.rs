@@ -357,6 +357,52 @@ fn setup_plan_reports_network_extension_setup_when_tun_requested() {
 
 #[cfg(target_os = "macos")]
 #[test]
+fn setup_plan_prioritizes_network_extension_before_daemon_mode_mismatch() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+    std::fs::create_dir_all(state_dir.join("startup")).unwrap();
+    std::fs::write(state_dir.join(LOGIN_ITEM_SKIP_MARKER_RELPATH), "skipped\n").unwrap();
+    let mut daemon_state = test_daemon_state(std::process::id());
+    daemon_state.protection_enabled = false;
+    daemon_state.trust.mode = dam_trust::TrustMode::LocalCa;
+    dam_daemon::write_state_to(&state_dir.join("daemon.json"), &daemon_state).unwrap();
+    let config = proxy_config("https://api.openai.com", "openai-compatible");
+
+    let plan = setup_plan(
+        &config,
+        &SetupPlanOptions {
+            state_dir: Some(state_dir),
+            network_mode: dam_net::CaptureMode::Tun,
+            trust_mode: dam_trust::TrustMode::LocalCa,
+            ..SetupPlanOptions::default()
+        },
+    )
+    .unwrap();
+
+    assert_eq!(plan.state, SetupPlanState::NeedsAction);
+    assert_eq!(
+        plan.next_action.as_ref().map(|step| step.kind),
+        Some(SetupStepKind::NetworkExtension)
+    );
+    let daemon_step = plan
+        .steps
+        .iter()
+        .find(|step| step.kind == SetupStepKind::Daemon)
+        .unwrap();
+    assert_eq!(daemon_step.status, SetupStepStatus::Blocked);
+    assert_eq!(daemon_step.detail, SetupStepDetail::Mismatch);
+    assert_eq!(
+        daemon_step.command,
+        Some(vec![
+            "dam".to_string(),
+            "disconnect".to_string(),
+            "--stop".to_string()
+        ])
+    );
+}
+
+#[cfg(target_os = "macos")]
+#[test]
 fn setup_plan_reports_network_extension_configuration_after_system_extension_ready() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
@@ -404,7 +450,7 @@ fn setup_plan_reports_network_extension_configuration_after_system_extension_rea
 
 #[cfg(target_os = "macos")]
 #[test]
-fn setup_plan_reports_rolled_back_network_extension_start() {
+fn setup_plan_starts_daemon_before_retrying_rolled_back_network_extension_start() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("state");
     std::fs::create_dir_all(state_dir.join("startup")).unwrap();
@@ -447,8 +493,19 @@ fn setup_plan_reports_rolled_back_network_extension_start() {
     assert!(step.message.contains("failed to start"));
     assert_eq!(
         plan.next_action.as_ref().map(|step| step.kind),
-        Some(SetupStepKind::NetworkExtensionEnable)
+        Some(SetupStepKind::Daemon)
     );
+    let daemon_index = plan
+        .steps
+        .iter()
+        .position(|step| step.kind == SetupStepKind::Daemon)
+        .unwrap();
+    let enable_index = plan
+        .steps
+        .iter()
+        .position(|step| step.kind == SetupStepKind::NetworkExtensionEnable)
+        .unwrap();
+    assert!(daemon_index < enable_index);
 }
 
 #[cfg(target_os = "macos")]
