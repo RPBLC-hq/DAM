@@ -63,6 +63,12 @@ DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS
 - Consent emits non-sensitive `consent` log events when passthrough matching allows a value; the direct value-access first slice does not add raw-value logging surfaces.
 - The SQLite store keeps `id`, `kind`, `value_fingerprint`, optional `vault_key`, TTL timestamps, source, and optional reason for passthrough grants, plus a separate direct-access request/grant table with non-sensitive request metadata.
 
+## Implementation notes
+
+- `crates/dam-consent/src/lib.rs` remains the public consent API surface.
+- Bounded direct-access schema setup, request/grant state transitions, timeout refresh, revoke, and resolve logic live in `crates/dam-consent/src/direct_access.rs`.
+- Direct-access regression coverage lives in `crates/dam-consent/src/direct_access_tests.rs`; broader passthrough-consent coverage remains in `lib_tests.rs`.
+
 ## Tests
 
 ```bash

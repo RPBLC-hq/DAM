@@ -102,3 +102,9 @@ Actor binding comes from `DAM_MCP_ACTOR_LABEL` and/or `DAM_MCP_ACTOR_ID`:
 Otherwise it returns request metadata plus a stable denial/expiry reason and no raw value.
 
 `dam_consent_revoke` now accepts passthrough `consent_id` values and direct-access `request_id`/`grant_id` values.
+
+## Implementation notes
+
+- `crates/dam-mcp/src/main.rs` stays focused on stdio framing, config loading, and top-level tool dispatch.
+- Bounded direct-access actor binding plus list/request/status/resolve/revoke helpers live in `crates/dam-mcp/src/direct_access.rs`.
+- Public MCP tool names and JSON payload shapes stay unchanged; this split is implementation-only.
