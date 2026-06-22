@@ -1,15 +1,12 @@
 import { Link } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
 import { BracketMark, ProtectionMark } from '@rpblc/design'
 
-import { api } from '@/lib/api/client'
+import { useConnectViewQuery } from '@/features/connect/query'
 import { useI18n } from '@/lib/i18n'
 import { connectNavLabelKey } from '@/features/connect/status-summary'
 import type { Surface } from '@/lib/surface'
-import type { ConnectView } from '@/features/connect/types'
 
 const RPBLC_HOME = 'https://rpblc.com'
-const CONNECT_QUERY_KEY = ['connect'] as const
 
 export function BrandStamp({ surface }: { surface: Surface }) {
   const { t } = useI18n()
@@ -48,10 +45,7 @@ export function BrandStamp({ surface }: { surface: Surface }) {
 
 export function BrandActions({ surface: _surface }: { surface: Surface }) {
   const { t } = useI18n()
-  const connect = useQuery({
-    queryKey: CONNECT_QUERY_KEY,
-    queryFn: ({ signal }) => api<ConnectView>('/connect', { signal }),
-  })
+  const connect = useConnectViewQuery()
 
   const pendingCount = connect.data?.pending_count ?? 0
   const isProtected = connect.data?.state === 'protected'

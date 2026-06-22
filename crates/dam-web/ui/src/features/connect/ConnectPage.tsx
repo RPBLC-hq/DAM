@@ -14,26 +14,19 @@ import {
 import { ApiError, api, apiPost } from '@/lib/api/client'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { resolveSurface } from '@/lib/surface'
+import { CONNECT_QUERY_KEY, useConnectViewQuery } from './query'
 import { errorMessageKey, stepHintKey, stepLabelKey } from './connect-copy'
 import { connectStatusMessageKey } from './status-summary'
 import type { ConnectView, PendingRequest, PendingRequestsView, SetupStep } from './types'
 
-const CONNECT_QUERY_KEY = ['connect'] as const
 const PENDING_REQUESTS_QUERY_KEY = ['pending-requests'] as const
-const CONNECT_STATS_REFETCH_INTERVAL_MS = 5_000
 
 export function ConnectPage() {
   const { locale, t } = useI18n()
   const queryClient = useQueryClient()
   const formatter = new Intl.NumberFormat(locale)
 
-  const connect = useQuery({
-    queryKey: CONNECT_QUERY_KEY,
-    queryFn: ({ signal }) => api<ConnectView>('/connect', { signal }),
-    // Counts include dam-log rows written by dam-proxy, which is outside
-    // dam-web's in-process event bus.
-    refetchInterval: CONNECT_STATS_REFETCH_INTERVAL_MS,
-  })
+  const connect = useConnectViewQuery()
 
   const action = useMutation({
     mutationFn: (stepId: string) => apiPost<ConnectView>('/connect/action', { step_id: stepId }),
