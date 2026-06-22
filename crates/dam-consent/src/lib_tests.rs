@@ -1,5 +1,18 @@
 use super::*;
-use dam_core::{VaultRecord, VaultWriter};
+use dam_core::{Reference, SensitiveType, VaultReadError, VaultReader, VaultRecord, VaultWriter};
+use std::{sync::Arc, thread, time::Duration};
+
+struct DelayedVaultReader {
+    inner: Arc<dam_vault::Vault>,
+    delay: Duration,
+}
+
+impl VaultReader for DelayedVaultReader {
+    fn read(&self, reference: &Reference) -> Result<Option<String>, VaultReadError> {
+        thread::sleep(self.delay);
+        self.inner.read(reference)
+    }
+}
 
 #[test]
 fn grant_and_match_active_value() {
@@ -430,7 +443,7 @@ fn direct_access_request_revoke_if_vault_value_changes_before_resolve() {
         )
         .unwrap();
     store
-        .approve_direct_access_request(&request.request_id, 60, None)
+        .approve_direct_access_request(&request.request_id, 60, Some("approved".to_string()))
         .unwrap()
         .unwrap();
     vault
@@ -451,7 +464,111 @@ fn direct_access_request_revoke_if_vault_value_changes_before_resolve() {
         resolved.outcome_reason.as_deref(),
         Some("grant_value_changed")
     );
+    assert_eq!(
+        resolved.request.decision_reason.as_deref(),
+        Some("grant_value_changed")
+    );
     assert_eq!(resolved.request.resolve_count, 0);
+}
+
+#[test]
+fn direct_access_request_expiry_overwrites_prior_approval_reason() {
+    let vault = dam_vault::Vault::open_in_memory().unwrap();
+    let store = ConsentStore::open_in_memory().unwrap();
+    let reference = Reference::generate(SensitiveType::Email);
+    vault
+        .write(&VaultRecord {
+            reference: reference.clone(),
+            kind: SensitiveType::Email,
+            value: "alice@example.test".to_string(),
+        })
+        .unwrap();
+
+    let request = store
+        .create_direct_access_request(
+            &CreateDirectAccessRequest {
+                vault_key: reference.key(),
+                actor_id: "actor-1".to_string(),
+                requesting_actor: "Codex".to_string(),
+                purpose: "fill local email field".to_string(),
+                reason: None,
+                requested_duration_seconds: 1,
+                pending_timeout_seconds: 60,
+                correlation_id: None,
+            },
+            &vault,
+        )
+        .unwrap();
+    store
+        .approve_direct_access_request(&request.request_id, 1, Some("approved".to_string()))
+        .unwrap()
+        .unwrap();
+
+    thread::sleep(Duration::from_secs(2));
+
+    let resolved = store
+        .resolve_direct_access_request(&request.request_id, "actor-1", &vault)
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.value, None);
+    assert_eq!(resolved.request.status, DirectAccessStatus::Expired);
+    assert_eq!(resolved.outcome_reason.as_deref(), Some("grant_expired"));
+    assert_eq!(
+        resolved.request.decision_reason.as_deref(),
+        Some("grant_expired")
+    );
+}
+
+#[test]
+fn direct_access_request_cannot_consume_after_grant_expires_during_vault_read() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let store = ConsentStore::open_in_memory().unwrap();
+    let reference = Reference::generate(SensitiveType::Email);
+    vault
+        .write(&VaultRecord {
+            reference: reference.clone(),
+            kind: SensitiveType::Email,
+            value: "alice@example.test".to_string(),
+        })
+        .unwrap();
+
+    let request = store
+        .create_direct_access_request(
+            &CreateDirectAccessRequest {
+                vault_key: reference.key(),
+                actor_id: "actor-1".to_string(),
+                requesting_actor: "Codex".to_string(),
+                purpose: "fill local email field".to_string(),
+                reason: None,
+                requested_duration_seconds: 1,
+                pending_timeout_seconds: 60,
+                correlation_id: None,
+            },
+            vault.as_ref(),
+        )
+        .unwrap();
+    store
+        .approve_direct_access_request(&request.request_id, 1, Some("approved".to_string()))
+        .unwrap()
+        .unwrap();
+
+    let delayed_vault = DelayedVaultReader {
+        inner: vault,
+        delay: Duration::from_secs(2),
+    };
+
+    let resolved = store
+        .resolve_direct_access_request(&request.request_id, "actor-1", &delayed_vault)
+        .unwrap()
+        .unwrap();
+    assert_eq!(resolved.value, None);
+    assert_eq!(resolved.request.status, DirectAccessStatus::Expired);
+    assert_eq!(resolved.request.resolve_count, 0);
+    assert_eq!(resolved.outcome_reason.as_deref(), Some("grant_expired"));
+    assert_eq!(
+        resolved.request.decision_reason.as_deref(),
+        Some("grant_expired")
+    );
 }
 
 #[test]

@@ -578,7 +578,7 @@ impl ConsentStore {
                 "
                 UPDATE direct_access_requests
                 SET status = ?2,
-                    decision_reason = COALESCE(decision_reason, ?3)
+                    decision_reason = ?3
                 WHERE request_id = ?1
                 ",
                 params![
@@ -596,6 +596,7 @@ impl ConsentStore {
             }));
         }
 
+        let now = now_unix_secs()?;
         let next_count = current.resolve_count + 1;
         let next_status = if next_count >= current.max_resolves {
             DirectAccessStatus::Consumed
@@ -619,6 +620,8 @@ impl ConsentStore {
               AND resolve_count = ?7
               AND max_resolves = ?8
               AND value_fingerprint = ?9
+              AND grant_expires_at IS NOT NULL
+              AND grant_expires_at > ?10
             ",
             params![
                 current.request_id,
@@ -630,9 +633,11 @@ impl ConsentStore {
                 current.resolve_count as i64,
                 current.max_resolves as i64,
                 current.value_fingerprint,
+                now,
             ],
         )?;
         if conn.changes() == 0 {
+            refresh_direct_access_timeouts(&conn, now)?;
             let request = query_direct_access_request(&conn, request_id)?
                 .expect("request exists after failed atomic resolve update");
             let outcome_reason = request
@@ -971,7 +976,7 @@ fn refresh_direct_access_timeouts(conn: &Connection, now: i64) -> ConsentResult<
         "
         UPDATE direct_access_requests
         SET status = ?2,
-            decision_reason = COALESCE(decision_reason, ?3),
+            decision_reason = ?3,
             decided_at = COALESCE(decided_at, ?1)
         WHERE status = ?4
           AND pending_expires_at <= ?1
@@ -987,7 +992,7 @@ fn refresh_direct_access_timeouts(conn: &Connection, now: i64) -> ConsentResult<
         "
         UPDATE direct_access_requests
         SET status = ?2,
-            decision_reason = COALESCE(decision_reason, ?3),
+            decision_reason = ?3,
             decided_at = COALESCE(decided_at, ?1)
         WHERE status = ?4
           AND grant_expires_at IS NOT NULL
