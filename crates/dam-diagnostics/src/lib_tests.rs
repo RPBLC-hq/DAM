@@ -861,6 +861,15 @@ async fn setup_diagnostics_export_redacts_supported_sensitive_values_from_proxy_
     .unwrap();
     let json = serde_json::to_string(&export).unwrap();
 
+    assert!(export.doctor.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "proxy_trace"
+            && diagnostic.message.contains("[email]")
+            && diagnostic.message.contains("[ssn]")
+            && diagnostic.message.contains("[api_key]")
+            && !diagnostic.message.contains("alice@example.com")
+            && !diagnostic.message.contains("123-45-6789")
+            && !diagnostic.message.contains(&api_key)
+    }));
     assert!(!json.contains("alice@example.com"));
     assert!(!json.contains("123-45-6789"));
     assert!(!json.contains(&api_key));
