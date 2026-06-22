@@ -17,8 +17,11 @@ AGENT_E2E_UPSTREAM="${DAM_AGENT_E2E_UPSTREAM:-http://127.0.0.1:8080}"
 AGENT_E2E_LISTEN="${DAM_AGENT_E2E_LISTEN:-127.0.0.1:7831}"
 AGENT_E2E_STARTUP_TIMEOUT="${DAM_AGENT_E2E_STARTUP_TIMEOUT:-30}"
 AGENT_E2E_HTTP_TIMEOUT="${DAM_AGENT_E2E_HTTP_TIMEOUT:-60}"
+AGENT_E2E_WEB_ADDR="${DAM_AGENT_E2E_WEB_ADDR:-}"
 AGENT_E2E_SMOKE_SCRIPT="${DAM_AGENT_E2E_SMOKE_SCRIPT:-$ROOT/scripts/rpblc_dam_local_llm_e2e_smoke.py}"
+AGENT_E2E_VERIFY_SCRIPT="${DAM_AGENT_E2E_VERIFY_SCRIPT:-$ROOT/scripts/dam_vps_dogfood_verify.py}"
 AGENT_E2E_BINARY="${DAM_AGENT_E2E_BINARY:-$ROOT/target/debug/dam-proxy}"
+AGENT_E2E_WEB_BINARY="${DAM_AGENT_E2E_WEB_BINARY:-$ROOT/target/debug/dam-web}"
 AGENT_E2E_BUILD="${DAM_AGENT_E2E_BUILD:-1}"
 AGENT_E2E_KEEP_TEMP="${DAM_AGENT_E2E_KEEP_TEMP:-0}"
 AGENT_CONFIRM_MUTATION="${DAM_AGENT_CONFIRM_MUTATION:-0}"
@@ -43,6 +46,8 @@ Commands:
                 Run the synthetic DAM detector benchmark harness
   agent-protection-smoke
                 Run local API-through-DAM protection smoke against local upstream
+  agent-dogfood-verify
+                Run proxy, Activity, and pending-consent VPS dogfooding verification
   agent-recovery-smoke
                 Run read-only installed rescue/repair/diagnostics recovery probes
   agent-repair-smoke
@@ -84,13 +89,17 @@ Environment:
   DAM_AGENT_STATE_DIR       Optional state directory for setup/doctor probes
   DAM_AGENT_E2E_UPSTREAM    Local OpenAI-compatible smoke upstream, currently $AGENT_E2E_UPSTREAM
   DAM_AGENT_E2E_LISTEN      Loopback listen address for smoke proxy, currently $AGENT_E2E_LISTEN
+  DAM_AGENT_E2E_WEB_ADDR    Loopback listen address for dogfood web proof, currently $AGENT_E2E_WEB_ADDR
   DAM_AGENT_E2E_STARTUP_TIMEOUT
                            Smoke proxy startup timeout, currently $AGENT_E2E_STARTUP_TIMEOUT
   DAM_AGENT_E2E_HTTP_TIMEOUT
                            Smoke request timeout, currently $AGENT_E2E_HTTP_TIMEOUT
   DAM_AGENT_E2E_SMOKE_SCRIPT
                            Smoke verifier script, currently $AGENT_E2E_SMOKE_SCRIPT
+  DAM_AGENT_E2E_VERIFY_SCRIPT
+                           VPS dogfood verifier script, currently $AGENT_E2E_VERIFY_SCRIPT
   DAM_AGENT_E2E_BINARY     dam-proxy binary path for smoke, currently $AGENT_E2E_BINARY
+  DAM_AGENT_E2E_WEB_BINARY dam-web binary path for dogfood verify, currently $AGENT_E2E_WEB_BINARY
   DAM_AGENT_E2E_BUILD      Set to 0 to reuse the binary without cargo build, currently $AGENT_E2E_BUILD
   DAM_AGENT_E2E_KEEP_TEMP  Set to 1 to keep smoke temp vault/log files, currently $AGENT_E2E_KEEP_TEMP
   DAM_AGENT_CONFIRM_MUTATION
@@ -103,6 +112,16 @@ run() {
   printf ' %q' "$@"
   printf '\n'
   "$@"
+}
+
+allocate_loopback_addr() {
+  python3 - <<'PY'
+import socket
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    host, port = sock.getsockname()
+print(f"{host}:{port}")
+PY
 }
 
 require_macos() {
@@ -428,6 +447,38 @@ cmd_agent_protection_smoke() {
     smoke_args+=(--keep-temp)
   fi
   run python3 "${smoke_args[@]}"
+}
+
+cmd_agent_dogfood_verify() {
+  if [[ ! -f "$AGENT_E2E_VERIFY_SCRIPT" ]]; then
+    echo "missing VPS dogfood verifier script: $AGENT_E2E_VERIFY_SCRIPT" >&2
+    exit 1
+  fi
+  local web_addr="$AGENT_E2E_WEB_ADDR"
+  if [[ -z "$web_addr" ]]; then
+    web_addr="$(allocate_loopback_addr)"
+  fi
+  local verify_args=(
+    "$AGENT_E2E_VERIFY_SCRIPT"
+    verify
+    --upstream "$AGENT_E2E_UPSTREAM"
+    --listen "$AGENT_E2E_LISTEN"
+    --web-addr "$web_addr"
+    --proxy-binary "$AGENT_E2E_BINARY"
+    --web-binary "$AGENT_E2E_WEB_BINARY"
+    --startup-timeout "$AGENT_E2E_STARTUP_TIMEOUT"
+    --http-timeout "$AGENT_E2E_HTTP_TIMEOUT"
+  )
+  if [[ -n "$AGENT_STATE_DIR" ]]; then
+    verify_args+=(--state-dir "$AGENT_STATE_DIR")
+  fi
+  if [[ "$AGENT_E2E_BUILD" == "0" ]]; then
+    verify_args+=(--no-build)
+  fi
+  if [[ "$AGENT_E2E_KEEP_TEMP" == "1" ]]; then
+    verify_args+=(--keep-state)
+  fi
+  run python3 "${verify_args[@]}"
 }
 
 cmd_dev() {
@@ -787,6 +838,7 @@ case "$COMMAND" in
   agent-npm-readiness) cmd_agent_npm_readiness ;;
   detector-bench) cmd_detector_bench ;;
   agent-protection-smoke) cmd_agent_protection_smoke ;;
+  agent-dogfood-verify) cmd_agent_dogfood_verify ;;
   agent-recovery-smoke) cmd_agent_recovery_smoke ;;
   agent-repair-smoke) cmd_agent_repair_smoke ;;
   agent-install) cmd_agent_install ;;
