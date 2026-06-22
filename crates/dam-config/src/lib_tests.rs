@@ -302,6 +302,71 @@ fn env_overrides_config_file() {
 }
 
 #[test]
+fn consent_direct_access_durations_are_validated() {
+    let invalid_values = [
+        (
+            env(&[("DAM_CONSENT_PENDING_TIMEOUT_SECONDS", "0")]),
+            "consent.pending_timeout_seconds",
+            "expected a positive integer",
+        ),
+        (
+            env(&[("DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS", "0")]),
+            "consent.max_request_duration_seconds",
+            "expected an integer >= 30",
+        ),
+        (
+            env(&[("DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS", "29")]),
+            "consent.max_request_duration_seconds",
+            "expected an integer >= 30",
+        ),
+    ];
+
+    for (env, expected_field, expected_message) in invalid_values {
+        let error = load_with_env(&ConfigOverrides::default(), env).unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigError::InvalidValue { field, .. } if field == expected_field
+        ));
+        assert!(
+            error.to_string().contains(expected_message),
+            "error {error} did not mention {expected_message}"
+        );
+    }
+}
+
+#[test]
+fn config_file_rejects_unusable_direct_access_duration() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam.toml");
+    fs::write(
+        &config_path,
+        r#"
+            [consent]
+            max_request_duration_seconds = 1
+        "#,
+    )
+    .unwrap();
+
+    let error = load_with_env(
+        &ConfigOverrides {
+            config_path: Some(config_path),
+            ..ConfigOverrides::default()
+        },
+        env(&[]),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ConfigError::InvalidValue {
+            field: "consent.max_request_duration_seconds",
+            ..
+        }
+    ));
+}
+
+#[test]
 fn proxy_target_env_does_not_require_upstream_when_proxy_disabled() {
     let config = load_with_env(
         &ConfigOverrides::default(),
