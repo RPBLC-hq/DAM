@@ -235,6 +235,81 @@ fn profiles_from_state_loads_valid_custom_profile_files() {
 }
 
 #[test]
+fn profiles_from_state_ignores_hidden_and_legacy_nested_profile_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("integrations");
+    let profiles_dir = profile_definitions_dir(&state_dir);
+    let hidden_dir = profiles_dir.join(".hidden-imports");
+    let legacy_dir = profiles_dir.join("example-mail");
+    fs::create_dir_all(&hidden_dir).unwrap();
+    fs::create_dir_all(&legacy_dir).unwrap();
+    let nested_profile = r#"{
+      "id": "example-mail",
+      "name": "Example Mail",
+      "summary": "Route Example Mail traffic through DAM.",
+      "provider": "generic-http",
+      "traffic_app_ids": ["example-mail"],
+      "connect_args": [],
+      "settings": [],
+      "commands": [],
+      "notes": [],
+      "automation": "connect_preset"
+    }"#;
+    fs::write(hidden_dir.join("example-mail.json"), nested_profile).unwrap();
+    fs::write(legacy_dir.join("latest.json"), nested_profile).unwrap();
+
+    let profiles = profiles_from_state(DEFAULT_PROXY_URL, &state_dir).unwrap();
+
+    assert!(!profiles.iter().any(|profile| profile.id == "example-mail"));
+    assert_eq!(
+        profiles
+            .iter()
+            .map(|profile| profile.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["claude", "chatgpt"]
+    );
+}
+
+#[test]
+fn read_active_profile_ignores_custom_profile_json_outside_canonical_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("integrations");
+    let profiles_dir = profile_definitions_dir(&state_dir);
+    let hidden_dir = profiles_dir.join(".hidden-imports");
+    fs::create_dir_all(&hidden_dir).unwrap();
+    fs::write(
+        hidden_dir.join("example-mail.json"),
+        r#"{
+          "id": "example-mail",
+          "name": "Example Mail",
+          "summary": "Route Example Mail traffic through DAM.",
+          "provider": "generic-http",
+          "traffic_app_ids": ["example-mail"],
+          "connect_args": [],
+          "settings": [],
+          "commands": [],
+          "notes": [],
+          "automation": "connect_preset"
+        }"#,
+    )
+    .unwrap();
+    write_json_file(
+        &active_profile_path(&state_dir),
+        &ActiveProfileState {
+            profile_id: "example-mail".to_string(),
+            selected_at_unix: 123,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(read_active_profile(&state_dir).unwrap(), None);
+    assert_eq!(
+        runtime_enabled_profile_ids(&state_dir).unwrap(),
+        Some(vec!["claude".to_string(), "chatgpt".to_string()])
+    );
+}
+
+#[test]
 fn profiles_from_state_uses_current_bundled_profile_for_stale_catalog_files() {
     let dir = tempfile::tempdir().unwrap();
     let state_dir = dir.path().join("integrations");
