@@ -285,7 +285,6 @@ fn direct_access_request_to_json(entry: &dam_consent::DirectAccessRequest) -> Va
         "status": entry.status.tag(),
         "kind": entry.kind.tag(),
         "vault_key": entry.vault_key,
-        "requesting_actor": entry.requesting_actor,
         "purpose": entry.purpose,
         "reason": entry.reason,
         "decision_reason": entry.decision_reason,
