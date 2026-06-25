@@ -7,6 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos_system_extension;
 
@@ -62,12 +64,14 @@ fn run(cli: CliArgs) -> Result<(), String> {
     macos::run(cli)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+fn run(cli: CliArgs) -> Result<(), String> {
+    linux::run(cli)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn run(_cli: CliArgs) -> Result<(), String> {
-    Err(
-        "dam-tray currently ships a macOS native shell first; use `dam-web` for this platform"
-            .to_string(),
-    )
+    Err("dam-tray currently supports macOS and Linux native shells; use `dam-web` for this platform".to_string())
 }
 
 fn parse_args(args: impl IntoIterator<Item = String>) -> Result<CliArgs, String> {

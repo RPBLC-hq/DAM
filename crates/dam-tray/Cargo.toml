@@ -16,5 +16,11 @@ tao = { version = "0.35", default-features = false, features = ["rwh_06"] }
 tray-icon = { version = "0.22", default-features = false }
 wry = { version = "0.55", default-features = false, features = ["os-webview"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+muda = { version = "0.17", default-features = false }
+tao = { version = "0.35", default-features = false, features = ["rwh_06", "x11", "dbus"] }
+tray-icon = { version = "0.22", default-features = false }
+wry = { version = "0.55", default-features = false, features = ["os-webview", "x11"] }
+
 [target.'cfg(target_os = "macos")'.build-dependencies]
 cc = "1"

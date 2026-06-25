@@ -2,9 +2,9 @@
 
 `dam-tray` is the first native desktop shell for DAM's local Connect UX.
 
-The first slice is macOS-focused. It starts a local `dam-web` child process, prepares `/connect` in a hidden native WebView, and opens that WebView as a borderless popover anchored under the `[R:]` menu-bar item only when the user clicks the item. Popover positioning uses the current native window size and clamps to the active monitor; the hosted React app fills whatever viewport it receives.
+The desktop shell starts a local `dam-web` child process, prepares `/connect` in a hidden native WebView, and opens that WebView as a borderless popover when the user clicks the `[R:]` status item. Popover positioning uses the current native window size and clamps to the active monitor; the hosted React app fills whatever viewport it receives.
 
-The macOS menu-bar item is text-only and renders `[R:]` as its native title. It does not attach a native tray menu; clicking the item opens the hosted Connect surface. `tray-icon` does not expose custom font styling for that title, so the menu-bar item uses the platform's default menu-bar font and color rather than a custom image.
+The macOS menu-bar item is text-only and renders `[R:]` as its native title. `tray-icon` does not expose custom font styling for that title, so the menu-bar item uses the platform's default menu-bar font and color rather than a custom image. Linux uses the same hosted WebView frame and tray IPC contract, backed by an AppIndicator/status-area tray icon with the `[R:]` title plus a small high-contrast placeholder icon until branded Linux tray assets land.
 
 Inside the tray-hosted frame, clicking the `[R:]` brand mark opens `https://rpblc.com` in the user's default browser through the native shell instead of navigating inside the WebView. Clicking the tray `DAM` product stamp posts `dam-tray:open-dam-web` so the native shell opens the hosted DAM web view in the user's default browser. The WebView navigation and IPC handlers are pinned to the hosted loopback origin, and new-window requests are denied inside the embedded view.
 
@@ -77,11 +77,12 @@ daemon.json
 
 - `dam-tray` owns the native shell and the hosted `dam-web` child process.
 - On macOS, `dam-tray` owns the app-process System Extension activation request for packaged Connect.
-- Starting `dam-tray` creates the menu-bar item without opening the popover.
-- Losing focus hides the popover; the app remains available from the menu-bar item.
+- On Linux, `dam-tray` owns only the tray shell and hosted Connect frame. Connect uses the explicit-proxy/disabled-trust local development path and does not install transparent routing, local CA trust, system proxies, or privileged Linux networking from the tray.
+- Starting `dam-tray` creates the status item without opening the popover.
+- Losing focus hides the popover; the app remains available from the status item.
 - The native shell owns the initial popover window and positioning. The hosted app must stay responsive to the WebView viewport.
 - Native Quit exits the tray shell and stops the hosted web UI without changing DAM routing, enabled app selection, explicit profile setup, protection state, or the daemon. The current frame-only React slice does not render a Quit control yet.
-- Non-macOS platforms currently return a clear unsupported-platform message; users can run `dam-web` directly until native shells are added.
+- Platforms without a native shell can run `dam-web` directly until a platform tray is added.
 
 ## Packaging Notes
 
@@ -92,6 +93,7 @@ dam-tray
 dam-web
 dam
 signed macOS Network Extension helper/app bundle for tun mode
+Linux desktop packages for tray builds/runs: GTK, WebKitGTK, and AppIndicator/Ayatana development/runtime libraries
 ```
 
 The tray binary discovers explicit `--dam-web-bin` / `--dam-bin` paths first, then `DAM_WEB_BIN` / `DAM_BIN`, then sibling binaries next to `dam-tray`, then `PATH`.
