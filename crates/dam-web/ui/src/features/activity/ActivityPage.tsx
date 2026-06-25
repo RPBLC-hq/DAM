@@ -14,6 +14,7 @@ import {
 import { ApiError, api, apiPost } from '@/lib/api/client'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { useUrlSearchParam, useUrlSearchString } from '@/lib/url-search'
+import { activityDetectedLabel, activityIdentifierLabel } from './display'
 import { sinceTimestamp, type Since } from './since'
 import type { ActivityDecision, ActivityEvent, ActivityView } from './types'
 import type { WalletDetail, WalletKind } from '@/features/wallet/types'
@@ -236,18 +237,6 @@ function ActivityRow({
       )}
     </article>
   )
-}
-
-function activityDetectedLabel(item: ActivityEvent, unavailable: string): string {
-  if (item.value) return item.value
-  if (item.kind !== 'unknown') return `[${item.kind}]`
-  return unavailable
-}
-
-function activityIdentifierLabel(item: ActivityEvent): string {
-  if (item.reference) return item.reference
-  if (item.kind !== 'unknown') return item.kind
-  return item.audit_id
 }
 
 function ActivityIdentifier({ value }: { value: string }) {
