@@ -1,6 +1,6 @@
 {
   "name": "@rpblc/dam",
-  "version": "0.1.0",
+  "version": "0.3.2",
   "description": "Local DAM launcher and native binary shims.",
   "license": "Apache-2.0",
   "bin": {
