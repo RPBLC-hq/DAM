@@ -115,11 +115,6 @@ pub async fn list(
             && !ev.kind.to_lowercase().contains(&q)
             && !decision_tag(ev.decision).contains(&q)
             && !entry
-                .value
-                .as_deref()
-                .map(|value| value.to_lowercase().contains(&q))
-                .unwrap_or(false)
-            && !entry
                 .reference
                 .as_deref()
                 .map(|reference| reference.to_lowercase().contains(&q))

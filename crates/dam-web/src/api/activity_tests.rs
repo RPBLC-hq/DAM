@@ -219,6 +219,55 @@ async fn activity_shows_consent_outcome_without_wallet_lookup() {
 }
 
 #[tokio::test]
+async fn activity_search_does_not_match_raw_values() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    let reference = Reference::generate(SensitiveType::Email);
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::Redaction,
+            "replacement applied with tokenized reference",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_value("ada@example.test")
+        .with_reference(reference.clone())
+        .with_action("tokenized"),
+    )
+    .unwrap();
+    let state = test_state(vault, logs);
+
+    let raw_search = list(
+        State(state.clone()),
+        Query(ActivityQuery {
+            since: Some(0),
+            q: Some("ada@example.test".to_string()),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+    let reference_search = list(
+        State(state),
+        Query(ActivityQuery {
+            since: Some(0),
+            q: Some(reference.key()),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert!(raw_search.data.events.is_empty());
+    assert_eq!(reference_search.data.events.len(), 1);
+    assert_eq!(
+        reference_search.data.events[0].value.as_deref(),
+        Some(format!("[{}]", reference.key()).as_str())
+    );
+}
+
+#[tokio::test]
 async fn activity_detail_omits_raw_value_and_add_to_wallet_resolves_reference() {
     let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
     let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
