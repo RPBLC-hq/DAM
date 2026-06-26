@@ -149,9 +149,8 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "DAM token"):
             smoke.assert_transformed_token_only("model saw [ not-a-dam-reference ]")
 
-    def test_upstream_transcript_assertion_requires_tokens_without_raw_values(self):
+    def test_upstream_transcript_assertion_requires_payload_position_tokens_without_raw_values(self):
         smoke = load_module()
-
         paths = smoke.assert_upstream_transcript_protected(
             {
                 "requests": [
@@ -169,8 +168,42 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
             smoke.assert_upstream_transcript_protected(
                 {"requests": [{"body": f"leaked {smoke.SYNTHETIC_EMAIL} [ssn:def]"}]}
             )
-        with self.assertRaisesRegex(AssertionError, "expected DAM references"):
+        with self.assertRaisesRegex(AssertionError, "payload positions"):
             smoke.assert_upstream_transcript_protected({"requests": [{"body": "redacted text only"}]})
+        with self.assertRaisesRegex(AssertionError, "payload positions"):
+            smoke.assert_upstream_transcript_protected(
+                {
+                    "requests": [
+                        {
+                            "body": "instructions mention [email:abc] and [ssn:def]",
+                            "user_content": "alpha was dropped; beta was dropped",
+                        }
+                    ]
+                }
+            )
+
+    def test_upstream_transcript_missing_endpoint_is_optional_but_malformed_endpoint_fails_closed(self):
+        smoke = load_module()
+
+        class Http404(smoke.urllib.error.HTTPError):
+            def __init__(self):
+                super().__init__("http://127.0.0.1/__dam/transcript", 404, "not found", {}, None)
+
+        def missing_json(url, *, timeout):
+            raise Http404()
+
+        def malformed_json(url, *, timeout):
+            raise smoke.json.JSONDecodeError("bad json", "not-json", 0)
+
+        original_get_json = smoke.__dict__["get_json"]
+        try:
+            smoke.__dict__["get_json"] = missing_json
+            self.assertIsNone(smoke.upstream_transcript("http://127.0.0.1", timeout=1))
+            smoke.__dict__["get_json"] = malformed_json
+            with self.assertRaisesRegex(AssertionError, "unreadable"):
+                smoke.upstream_transcript("http://127.0.0.1", timeout=1)
+        finally:
+            smoke.__dict__["get_json"] = original_get_json
 
 
 if __name__ == "__main__":

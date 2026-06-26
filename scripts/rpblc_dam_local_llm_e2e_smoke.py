@@ -146,14 +146,19 @@ def upstream_available(upstream: str, *, timeout: float) -> bool:
 
 
 def upstream_transcript(upstream: str, *, timeout: float) -> dict[str, Any] | None:
+    transcript_url = f"{upstream.rstrip('/')}/__dam/transcript"
     try:
-        return get_json(f"{upstream.rstrip('/')}/__dam/transcript", timeout=timeout)
+        return get_json(transcript_url, timeout=timeout)
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return None
-        raise
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
-        return None
+        raise AssertionError(
+            f"fake upstream transcript endpoint failed closed with HTTP {error.code}: {transcript_url}"
+        ) from error
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        raise AssertionError(
+            f"fake upstream transcript endpoint was advertised but unreadable: {transcript_url}: {error}"
+        ) from error
 
 
 def assert_upstream_transcript_protected(transcript: dict[str, Any] | None) -> list[str]:
@@ -162,24 +167,28 @@ def assert_upstream_transcript_protected(transcript: dict[str, Any] | None) -> l
     requests = transcript.get("requests")
     if not isinstance(requests, list) or not requests:
         raise AssertionError(f"fake upstream transcript did not record any requests: {transcript!r}")
-    surfaces = []
+    path_results = []
+    payload_positions_checked = False
+    leaks: list[str] = []
     for request in requests:
-        if isinstance(request, dict):
-            surfaces.append(str(request.get("body", "")))
-            surfaces.append(str(request.get("user_content", "")))
-    joined = "\n".join(surfaces)
-    leaks = [value for value in (SYNTHETIC_EMAIL, SYNTHETIC_SSN) if value in joined]
+        if not isinstance(request, dict):
+            continue
+        path_results.append(str(request.get("path", "")))
+        surfaces = [str(request.get("body", "")), str(request.get("user_content", ""))]
+        joined = "\n".join(surfaces)
+        leaks.extend(value for value in (SYNTHETIC_EMAIL, SYNTHETIC_SSN) if value in joined)
+        compact_lower = "".join(joined.split()).lower()
+        if "alpha=[email:" in compact_lower and "beta=[ssn:" in compact_lower:
+            payload_positions_checked = True
     if leaks:
-        raise AssertionError(f"fake upstream transcript leaked raw synthetic values {leaks}")
-    compact_lower = "".join(joined.split()).lower()
-    required_refs = ["[email:", "[ssn:"]
-    missing_refs = [reference for reference in required_refs if reference not in compact_lower]
-    if missing_refs:
+        raise AssertionError(f"fake upstream transcript leaked raw synthetic values {sorted(set(leaks))}")
+    if not payload_positions_checked:
         raise AssertionError(
-            "fake upstream transcript did not contain expected DAM references "
-            f"{missing_refs}: {transcript!r}"
+            "fake upstream transcript did not contain DAM references in the synthetic payload positions "
+            "alpha=[email:...] and beta=[ssn:...]: "
+            f"{transcript!r}"
         )
-    return [str(request.get("path", "")) for request in requests if isinstance(request, dict)]
+    return path_results
 
 
 def process_exit_summary(process: subprocess.Popen[str]) -> str:
