@@ -18,6 +18,7 @@ export type ActivityEvent = {
   kind: string
   value?: string
   reference?: string
+  can_add_to_wallet: boolean
   decision: ActivityDecision
   purpose?: string
   audit_id: string

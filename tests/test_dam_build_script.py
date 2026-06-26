@@ -1,3 +1,4 @@
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -10,10 +11,19 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILD_SCRIPT = ROOT / "scripts" / "dam-build.sh"
+VISIBLE_EVIDENCE_SMOKE_SCRIPT = ROOT / "scripts" / "rpblc_dam_visible_evidence_smoke.py"
+
+
+spec = importlib.util.spec_from_file_location(
+    "rpblc_dam_visible_evidence_smoke", VISIBLE_EVIDENCE_SMOKE_SCRIPT
+)
+assert spec is not None and spec.loader is not None
+visible_evidence_smoke = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(visible_evidence_smoke)
 
 
 class DamBuildScriptTests(unittest.TestCase):
-    def test_help_documents_agent_protection_smoke_command(self):
+    def test_help_documents_agent_protection_and_visible_evidence_smoke_commands(self):
         result = subprocess.run(
             [str(BUILD_SCRIPT), "--help"],
             cwd=ROOT,
@@ -24,12 +34,16 @@ class DamBuildScriptTests(unittest.TestCase):
         )
 
         self.assertIn("agent-protection-smoke", result.stdout)
+        self.assertIn("agent-visible-evidence-smoke", result.stdout)
         self.assertIn("agent-websocket-smoke", result.stdout)
         self.assertIn("agent-dogfood-verify", result.stdout)
         self.assertIn("agent-recovery-smoke", result.stdout)
         self.assertIn("agent-repair-smoke", result.stdout)
         self.assertIn("DAM_AGENT_E2E_UPSTREAM", result.stdout)
         self.assertIn("DAM_AGENT_E2E_BINARY", result.stdout)
+        self.assertIn("DAM_AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT", result.stdout)
+        self.assertIn("DAM_AGENT_E2E_WEB_BINARY", result.stdout)
+        self.assertIn("DAM_AGENT_E2E_WEB_ADDR", result.stdout)
         self.assertIn("DAM_AGENT_E2E_BUILD", result.stdout)
         self.assertIn("DAM_AGENT_E2E_KEEP_TEMP", result.stdout)
         self.assertIn("DAM_AGENT_E2E_WEB_ADDR", result.stdout)
@@ -86,6 +100,61 @@ class DamBuildScriptTests(unittest.TestCase):
                     "11",
                     "--binary",
                     str(ROOT / "target" / "debug" / "dam-proxy"),
+                ],
+            )
+
+    def test_agent_visible_evidence_smoke_invokes_local_script_with_safe_defaults(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "argv.txt"
+            stub_path = Path(temp_dir) / "visible_smoke_stub.py"
+            stub_path.write_text(
+                textwrap.dedent(
+                    f"""
+                    import pathlib
+                    import sys
+                    pathlib.Path({str(output_path)!r}).write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
+                    raise SystemExit(0)
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "DAM_AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT": str(stub_path),
+                    "DAM_AGENT_E2E_LISTEN": "127.0.0.1:17831",
+                    "DAM_AGENT_E2E_WEB_ADDR": "127.0.0.1:12896",
+                    "DAM_AGENT_E2E_STARTUP_TIMEOUT": "7",
+                    "DAM_AGENT_E2E_HTTP_TIMEOUT": "11",
+                }
+            )
+            subprocess.run(
+                [str(BUILD_SCRIPT), "agent-visible-evidence-smoke"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            argv = output_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(
+                argv,
+                [
+                    "--listen",
+                    "127.0.0.1:17831",
+                    "--web-addr",
+                    "127.0.0.1:12896",
+                    "--startup-timeout",
+                    "7",
+                    "--http-timeout",
+                    "11",
+                    "--binary",
+                    str(ROOT / "target" / "debug" / "dam-proxy"),
+                    "--web-binary",
+                    str(ROOT / "target" / "debug" / "dam-web"),
                 ],
             )
 
@@ -196,6 +265,49 @@ class DamBuildScriptTests(unittest.TestCase):
                 ],
             )
 
+    def test_agent_visible_evidence_smoke_allocates_free_loopback_web_addr_by_default(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "argv.txt"
+            stub_path = Path(temp_dir) / "visible_smoke_stub.py"
+            stub_path.write_text(
+                textwrap.dedent(
+                    f"""
+                    import pathlib
+                    import sys
+                    pathlib.Path({str(output_path)!r}).write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
+                    raise SystemExit(0)
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "DAM_AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT": str(stub_path),
+                    "DAM_AGENT_E2E_LISTEN": "127.0.0.1:17831",
+                    "DAM_AGENT_E2E_STARTUP_TIMEOUT": "7",
+                    "DAM_AGENT_E2E_HTTP_TIMEOUT": "11",
+                }
+            )
+            env.pop("DAM_AGENT_E2E_WEB_ADDR", None)
+            subprocess.run(
+                [str(BUILD_SCRIPT), "agent-visible-evidence-smoke"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            argv = output_path.read_text(encoding="utf-8").splitlines()
+            web_addr = argv[argv.index("--web-addr") + 1]
+            host, port = web_addr.split(":", 1)
+            self.assertEqual(host, "127.0.0.1")
+            self.assertNotEqual(web_addr, "127.0.0.1:2896")
+            self.assertGreater(int(port), 0)
+
     def test_agent_dogfood_verify_allocates_isolated_loopback_web_addr_when_unset(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "argv.txt"
@@ -240,6 +352,42 @@ class DamBuildScriptTests(unittest.TestCase):
             self.assertEqual(host, "127.0.0.1")
             self.assertNotEqual(web_addr, "127.0.0.1:2896")
             self.assertGreater(int(port), 0)
+
+    def test_visible_evidence_smoke_sanitizes_wallet_add_output(self):
+        result = visible_evidence_smoke.sanitize_wallet_add_result(
+            {
+                "ok": True,
+                "data": {
+                    "item": {
+                        "id": "ref-123",
+                        "kind": "ssn",
+                        "value": "123-45-6789",
+                        "state": "protected",
+                        "shared_with": [],
+                    },
+                    "meta": [{"key": "stored in", "value": "local vault"}],
+                    "first_seen": "2026-06-19",
+                    "reference": "[ssn:ref-123]",
+                },
+            }
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "ok": True,
+                "data": {
+                    "item": {
+                        "id": "ref-123",
+                        "kind": "ssn",
+                        "state": "protected",
+                    },
+                    "meta": [{"key": "stored in", "value": "local vault"}],
+                    "first_seen": "2026-06-19",
+                    "reference": "[ssn:ref-123]",
+                },
+            },
+        )
 
     def test_agent_status_rejects_invalid_setup_probe_modes_before_macos_checks(self):
         result = subprocess.run(

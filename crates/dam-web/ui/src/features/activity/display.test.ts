@@ -17,6 +17,7 @@ function event(overrides: Partial<ActivityEvent> = {}): ActivityEvent {
     purpose: undefined,
     audit_id: 'evt_0000000000000007',
     ...overrides,
+    can_add_to_wallet: overrides.can_add_to_wallet ?? true,
   }
 }
 

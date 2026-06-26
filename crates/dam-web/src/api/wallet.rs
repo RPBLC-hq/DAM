@@ -90,7 +90,16 @@ pub async fn add(
     Json(body): Json<AddWalletRequest>,
 ) -> WebResult<WalletDetail> {
     let kind = parse_kind(&body.kind)?;
-    let value = body.value.trim();
+    let detail = add_wallet_value(&state, kind, &body.value)?;
+    Ok(Ok::new(detail))
+}
+
+pub(crate) fn add_wallet_value(
+    state: &AppState,
+    kind: SensitiveType,
+    value: &str,
+) -> Result<WalletDetail, WebError> {
+    let value = value.trim();
     if value.is_empty() {
         return Err(WebError::new(WebErrorCode::InvalidRequest));
     }
@@ -111,8 +120,7 @@ pub async fn add(
     state.events.notify(EventTopic::WalletInvalidate);
     state.events.notify(EventTopic::ConnectUpdate);
 
-    let detail = wallet_detail_for_key(&state, &reference.key())?;
-    Ok(Ok::new(detail))
+    wallet_detail_for_key(state, &reference.key())
 }
 
 #[derive(Debug, Clone, Serialize)]

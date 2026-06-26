@@ -19,6 +19,7 @@ AGENT_E2E_STARTUP_TIMEOUT="${DAM_AGENT_E2E_STARTUP_TIMEOUT:-30}"
 AGENT_E2E_HTTP_TIMEOUT="${DAM_AGENT_E2E_HTTP_TIMEOUT:-60}"
 AGENT_E2E_WEB_ADDR="${DAM_AGENT_E2E_WEB_ADDR:-}"
 AGENT_E2E_SMOKE_SCRIPT="${DAM_AGENT_E2E_SMOKE_SCRIPT:-$ROOT/scripts/rpblc_dam_local_llm_e2e_smoke.py}"
+AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT="${DAM_AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT:-$ROOT/scripts/rpblc_dam_visible_evidence_smoke.py}"
 AGENT_E2E_VERIFY_SCRIPT="${DAM_AGENT_E2E_VERIFY_SCRIPT:-$ROOT/scripts/dam_vps_dogfood_verify.py}"
 AGENT_E2E_BINARY="${DAM_AGENT_E2E_BINARY:-$ROOT/target/debug/dam-proxy}"
 AGENT_E2E_WEB_BINARY="${DAM_AGENT_E2E_WEB_BINARY:-$ROOT/target/debug/dam-web}"
@@ -46,6 +47,8 @@ Commands:
                 Run the synthetic DAM detector benchmark harness
   agent-protection-smoke
                 Run local API-through-DAM protection smoke against local upstream
+  agent-visible-evidence-smoke
+                Run loopback visible-evidence smoke against local DAM APIs
   agent-websocket-smoke
                 Run synthetic ChatGPT WebSocket route protection smoke against loopback upstream
   agent-dogfood-verify
@@ -98,10 +101,13 @@ Environment:
                            Smoke request timeout, currently $AGENT_E2E_HTTP_TIMEOUT
   DAM_AGENT_E2E_SMOKE_SCRIPT
                            Smoke verifier script, currently $AGENT_E2E_SMOKE_SCRIPT
+  DAM_AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT
+                           Visible-evidence verifier script, currently $AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT
   DAM_AGENT_E2E_VERIFY_SCRIPT
                            VPS dogfood verifier script, currently $AGENT_E2E_VERIFY_SCRIPT
   DAM_AGENT_E2E_BINARY     dam-proxy binary path for smoke, currently $AGENT_E2E_BINARY
-  DAM_AGENT_E2E_WEB_BINARY dam-web binary path for dogfood verify, currently $AGENT_E2E_WEB_BINARY
+  DAM_AGENT_E2E_WEB_BINARY dam-web binary path for visible-evidence/dogfood smokes, currently $AGENT_E2E_WEB_BINARY
+  DAM_AGENT_E2E_WEB_ADDR   dam-web listen address for visible-evidence/dogfood smokes; defaults to a free loopback port
   DAM_AGENT_E2E_BUILD      Set to 0 to reuse the binary without cargo build, currently $AGENT_E2E_BUILD
   DAM_AGENT_E2E_KEEP_TEMP  Set to 1 to keep smoke temp vault/log files, currently $AGENT_E2E_KEEP_TEMP
   DAM_AGENT_CONFIRM_MUTATION
@@ -441,6 +447,33 @@ cmd_agent_protection_smoke() {
     --startup-timeout "$AGENT_E2E_STARTUP_TIMEOUT"
     --http-timeout "$AGENT_E2E_HTTP_TIMEOUT"
     --binary "$AGENT_E2E_BINARY"
+  )
+  if [[ "$AGENT_E2E_BUILD" == "0" ]]; then
+    smoke_args+=(--no-build)
+  fi
+  if [[ "$AGENT_E2E_KEEP_TEMP" == "1" ]]; then
+    smoke_args+=(--keep-temp)
+  fi
+  run python3 "${smoke_args[@]}"
+}
+
+cmd_agent_visible_evidence_smoke() {
+  if [[ ! -f "$AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT" ]]; then
+    echo "missing visible evidence smoke script: $AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT" >&2
+    exit 1
+  fi
+  local web_addr="$AGENT_E2E_WEB_ADDR"
+  if [[ -z "$web_addr" ]]; then
+    web_addr="$(allocate_loopback_addr)"
+  fi
+  local smoke_args=(
+    "$AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT"
+    --listen "$AGENT_E2E_LISTEN"
+    --web-addr "$web_addr"
+    --startup-timeout "$AGENT_E2E_STARTUP_TIMEOUT"
+    --http-timeout "$AGENT_E2E_HTTP_TIMEOUT"
+    --binary "$AGENT_E2E_BINARY"
+    --web-binary "$AGENT_E2E_WEB_BINARY"
   )
   if [[ "$AGENT_E2E_BUILD" == "0" ]]; then
     smoke_args+=(--no-build)
@@ -844,6 +877,7 @@ case "$COMMAND" in
   agent-npm-readiness) cmd_agent_npm_readiness ;;
   detector-bench) cmd_detector_bench ;;
   agent-protection-smoke) cmd_agent_protection_smoke ;;
+  agent-visible-evidence-smoke) cmd_agent_visible_evidence_smoke ;;
   agent-websocket-smoke) cmd_agent_websocket_smoke ;;
   agent-dogfood-verify) cmd_agent_dogfood_verify ;;
   agent-recovery-smoke) cmd_agent_recovery_smoke ;;

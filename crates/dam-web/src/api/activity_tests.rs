@@ -1,6 +1,8 @@
 use super::*;
 use axum::extract::{Query, State};
-use dam_core::{LogEvent, LogEventType, LogLevel, Reference, SensitiveType};
+use dam_core::{
+    LogEvent, LogEventType, LogLevel, Reference, SensitiveType, VaultRecord, VaultWriter,
+};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -44,8 +46,12 @@ async fn activity_resolves_profile_label_without_wallet_lookup() {
     assert_eq!(event.profile, profile_label);
     assert_ne!(event.profile, target_label);
     assert_eq!(event.kind, "email");
-    assert_eq!(event.value.as_deref(), Some("ada@example.test"));
+    assert_eq!(
+        event.value.as_deref(),
+        Some(format!("[{}]", reference.key()).as_str())
+    );
     assert_eq!(event.reference.as_deref(), Some(reference.key().as_str()));
+    assert!(event.can_add_to_wallet);
     assert!(matches!(event.decision, Decision::Sealed));
 }
 
@@ -140,10 +146,8 @@ async fn activity_uses_redaction_event_for_sealed_activity_without_policy_duplic
     assert_eq!(response.data.events.len(), 1);
     assert_eq!(response.data.events[0].id, 2);
     assert_eq!(response.data.events[0].kind, "email");
-    assert_eq!(
-        response.data.events[0].value.as_deref(),
-        Some("ada@example.test")
-    );
+    assert_eq!(response.data.events[0].value.as_deref(), Some("[email]"));
+    assert!(response.data.events[0].can_add_to_wallet);
     assert_eq!(response.data.summary.total, 1);
 }
 
@@ -201,15 +205,224 @@ async fn activity_shows_consent_outcome_without_wallet_lookup() {
     let sealed = &response.data.events[0];
     assert_eq!(sealed.id, 2);
     assert_eq!(sealed.kind, "email");
-    assert_eq!(sealed.value.as_deref(), Some("ada@example.test"));
+    assert_eq!(sealed.value.as_deref(), Some("[email]"));
+    assert!(sealed.can_add_to_wallet);
     assert!(matches!(sealed.decision, Decision::Sealed));
 
     let granted = &response.data.events[1];
     assert_eq!(granted.id, 1);
     assert_eq!(granted.kind, "email");
-    assert_eq!(granted.value.as_deref(), Some("ada@example.test"));
+    assert_eq!(granted.value.as_deref(), Some("[email]"));
+    assert!(granted.can_add_to_wallet);
     assert!(matches!(granted.decision, Decision::Granted));
     assert_eq!(response.data.summary.total, 2);
+}
+
+#[tokio::test]
+async fn activity_search_does_not_match_raw_values() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    let reference = Reference::generate(SensitiveType::Email);
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::Redaction,
+            "replacement applied with tokenized reference",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_value("ada@example.test")
+        .with_reference(reference.clone())
+        .with_action("tokenized"),
+    )
+    .unwrap();
+    let state = test_state(vault, logs);
+
+    let raw_search = list(
+        State(state.clone()),
+        Query(ActivityQuery {
+            since: Some(0),
+            q: Some("ada@example.test".to_string()),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+    let reference_search = list(
+        State(state),
+        Query(ActivityQuery {
+            since: Some(0),
+            q: Some(reference.key()),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert!(raw_search.data.events.is_empty());
+    assert_eq!(reference_search.data.events.len(), 1);
+    assert_eq!(
+        reference_search.data.events[0].value.as_deref(),
+        Some(format!("[{}]", reference.key()).as_str())
+    );
+}
+
+#[tokio::test]
+async fn activity_detail_omits_raw_value_and_add_to_wallet_resolves_reference() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    let reference = Reference::generate(SensitiveType::Email);
+    vault
+        .write(&VaultRecord {
+            reference: reference.clone(),
+            kind: SensitiveType::Email,
+            value: "ada@example.test".to_string(),
+        })
+        .unwrap();
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::Redaction,
+            "replacement applied with tokenized reference",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_reference(reference.clone())
+        .with_action("tokenized"),
+    )
+    .unwrap();
+    let state = test_state(vault.clone(), logs);
+
+    let list_response = list(
+        State(state.clone()),
+        Query(ActivityQuery {
+            since: Some(0),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(list_response.data.events.len(), 1);
+    assert!(list_response.data.events[0].can_add_to_wallet);
+
+    let detail_response = detail(State(state.clone()), Path(1)).await.unwrap();
+    let labels = detail_response
+        .data
+        .items
+        .iter()
+        .map(|item| item.label.as_str())
+        .collect::<Vec<_>>();
+    assert!(!labels.contains(&"value"));
+    assert!(labels.contains(&"reference"));
+
+    let add_response = add_to_wallet(State(state), Path(1)).await.unwrap();
+    let key = add_response
+        .data
+        .reference
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    assert_eq!(
+        vault.get_wallet(key).unwrap().as_deref(),
+        Some("ada@example.test")
+    );
+}
+
+#[tokio::test]
+async fn activity_rejects_add_to_wallet_for_non_allowlisted_kind() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    let reference = Reference::generate(SensitiveType::ApiKey);
+    vault
+        .write(&VaultRecord {
+            reference: reference.clone(),
+            kind: SensitiveType::ApiKey,
+            value: "sk-synthetic-value".to_string(),
+        })
+        .unwrap();
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::Redaction,
+            "replacement applied with tokenized reference",
+        )
+        .with_kind(SensitiveType::ApiKey)
+        .with_reference(reference)
+        .with_action("tokenized"),
+    )
+    .unwrap();
+    let state = test_state(vault, logs);
+
+    let list_response = list(
+        State(state.clone()),
+        Query(ActivityQuery {
+            since: Some(0),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(list_response.data.events.len(), 1);
+    assert!(!list_response.data.events[0].can_add_to_wallet);
+
+    let error = add_to_wallet(State(state), Path(1)).await.unwrap_err();
+    assert_eq!(error.code, WebErrorCode::InvalidRequest);
+}
+
+#[tokio::test]
+async fn activity_rejects_add_to_wallet_for_non_surfaced_allowlisted_row() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    let reference = Reference::generate(SensitiveType::Email);
+    vault
+        .write(&VaultRecord {
+            reference: reference.clone(),
+            kind: SensitiveType::Email,
+            value: "ada@example.test".to_string(),
+        })
+        .unwrap();
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::VaultWrite,
+            "vault entry stored for tokenized reference",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_reference(reference.clone())
+        .with_action("stored"),
+    )
+    .unwrap();
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::Redaction,
+            "replacement applied with tokenized reference",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_reference(reference.clone())
+        .with_action("tokenized"),
+    )
+    .unwrap();
+    let state = test_state(vault.clone(), logs);
+
+    let list_response = list(
+        State(state.clone()),
+        Query(ActivityQuery {
+            since: Some(0),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(list_response.data.events.len(), 1);
+    assert_eq!(list_response.data.events[0].id, 2);
+    assert!(list_response.data.events[0].can_add_to_wallet);
+
+    let error = add_to_wallet(State(state), Path(1)).await.unwrap_err();
+    assert_eq!(error.code, WebErrorCode::InvalidRequest);
+    assert!(vault.get_wallet(&reference.key()).unwrap().is_none());
 }
 
 #[tokio::test]
