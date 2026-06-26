@@ -34,7 +34,7 @@ export function connectNavLabelKey(view: ConnectView) {
     case 'paused':
       return 'nav.paused'
     case 'disconnected':
-      return 'nav.off'
+      return 'nav.disconnected'
     case 'degraded':
       return navKeyForSetupSummary(summarizeSetupPlan(view.setup_plan), 'degraded')
     case 'needs_setup':

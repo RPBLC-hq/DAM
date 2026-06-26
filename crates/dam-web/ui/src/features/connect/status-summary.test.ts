@@ -132,7 +132,7 @@ test('maps generic needs-setup state without setup progress to setup-needed copy
   assert.equal(connectNavLabelKey(connectView), 'nav.setupNeeded')
 })
 
-test('maps disconnected state to the off brand-bar label', () => {
+test('maps disconnected state to an explicit disconnected brand-bar label', () => {
   const connectView = view({
     state: 'disconnected',
     message: 'disconnected',
@@ -140,7 +140,7 @@ test('maps disconnected state to the off brand-bar label', () => {
   })
 
   assert.equal(connectStatusMessageKey(connectView), 'connect.disconnectedLede')
-  assert.equal(connectNavLabelKey(connectView), 'nav.off')
+  assert.equal(connectNavLabelKey(connectView), 'nav.disconnected')
 })
 
 test('maps rolled-back setup to repair-needed copy', () => {
