@@ -856,7 +856,7 @@ class DamBuildScriptTests(unittest.TestCase):
                       exit 0
                     fi
                     if [ "$1" = "view" ] && [ "$2" = "@rpblc/dam" ] && [ "$3" = "version" ] && [ "$4" = "--json" ]; then
-                      printf '"0.3.1"\n'
+                      printf '"0.3.3"\n'
                       exit 0
                     fi
                     if [ "$1" = "owner" ] && [ "$2" = "ls" ] && [ "$3" = "@rpblc/dam" ]; then
@@ -870,7 +870,7 @@ class DamBuildScriptTests(unittest.TestCase):
                     fi
                     if [ "$1" = "pack" ]; then
                       cat <<'JSON'
-[{"id":"@rpblc/dam@0.1.0","name":"@rpblc/dam","version":"0.1.0","filename":"rpblc-dam-0.1.0.tgz","files":[{"path":"README.md"},{"path":"npm/bin/dam.js"},{"path":"npm/bin/damctl.js"},{"path":"npm/bin/dam-web.js"},{"path":"npm/bin/dam-proxy.js"},{"path":"npm/bin/dam-mcp.js"},{"path":"npm/bin/dam-tray.js"},{"path":"npm/native/linux-x64/dam"},{"path":"npm/native/linux-x64/damctl"},{"path":"npm/native/linux-x64/dam-web"},{"path":"npm/native/linux-x64/dam-proxy"},{"path":"npm/native/linux-x64/dam-mcp"},{"path":"npm/native/linux-x64/dam-tray"}]}]
+[{"id":"@rpblc/dam@0.3.2","name":"@rpblc/dam","version":"0.3.2","filename":"rpblc-dam-0.3.2.tgz","files":[{"path":"README.md"},{"path":"npm/bin/dam.js"},{"path":"npm/bin/damctl.js"},{"path":"npm/bin/dam-web.js"},{"path":"npm/bin/dam-proxy.js"},{"path":"npm/bin/dam-mcp.js"},{"path":"npm/bin/dam-tray.js"},{"path":"npm/native/linux-x64/dam"},{"path":"npm/native/linux-x64/damctl"},{"path":"npm/native/linux-x64/dam-web"},{"path":"npm/native/linux-x64/dam-proxy"},{"path":"npm/native/linux-x64/dam-mcp"},{"path":"npm/native/linux-x64/dam-tray"}]}]
 JSON
                       exit 0
                     fi
@@ -917,12 +917,12 @@ JSON
 
             self.assertEqual(1, result.returncode, result.stdout + result.stderr)
             self.assertIn("DAM agent npm readiness", result.stdout)
-            self.assertIn("local_version: 0.1.0", result.stdout)
-            self.assertIn("registry_version: 0.3.1", result.stdout)
+            self.assertIn("local_version: 0.3.2", result.stdout)
+            self.assertIn("registry_version: 0.3.3", result.stdout)
             self.assertIn("npm_auth: missing", result.stdout)
             self.assertIn("pack_native_files_present: yes", result.stdout)
             self.assertIn(
-                "local package version 0.1.0 is not greater than published npm version 0.3.1",
+                "local package version 0.3.2 is not greater than published npm version 0.3.3",
                 result.stdout,
             )
             self.assertIn("npm publish auth is not configured on this machine", result.stdout)
