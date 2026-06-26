@@ -37,7 +37,7 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
                 "--upstream",
                 "http://127.0.0.1:8080",
                 "--target-name",
-                "openai-api",
+                "openai",
                 "--provider",
                 "openai-compatible",
                 "--resolve-inbound",
@@ -49,9 +49,14 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
             ],
         )
 
-    def test_proxy_command_records_route_id_and_provider_for_each_route_case(self):
+    def test_proxy_command_uses_profile_target_name_and_records_route_id_separately(self):
         smoke = load_module()
 
+        expected_target_names = {
+            "openai-api": "openai",
+            "anthropic-api": "anthropic",
+            "claude-web": "claude-web",
+        }
         for route_case in smoke.DEFAULT_ROUTE_CASES:
             with self.subTest(route_id=route_case.route_id):
                 command = smoke.proxy_command(
@@ -62,7 +67,8 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
                     log_db=Path("/tmp/dam-smoke/log.sqlite"),
                     route_case=route_case,
                 )
-                self.assertEqual(command[command.index("--target-name") + 1], route_case.route_id)
+                self.assertEqual(command[command.index("--target-name") + 1], route_case.target_name)
+                self.assertEqual(route_case.target_name, expected_target_names[route_case.route_id])
                 self.assertEqual(command[command.index("--provider") + 1], route_case.provider)
 
         self.assertEqual(

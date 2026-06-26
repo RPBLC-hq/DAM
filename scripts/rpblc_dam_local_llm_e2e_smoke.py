@@ -35,14 +35,15 @@ class SmokeRouteCase(NamedTuple):
     """Representative MVP route target exercised through the proxy smoke."""
 
     route_id: str
+    target_name: str
     provider: str
     label: str
 
 
 DEFAULT_ROUTE_CASES = (
-    SmokeRouteCase("openai-api", "openai-compatible", "OpenAI API HTTP route"),
-    SmokeRouteCase("anthropic-api", "anthropic", "Anthropic API HTTP route"),
-    SmokeRouteCase("claude-web", "generic-http", "Claude web-profile HTTP route"),
+    SmokeRouteCase("openai-api", "openai", "openai-compatible", "OpenAI API HTTP route"),
+    SmokeRouteCase("anthropic-api", "anthropic", "anthropic", "Anthropic API HTTP route"),
+    SmokeRouteCase("claude-web", "claude-web", "generic-http", "Claude web-profile HTTP route"),
 )
 
 
@@ -66,7 +67,7 @@ def proxy_command(
         "--upstream",
         upstream,
         "--target-name",
-        route_case.route_id,
+        route_case.target_name,
         "--provider",
         route_case.provider,
         "--resolve-inbound",
@@ -373,6 +374,7 @@ def run_route_smoke(
         return {
             "route_id": route_case.route_id,
             "route_label": route_case.label,
+            "target_name": route_case.target_name,
             "target_provider": route_case.provider,
             "upstream": upstream,
             "proxy": base_url,
