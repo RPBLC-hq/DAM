@@ -7,6 +7,7 @@ export type MessageKey =
   | 'nav.content'
   | 'nav.protected'
   | 'nav.off'
+  | 'nav.disconnected'
   | 'nav.paused'
   | 'nav.connecting'
   | 'nav.setupNeeded'
@@ -361,6 +362,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'nav.content': 'DAM content',
     'nav.protected': 'protected',
     'nav.off': 'off',
+    'nav.disconnected': 'disconnected',
     'nav.paused': 'paused',
     'nav.connecting': 'connecting',
     'nav.setupNeeded': 'setup needed',
@@ -773,6 +775,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'nav.content': 'Contenu DAM',
     'nav.protected': 'protégé',
     'nav.off': 'arrêt',
+    'nav.disconnected': 'déconnecté',
     'nav.paused': 'en pause',
     'nav.connecting': 'connexion en cours',
     'nav.setupNeeded': 'configuration requise',
