@@ -36,6 +36,8 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
                 "127.0.0.1:7831",
                 "--upstream",
                 "http://127.0.0.1:8080",
+                "--target-name",
+                "openai",
                 "--provider",
                 "openai-compatible",
                 "--resolve-inbound",
@@ -45,6 +47,33 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
                 "--log",
                 "/tmp/dam-smoke/log.sqlite",
             ],
+        )
+
+    def test_proxy_command_uses_profile_target_name_and_records_route_id_separately(self):
+        smoke = load_module()
+
+        expected_target_names = {
+            "openai-api": "openai",
+            "anthropic-api": "anthropic",
+            "claude-web": "claude-web",
+        }
+        for route_case in smoke.DEFAULT_ROUTE_CASES:
+            with self.subTest(route_id=route_case.route_id):
+                command = smoke.proxy_command(
+                    binary=Path("target/debug/dam-proxy"),
+                    listen="127.0.0.1:7831",
+                    upstream="http://127.0.0.1:8080",
+                    vault_db=Path("/tmp/dam-smoke/vault.sqlite"),
+                    log_db=Path("/tmp/dam-smoke/log.sqlite"),
+                    route_case=route_case,
+                )
+                self.assertEqual(command[command.index("--target-name") + 1], route_case.target_name)
+                self.assertEqual(route_case.target_name, expected_target_names[route_case.route_id])
+                self.assertEqual(command[command.index("--provider") + 1], route_case.provider)
+
+        self.assertEqual(
+            [route.route_id for route in smoke.DEFAULT_ROUTE_CASES],
+            ["openai-api", "anthropic-api", "claude-web"],
         )
 
     def test_prompts_are_deterministic_and_contain_synthetic_values_only(self):
@@ -88,6 +117,64 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
                 connection.executemany("insert into log_events default values", [(), (), ()])
 
             self.assertEqual(smoke.count_log_rows(db_path), 3)
+
+    def test_health_route_assertion_fails_when_proxy_reports_different_target(self):
+        smoke = load_module()
+        route_case = smoke.DEFAULT_ROUTE_CASES[1]
+
+        smoke.assert_health_route_matches(
+            {"target": "anthropic", "upstream": "http://127.0.0.1:18080/"},
+            route_case=route_case,
+            upstream="http://127.0.0.1:18080",
+        )
+
+        with self.assertRaisesRegex(AssertionError, "health target"):
+            smoke.assert_health_route_matches(
+                {"target": "openai", "upstream": "http://127.0.0.1:18080"},
+                route_case=route_case,
+                upstream="http://127.0.0.1:18080",
+            )
+
+    def test_provider_forward_route_assertion_uses_actual_activity_route_line(self):
+        smoke = load_module()
+        route_case = smoke.DEFAULT_ROUTE_CASES[2]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "activity.sqlite"
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    "create table log_events (id integer primary key, action text, message text)"
+                )
+                connection.executemany(
+                    "insert into log_events (action, message) values (?, ?)",
+                    [
+                        (
+                            "provider_forward_start",
+                            "provider forward start target=claude-web provider=generic-http resolve_inbound=true transform_streaming=true",
+                        ),
+                        (
+                            "provider_forward_start",
+                            "provider forward start target=claude-web provider=generic-http resolve_inbound=true transform_streaming=true",
+                        ),
+                    ],
+                )
+
+            self.assertEqual(
+                len(smoke.assert_provider_forward_route_matches(db_path, route_case, expected_count=2)),
+                2,
+            )
+
+            with self.assertRaisesRegex(AssertionError, "one provider_forward_start"):
+                smoke.assert_provider_forward_route_matches(db_path, route_case, expected_count=3)
+
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    "update log_events set message = ? where id = 2",
+                    ("provider forward start target=openai provider=openai-compatible",),
+                )
+
+            with self.assertRaisesRegex(AssertionError, "provider_forward_start route line"):
+                smoke.assert_provider_forward_route_matches(db_path, route_case, expected_count=2)
 
     def test_wait_for_proxy_reports_early_process_exit_stderr(self):
         smoke = load_module()
@@ -181,6 +268,39 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
                     ]
                 }
             )
+
+    def test_route_selection_defaults_to_representative_mvp_matrix(self):
+        smoke = load_module()
+
+        self.assertEqual(
+            [route.route_id for route in smoke.selected_route_cases(None)],
+            ["openai-api", "anthropic-api", "claude-web"],
+        )
+        self.assertEqual(
+            [route.route_id for route in smoke.selected_route_cases(["anthropic-api"])],
+            ["anthropic-api"],
+        )
+        with self.assertRaisesRegex(smoke.SmokeBlocked, "unknown --route"):
+            smoke.selected_route_cases(["not-a-route"])
+
+    def test_route_scoped_transcript_ignores_prior_requests(self):
+        smoke = load_module()
+        original_upstream_transcript = smoke.__dict__["upstream_transcript"]
+        try:
+            smoke.__dict__["upstream_transcript"] = lambda upstream, *, timeout: {
+                "requests": [
+                    {"path": "/old", "body": "raw old request"},
+                    {
+                        "path": "/new",
+                        "body": '{"content":"alpha=[email:abc]; beta=[ssn:def]"}',
+                        "user_content": "alpha=[email:abc]; beta=[ssn:def]",
+                    },
+                ]
+            }
+            scoped = smoke.route_scoped_transcript("http://127.0.0.1:18080", 1, timeout=1)
+            self.assertEqual(smoke.assert_upstream_transcript_protected(scoped), ["/new"])
+        finally:
+            smoke.__dict__["upstream_transcript"] = original_upstream_transcript
 
     def test_upstream_transcript_missing_endpoint_is_optional_but_malformed_endpoint_fails_closed(self):
         smoke = load_module()
