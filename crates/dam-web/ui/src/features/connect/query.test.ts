@@ -1,7 +1,11 @@
 import { test } from 'node:test'
 import * as assert from 'node:assert/strict'
 
-import { connectRefetchInterval, CONNECT_STATS_REFETCH_INTERVAL_MS } from './refresh.ts'
+import {
+  connectObserverRefetchInterval,
+  connectRefetchInterval,
+  CONNECT_STATS_REFETCH_INTERVAL_MS,
+} from './refresh.ts'
 
 test('connect polling stays on while the document is visible', () => {
   const previousDocument = globalThis.document
@@ -43,6 +47,11 @@ test('connect polling still works in non-browser test contexts', () => {
   } finally {
     restoreDocument(previousDocument)
   }
+})
+
+test('only the selected shared connect observer owns a polling interval', () => {
+  assert.equal(connectObserverRefetchInterval(false), false)
+  assert.equal(connectObserverRefetchInterval(true), connectRefetchInterval)
 })
 
 function restoreDocument(previousDocument: typeof globalThis.document) {

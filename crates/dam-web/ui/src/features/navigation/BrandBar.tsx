@@ -45,7 +45,7 @@ export function BrandStamp({ surface }: { surface: Surface }) {
 
 export function BrandActions({ surface: _surface }: { surface: Surface }) {
   const { t } = useI18n()
-  const connect = useConnectViewQuery()
+  const connect = useConnectViewQuery({ ownsPolling: true })
 
   const pendingCount = connect.data?.pending_count ?? 0
   const isProtected = connect.data?.state === 'protected'

@@ -5,3 +5,9 @@ export function connectRefetchInterval(): number | false {
     ? false
     : CONNECT_STATS_REFETCH_INTERVAL_MS
 }
+
+export function connectObserverRefetchInterval(
+  ownsPolling: boolean,
+): typeof connectRefetchInterval | false {
+  return ownsPolling ? connectRefetchInterval : false
+}
