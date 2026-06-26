@@ -1422,8 +1422,28 @@ where
         ),
     );
 
-    let (upstream_authority, upstream_uses_tls) = websocket_upstream_authority(&target.upstream)
-        .unwrap_or_else(|| (request_authority.clone(), true));
+    let Some((upstream_authority, upstream_uses_tls)) =
+        websocket_upstream_authority(&target.upstream)
+    else {
+        record_proxy_event(
+            &state,
+            operation_id,
+            LogLevel::Error,
+            LogEventType::ProxyFailure,
+            "invalid_websocket_upstream",
+            format!(
+                "WebSocket target upstream is invalid target={} provider={} adapter=web_socket",
+                target.name, target.provider
+            ),
+        );
+        write_intercepted_error(
+            &mut client_tls,
+            StatusCode::BAD_GATEWAY,
+            "WebSocket target upstream is invalid",
+        )
+        .await?;
+        return Ok(());
+    };
     let upstream_tcp = connect_target(&upstream_authority).await?;
 
     let protection = WebSocketProtection {

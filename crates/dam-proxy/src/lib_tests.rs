@@ -2408,9 +2408,19 @@ async fn transparent_chatgpt_websocket_route_protects_outbound_text_frames() {
             && entry.message.contains("adapter=web_socket")
     }));
     assert!(
-        logs.iter()
-            .all(|entry| !entry.message.contains(PROBE_EMAIL)),
-        "logs must not contain raw synthetic values"
+        logs.iter().all(|entry| {
+            ![
+                entry.kind.as_deref(),
+                entry.value.as_deref(),
+                entry.reference.as_deref(),
+                entry.action.as_deref(),
+                Some(entry.message.as_str()),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|field| field.contains(PROBE_EMAIL))
+        }),
+        "logs must not contain raw synthetic values in any persisted string field"
     );
     let _ = shutdown_tx.send(());
 }
