@@ -46,6 +46,8 @@ Commands:
                 Run the synthetic DAM detector benchmark harness
   agent-protection-smoke
                 Run local API-through-DAM protection smoke against local upstream
+  agent-websocket-smoke
+                Run synthetic ChatGPT WebSocket route protection smoke against loopback upstream
   agent-dogfood-verify
                 Run proxy, Activity, and pending-consent VPS dogfooding verification
   agent-recovery-smoke
@@ -449,6 +451,10 @@ cmd_agent_protection_smoke() {
   run python3 "${smoke_args[@]}"
 }
 
+cmd_agent_websocket_smoke() {
+  run cargo test -q -p dam-proxy transparent_chatgpt_websocket_route_protects_outbound_text_frames -- --nocapture
+}
+
 cmd_agent_dogfood_verify() {
   if [[ ! -f "$AGENT_E2E_VERIFY_SCRIPT" ]]; then
     echo "missing VPS dogfood verifier script: $AGENT_E2E_VERIFY_SCRIPT" >&2
@@ -838,6 +844,7 @@ case "$COMMAND" in
   agent-npm-readiness) cmd_agent_npm_readiness ;;
   detector-bench) cmd_detector_bench ;;
   agent-protection-smoke) cmd_agent_protection_smoke ;;
+  agent-websocket-smoke) cmd_agent_websocket_smoke ;;
   agent-dogfood-verify) cmd_agent_dogfood_verify ;;
   agent-recovery-smoke) cmd_agent_recovery_smoke ;;
   agent-repair-smoke) cmd_agent_repair_smoke ;;

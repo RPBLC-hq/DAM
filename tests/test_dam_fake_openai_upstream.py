@@ -23,6 +23,7 @@ class DamFakeOpenAiUpstreamTests(unittest.TestCase):
     def test_models_endpoint_returns_fake_model(self):
         fake = load_module()
         server = ThreadingHTTPServer(("127.0.0.1", 0), fake.Handler)
+        setattr(server, "transcript", [])
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -37,6 +38,7 @@ class DamFakeOpenAiUpstreamTests(unittest.TestCase):
     def test_chat_completion_echoes_exact_prompt_suffix(self):
         fake = load_module()
         server = ThreadingHTTPServer(("127.0.0.1", 0), fake.Handler)
+        setattr(server, "transcript", [])
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -65,6 +67,7 @@ class DamFakeOpenAiUpstreamTests(unittest.TestCase):
     def test_chat_completion_breaks_dam_reference_open_brackets_for_transform_prompt(self):
         fake = load_module()
         server = ThreadingHTTPServer(("127.0.0.1", 0), fake.Handler)
+        setattr(server, "transcript", [])
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -84,6 +87,37 @@ class DamFakeOpenAiUpstreamTests(unittest.TestCase):
             with urllib.request.urlopen(request) as response:
                 payload = json.load(response)
             self.assertEqual(payload["choices"][0]["message"]["content"], "[ email:abc] [ ssn:def]")
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_transcript_endpoint_records_upstream_request_body(self):
+        fake = load_module()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), fake.Handler)
+        setattr(server, "transcript", [])
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            body = json.dumps(
+                {
+                    "model": "local",
+                    "messages": [{"role": "user", "content": "alpha=[email:abc]; beta=[ssn:def]"}],
+                }
+            ).encode("utf-8")
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/v1/chat/completions",
+                data=body,
+                headers={"content-type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request) as response:
+                json.load(response)
+            with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/__dam/transcript") as response:
+                transcript = json.load(response)
+            self.assertEqual(transcript["requests"][0]["path"], "/v1/chat/completions")
+            self.assertIn("[email:abc]", transcript["requests"][0]["body"])
+            self.assertIn("[ssn:def]", transcript["requests"][0]["user_content"])
         finally:
             server.shutdown()
             server.server_close()

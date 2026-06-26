@@ -12,6 +12,7 @@ Current E2E coverage:
 - Token reordering before resolve, proving resolution is keyed by `[kind:id]` and not token order.
 - `dam-web` smoke test against vault/log DBs populated by `dam-filter`.
 - `dam-proxy` through a fake OpenAI-like upstream, proving raw sensitive values are redacted before upstream receives the request and resolved before the local client receives the response.
+- `dam-proxy` ChatGPT WebSocket route smoke through a deterministic loopback upstream, proving outbound text frames on the `chatgpt-web` profile route are tokenized before upstream egress.
 - `dam-proxy` inbound resolution setting coverage in module tests, including `--no-resolve-inbound`.
 - `dam-proxy -> dam-vault -> dam-log -> dam-resolve` restoration of the protected upstream payload.
 - removed legacy tool launcher commands are not exposed by the `dam` CLI.
@@ -51,13 +52,14 @@ Local API-through-DAM smoke test for PR evidence:
 python3 scripts/rpblc_dam_local_llm_e2e_smoke.py --upstream http://127.0.0.1:8080
 ```
 
-The script builds `dam-proxy`, starts it on loopback with temporary vault/log SQLite files, sends synthetic email/SSN values through DAM to the local OpenAI-compatible upstream, verifies exact echo resolution on the trusted client side, verifies a token-transformation prompt that asks the model to insert whitespace after reference opening brackets cannot reconstruct the raw values, fails if the local activity log database contains the synthetic values, and removes the temp directory unless `--keep-temp` is passed. Exit code `2` means the local upstream or binary prerequisite is unavailable; exit code `1` means DAM failed the smoke check.
+The script builds `dam-proxy`, starts it on loopback with temporary vault/log SQLite files, and by default runs a representative MVP known-provider route matrix: `openai-api` (`openai` target / `openai-compatible` provider), `anthropic-api` (`anthropic` target / `anthropic` provider), and `claude-web` (`claude-web` target / `generic-http` provider). For each route, it sends synthetic email/SSN values through DAM to the local OpenAI-compatible upstream, records the route ID, target name, and provider in the JSON proof output, verifies exact echo resolution on the trusted client side, verifies a token-transformation prompt that asks the model to insert whitespace after reference opening brackets cannot reconstruct the raw values, fails if the local activity log database contains the synthetic values, scopes fake-upstream transcript assertions to that route when `GET /__dam/transcript` is available, and removes the temp directory unless `--keep-temp` is passed. Exit code `2` means the local upstream or binary prerequisite is unavailable; exit code `1` means DAM failed the smoke check. Use `--route openai-api`, `--route anthropic-api`, or `--route claude-web` to isolate one route while debugging.
 
 When no local model endpoint is listening, use the deterministic loopback fake upstream instead of skipping the proxy path:
 
 ```bash
 python3 scripts/dam_fake_openai_upstream.py --port 18080
 DAM_AGENT_E2E_UPSTREAM=http://127.0.0.1:18080 scripts/dam-build.sh agent-protection-smoke
+scripts/dam-build.sh agent-websocket-smoke
 ```
 
 For low-risk VPS dogfooding proof, keep DAM in explicit-proxy mode only and verify the shared proxy + Activity + pending-consent path together:
