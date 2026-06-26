@@ -12,6 +12,7 @@ Current E2E coverage:
 - Token reordering before resolve, proving resolution is keyed by `[kind:id]` and not token order.
 - `dam-web` smoke test against vault/log DBs populated by `dam-filter`.
 - `dam-proxy` through a fake OpenAI-like upstream, proving raw sensitive values are redacted before upstream receives the request and resolved before the local client receives the response.
+- `dam-proxy` ChatGPT WebSocket route smoke through a deterministic loopback upstream, proving outbound text frames on the `chatgpt-web` profile route are tokenized before upstream egress.
 - `dam-proxy` inbound resolution setting coverage in module tests, including `--no-resolve-inbound`.
 - `dam-proxy -> dam-vault -> dam-log -> dam-resolve` restoration of the protected upstream payload.
 - removed legacy tool launcher commands are not exposed by the `dam` CLI.
@@ -58,6 +59,7 @@ When no local model endpoint is listening, use the deterministic loopback fake u
 ```bash
 python3 scripts/dam_fake_openai_upstream.py --port 18080
 DAM_AGENT_E2E_UPSTREAM=http://127.0.0.1:18080 scripts/dam-build.sh agent-protection-smoke
+scripts/dam-build.sh agent-websocket-smoke
 ```
 
 For low-risk VPS dogfooding proof, keep DAM in explicit-proxy mode only and verify the shared proxy + Activity + pending-consent path together:
