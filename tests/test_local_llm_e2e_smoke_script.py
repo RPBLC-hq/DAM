@@ -159,7 +159,13 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
                     ],
                 )
 
-            self.assertEqual(len(smoke.assert_provider_forward_route_matches(db_path, route_case)), 2)
+            self.assertEqual(
+                len(smoke.assert_provider_forward_route_matches(db_path, route_case, expected_count=2)),
+                2,
+            )
+
+            with self.assertRaisesRegex(AssertionError, "one provider_forward_start"):
+                smoke.assert_provider_forward_route_matches(db_path, route_case, expected_count=3)
 
             with sqlite3.connect(db_path) as connection:
                 connection.execute(
@@ -168,7 +174,7 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
                 )
 
             with self.assertRaisesRegex(AssertionError, "provider_forward_start route line"):
-                smoke.assert_provider_forward_route_matches(db_path, route_case)
+                smoke.assert_provider_forward_route_matches(db_path, route_case, expected_count=2)
 
     def test_wait_for_proxy_reports_early_process_exit_stderr(self):
         smoke = load_module()

@@ -310,10 +310,20 @@ def provider_forward_messages(log_db: Path) -> list[str]:
     return [str(row[0]) for row in rows]
 
 
-def assert_provider_forward_route_matches(log_db: Path, route_case: SmokeRouteCase) -> list[str]:
+def assert_provider_forward_route_matches(
+    log_db: Path,
+    route_case: SmokeRouteCase,
+    *,
+    expected_count: int,
+) -> list[str]:
     messages = provider_forward_messages(log_db)
     if not messages:
         raise AssertionError("activity log did not record any provider_forward_start route lines")
+    if len(messages) != expected_count:
+        raise AssertionError(
+            "activity log did not record one provider_forward_start route line per proof request: "
+            f"expected {expected_count}, got {len(messages)}; messages={messages!r}"
+        )
 
     expected_target = f"target={route_case.target_name}"
     expected_provider = f"provider={route_case.provider}"
@@ -415,7 +425,11 @@ def run_route_smoke(
 
         assert_no_raw_values_in_activity_log(log_db)
         raw_in_log = raw_values_in_file(log_db)
-        provider_forward_route_messages = assert_provider_forward_route_matches(log_db, route_case)
+        provider_forward_route_messages = assert_provider_forward_route_matches(
+            log_db,
+            route_case,
+            expected_count=2,
+        )
         transcript = route_scoped_transcript(
             upstream,
             baseline_transcript_count,
