@@ -781,18 +781,25 @@ async fn doctor_reports_config_required_route_as_degraded() {
     }));
 }
 
+fn synthetic_api_key() -> String {
+    format!("KEY_{}", "A".repeat(24))
+}
+
 #[tokio::test]
 async fn doctor_redacts_supported_sensitive_values_from_proxy_health_surfaces() {
+    let api_key = synthetic_api_key();
     let proxy_url = spawn_health(dam_api::ProxyReport {
         operation_id: None,
         target: Some("test".to_string()),
         upstream: Some("https://api.example.test".to_string()),
         state: dam_api::ProxyState::Protected,
-        message: "last protected request saw alice@example.com and 123-45-6789".to_string(),
+        message: format!(
+            "last protected request saw alice@example.com and 123-45-6789 with api_key={api_key}"
+        ),
         diagnostics: vec![dam_api::Diagnostic::new(
             dam_api::DiagnosticSeverity::Warning,
             "proxy_trace",
-            "upstream echoed alice@example.com and 123-45-6789",
+            format!("upstream echoed alice@example.com and 123-45-6789 with api_key={api_key}"),
         )],
     })
     .await;
@@ -810,8 +817,65 @@ async fn doctor_redacts_supported_sensitive_values_from_proxy_health_surfaces() 
 
     assert!(!json.contains("alice@example.com"));
     assert!(!json.contains("123-45-6789"));
+    assert!(!json.contains(&api_key));
     assert!(json.contains("[email]"));
     assert!(json.contains("[ssn]"));
+    assert!(json.contains("[api_key]"));
+}
+
+#[tokio::test]
+async fn setup_diagnostics_export_redacts_supported_sensitive_values_from_proxy_health_surfaces() {
+    let api_key = synthetic_api_key();
+    let proxy_url = spawn_health(dam_api::ProxyReport {
+        operation_id: None,
+        target: Some("test".to_string()),
+        upstream: Some("https://api.example.test".to_string()),
+        state: dam_api::ProxyState::Protected,
+        message: format!(
+            "last protected request saw alice@example.com and 123-45-6789 with api_key={api_key}"
+        ),
+        diagnostics: vec![dam_api::Diagnostic::new(
+            dam_api::DiagnosticSeverity::Warning,
+            "proxy_trace",
+            format!("upstream echoed alice@example.com and 123-45-6789 with api_key={api_key}"),
+        )],
+    })
+    .await;
+    let config = proxy_config("https://api.example.test", "openai-compatible");
+    let dir = tempfile::tempdir().unwrap();
+
+    let export = setup_diagnostics_export(
+        &config,
+        &DoctorOptions {
+            proxy_url: Some(proxy_url),
+            state_dir: Some(dir.path().join("state")),
+            ..DoctorOptions::default()
+        },
+        &SetupPlanOptions {
+            state_dir: Some(dir.path().join("state")),
+            proxy_url: Some("http://127.0.0.1:7828".to_string()),
+            ..SetupPlanOptions::default()
+        },
+    )
+    .await
+    .unwrap();
+    let json = serde_json::to_string(&export).unwrap();
+
+    assert!(export.doctor.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "proxy_trace"
+            && diagnostic.message.contains("[email]")
+            && diagnostic.message.contains("[ssn]")
+            && diagnostic.message.contains("[api_key]")
+            && !diagnostic.message.contains("alice@example.com")
+            && !diagnostic.message.contains("123-45-6789")
+            && !diagnostic.message.contains(&api_key)
+    }));
+    assert!(!json.contains("alice@example.com"));
+    assert!(!json.contains("123-45-6789"));
+    assert!(!json.contains(&api_key));
+    assert!(json.contains("[email]"));
+    assert!(json.contains("[ssn]"));
+    assert!(json.contains("[api_key]"));
 }
 
 fn test_daemon_state(pid: u32) -> dam_daemon::DaemonState {

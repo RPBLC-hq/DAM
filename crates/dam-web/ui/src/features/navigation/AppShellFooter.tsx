@@ -1,12 +1,11 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { AppFooter, AppFooterSpacer, Button } from '@rpblc/design'
 
-import { ApiError, api, apiPost } from '@/lib/api/client'
+import { ApiError, apiPost } from '@/lib/api/client'
+import { CONNECT_QUERY_KEY, useConnectViewQuery } from '@/features/connect/query'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import type { ConnectView } from '@/features/connect/types'
-
-const CONNECT_QUERY_KEY = ['connect'] as const
 
 type Surface = 'wallet' | 'settings' | 'activity' | 'connect' | 'other'
 
@@ -31,10 +30,7 @@ export function AppShellFooter() {
   const surface = surfaceFor(path)
 
   const queryClient = useQueryClient()
-  const connect = useQuery({
-    queryKey: CONNECT_QUERY_KEY,
-    queryFn: ({ signal }) => api<ConnectView>('/connect', { signal }),
-  })
+  const connect = useConnectViewQuery()
   const pause = useMutation({
     mutationFn: () => apiPost<ConnectView>('/connect/action', { step_id: 'pause' }),
     onSuccess: (view) => {

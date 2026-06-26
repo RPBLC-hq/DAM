@@ -2,7 +2,7 @@
 
 `dam-mcp` is the first local MCP server for agent-managed DAM operations.
 
-It currently exposes local install/status tools, rescue/repair preview/apply, offline diagnostics export, and consent tools over stdio:
+It currently exposes local install/status tools, rescue/repair preview/apply, offline diagnostics export, passthrough-consent tools, and the first bounded direct value-access slice over stdio:
 
 - `dam_status`
 - `dam_setup_plan`
@@ -13,12 +13,13 @@ It currently exposes local install/status tools, rescue/repair preview/apply, of
 - `dam_consent_list`
 - `dam_consent_grant`
 - `dam_consent_revoke`
-
-`dam_consent_request` is parked until `dam-notify` exists.
+- `dam_consent_request`
+- `dam_consent_request_status`
+- `dam_resolve_if_consented`
 
 ## Stable Handles
 
-Grant uses `vault_key`, not bracket display references:
+Grant and request tools use `vault_key`, not bracket display references:
 
 ```json
 {
@@ -44,7 +45,10 @@ Claude/ChatGPT MCP config can point at the installed binary:
   "mcpServers": {
     "dam": {
       "command": "dam-mcp",
-      "args": ["--config", "dam.toml"]
+      "args": ["--config", "dam.toml"],
+      "env": {
+        "DAM_MCP_ACTOR_LABEL": "Codex"
+      }
     }
   }
 }
@@ -61,6 +65,46 @@ Consent write tools are enabled by default through:
 ```toml
 [consent]
 mcp_write_enabled = true
+pending_timeout_seconds = 60
+max_request_duration_seconds = 86400
 ```
 
-Set it to `false` to expose list-only behavior.
+Set `mcp_write_enabled = false` to restrict to read-only behavior: `dam_consent_list` and `dam_consent_request_status` remain available; `dam_consent_grant`, `dam_consent_revoke`, `dam_consent_request`, and `dam_resolve_if_consented` are hidden and disabled.
+
+`pending_timeout_seconds` must stay positive. `max_request_duration_seconds` must be at least 30 seconds so the bounded direct-access request flow stays usable and consistent with the MCP minimum request duration.
+
+## Direct value-access flow
+
+`dam_consent_request` creates a pending request bound to the local MCP actor. The caller must supply:
+
+- `vault_key`
+- `purpose`
+- `duration_seconds` (minimum 30 seconds, capped by `consent.max_request_duration_seconds`)
+- optional `reason`
+- optional `correlation_id`
+
+The request stays metadata-only until approved by a local control surface or API harness. The MCP server itself does **not** auto-approve requests.
+
+Actor binding comes from `DAM_MCP_ACTOR_LABEL` and/or `DAM_MCP_ACTOR_ID`:
+- if both are set, DAM uses the explicit ID and label as provided;
+- if only `DAM_MCP_ACTOR_ID` is set, DAM accepts it and uses that same value as the display label;
+- if only `DAM_MCP_ACTOR_LABEL` is set, DAM derives a stable local hashed actor ID from the trimmed label.
+
+`dam_consent_request_status` returns the current non-sensitive state for a `request_id` or `grant_id`. MCP status/list/resolve metadata intentionally omit actor binding material (`requesting_actor`, derived actor IDs, fingerprints) so one local MCP client cannot learn enough from another client's pending request to impersonate and consume a grant.
+
+`dam_resolve_if_consented` returns a raw value only when all of these are true:
+
+- the request is approved and not expired;
+- the current MCP actor binding matches the approved actor;
+- the backing vault row is still readable; and
+- the single-use grant has not already been consumed.
+
+Otherwise it returns request metadata plus a stable denial/expiry reason and no raw value.
+
+`dam_consent_revoke` now accepts passthrough `consent_id` values and direct-access `request_id`/`grant_id` values.
+
+## Implementation notes
+
+- `crates/dam-mcp/src/main.rs` stays focused on stdio framing, config loading, and top-level tool dispatch.
+- Bounded direct-access actor binding plus list/request/status/resolve/revoke helpers live in `crates/dam-mcp/src/direct_access.rs`.
+- Public MCP tool names and JSON payload shapes stay unchanged; this split is implementation-only.

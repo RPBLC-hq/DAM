@@ -6,8 +6,8 @@ use axum::Json;
 use axum::extract::{Path, State};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeSet,
-    env,
+    collections::{BTreeMap, BTreeSet},
+    env, fs,
     path::{Path as FsPath, PathBuf},
     process::Stdio,
 };
@@ -18,6 +18,14 @@ use crate::events_bus::EventTopic;
 
 const DAM_STATE_DIR_ENV: &str = "DAM_STATE_DIR";
 const MVP_SETTINGS_PROFILE_IDS: &[&str] = &["claude", "chatgpt"];
+const SETTINGS_DETECTOR_STATE_FILE: &str = "settings-profile-detectors.json";
+const SETTINGS_DETECTOR_KEYS: &[(&str, &str)] = &[
+    ("email", "Email"),
+    ("phone", "Phone"),
+    ("ssn", "SSN"),
+    ("credit_card", "Credit card"),
+    ("api_key", "API key"),
+];
 
 fn is_mvp_settings_profile(profile_id: &str) -> bool {
     MVP_SETTINGS_PROFILE_IDS.contains(&profile_id)
@@ -56,8 +64,16 @@ pub struct AppSetting {
     pub profile: String,
     pub profiles: Vec<String>,
     pub install_state: String,
+    pub detectors: Vec<DetectorSetting>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DetectorSetting {
+    pub key: String,
+    pub label: String,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -79,6 +95,18 @@ pub struct DefaultsSetting {
 #[derive(Debug, Clone, Serialize)]
 pub struct DangerSetting {
     pub can_stop_daemon: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct DetectorPreferenceState {
+    #[serde(default)]
+    profiles: BTreeMap<String, ProfileDetectorPreferences>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct ProfileDetectorPreferences {
+    #[serde(default)]
+    disabled_kinds: Vec<String>,
 }
 
 pub async fn get(State(state): State<AppState>) -> WebResult<SettingsView> {
@@ -116,6 +144,7 @@ fn app_settings_for_state_dir(
     let integration_state_dir = state_dir.join("integrations");
     dam_integrations::ensure_bundled_profile_files(&integration_state_dir)
         .map_err(settings_error)?;
+    let detector_preferences = read_detector_preferences(state_dir)?;
     let proxy_url = proxy_url(state);
     let enabled = dam_integrations::read_effective_enabled_integrations(&integration_state_dir)
         .map_err(settings_error)?
@@ -132,6 +161,7 @@ fn app_settings_for_state_dir(
                 dam_integrations::profile_definition_path(&integration_state_dir, &profile.id);
             Ok(AppSetting {
                 enabled: enabled.contains(&profile.id),
+                detectors: detector_settings_for_profile(&profile.id, &detector_preferences),
                 id: profile.id,
                 name: profile.name,
                 purpose: profile.summary,
@@ -142,6 +172,157 @@ fn app_settings_for_state_dir(
             })
         })
         .collect()
+}
+
+fn detector_settings_for_profile(
+    profile_id: &str,
+    preferences: &DetectorPreferenceState,
+) -> Vec<DetectorSetting> {
+    let disabled = preferences
+        .profiles
+        .get(profile_id)
+        .map(|profile| {
+            profile
+                .disabled_kinds
+                .iter()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    SETTINGS_DETECTOR_KEYS
+        .iter()
+        .map(|(key, label)| DetectorSetting {
+            key: (*key).to_string(),
+            label: (*label).to_string(),
+            enabled: !disabled.contains(key),
+        })
+        .collect()
+}
+
+fn detector_preferences_path(state_dir: &FsPath) -> PathBuf {
+    state_dir
+        .join("integrations")
+        .join(SETTINGS_DETECTOR_STATE_FILE)
+}
+
+fn read_detector_preferences(state_dir: &FsPath) -> Result<DetectorPreferenceState, WebError> {
+    let path = detector_preferences_path(state_dir);
+    if !path.exists() {
+        return Ok(DetectorPreferenceState::default());
+    }
+    let raw = fs::read_to_string(&path)
+        .map_err(|_| WebError::new(WebErrorCode::ApplyTargetUnwritable))?;
+    serde_json::from_str(&raw).map_err(|_| WebError::new(WebErrorCode::Unknown))
+}
+
+fn write_detector_preferences(
+    state_dir: &FsPath,
+    preferences: &DetectorPreferenceState,
+) -> Result<(), WebError> {
+    let path = detector_preferences_path(state_dir);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|_| WebError::new(WebErrorCode::ApplyTargetUnwritable))?;
+    }
+    let raw = serde_json::to_string_pretty(preferences)
+        .map_err(|_| WebError::new(WebErrorCode::Unknown))?;
+    fs::write(path, raw).map_err(|_| WebError::new(WebErrorCode::ApplyTargetUnwritable))
+}
+
+fn allowed_detector_keys() -> BTreeSet<&'static str> {
+    SETTINGS_DETECTOR_KEYS.iter().map(|(key, _)| *key).collect()
+}
+
+fn set_profile_detector_preferences(
+    state_dir: &FsPath,
+    profile_id: &str,
+    detectors: &[DetectorPatch],
+) -> Result<(), WebError> {
+    if !is_mvp_settings_profile(profile_id) {
+        return Err(WebError::new(WebErrorCode::InvalidRequest));
+    }
+    let allowed = allowed_detector_keys();
+    if detectors
+        .iter()
+        .any(|detector| !allowed.contains(detector.key.as_str()))
+    {
+        return Err(WebError::new(WebErrorCode::InvalidRequest));
+    }
+    let mut preferences = read_detector_preferences(state_dir)?;
+    let disabled_kinds = SETTINGS_DETECTOR_KEYS
+        .iter()
+        .filter_map(|(key, _)| {
+            detectors
+                .iter()
+                .find(|detector| detector.key == *key)
+                .and_then(|detector| (!detector.enabled).then(|| (*key).to_string()))
+        })
+        .collect::<Vec<_>>();
+    if disabled_kinds.is_empty() {
+        preferences.profiles.remove(profile_id);
+    } else {
+        preferences.profiles.insert(
+            profile_id.to_string(),
+            ProfileDetectorPreferences { disabled_kinds },
+        );
+    }
+    write_detector_preferences(state_dir, &preferences)
+}
+
+fn set_profile_detectors_in_state_dir<F>(
+    state_dir: &FsPath,
+    profile_id: &str,
+    detectors: &[DetectorPatch],
+    mut reconcile: F,
+) -> Result<(), WebError>
+where
+    F: FnMut() -> Result<ReconcileOutcome, WebError>,
+{
+    let previous_preferences = read_detector_preferences(state_dir)?;
+    set_profile_detector_preferences(state_dir, profile_id, detectors)?;
+    match reconcile() {
+        Ok(ReconcileOutcome::Reconciled | ReconcileOutcome::SetupPending) => Ok(()),
+        Err(error) => {
+            let _ = write_detector_preferences(state_dir, &previous_preferences);
+            let _ = reconcile();
+            Err(error)
+        }
+    }
+}
+
+fn apply_detector_preferences_to_config(
+    config: &mut dam_config::DamConfig,
+    profile_ids: &[String],
+    preferences: &DetectorPreferenceState,
+    integration_state_dir: &FsPath,
+) -> Result<(), WebError> {
+    let allowed = allowed_detector_keys();
+    for profile_id in profile_ids {
+        let traffic_app_ids = dam_integrations::traffic_app_ids_for_profile_ids_from_state(
+            std::slice::from_ref(profile_id),
+            integration_state_dir,
+        )
+        .map_err(settings_error)?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+        let Some(profile_preferences) = preferences.profiles.get(profile_id) else {
+            continue;
+        };
+        for disabled_kind in &profile_preferences.disabled_kinds {
+            if !allowed.contains(disabled_kind.as_str()) {
+                continue;
+            }
+            for app in &mut config.traffic.profile.apps {
+                if traffic_app_ids.contains(&app.id) {
+                    app.outbound
+                        .filter
+                        .types
+                        .insert(disabled_kind.clone(), dam_net::SensitiveDataAction::Allow);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn network_settings(state: &AppState) -> NetworkSetting {
@@ -214,6 +395,13 @@ fn settings_error(error: String) -> WebError {
 pub struct AppPatch {
     pub enabled: Option<bool>,
     pub profile: Option<String>,
+    pub detectors: Option<Vec<DetectorPatch>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DetectorPatch {
+    pub key: String,
+    pub enabled: bool,
 }
 
 pub async fn post_app(
@@ -223,6 +411,9 @@ pub async fn post_app(
 ) -> WebResult<SettingsView> {
     if let Some(enabled) = body.enabled {
         set_app_enabled(&state, &id, enabled)?;
+    }
+    if let Some(detectors) = body.detectors.as_deref() {
+        set_profile_detectors(&state, &id, detectors)?;
     }
     let _ = body.profile;
     Ok(Ok::new(settings_view(&state)?))
@@ -247,6 +438,19 @@ pub async fn post_rollback(
 fn set_app_enabled(state: &AppState, profile_id: &str, enabled: bool) -> Result<(), WebError> {
     let state_dir = dam_state_dir()?;
     set_app_enabled_in_state_dir(state, profile_id, enabled, &state_dir)
+}
+
+fn set_profile_detectors(
+    state: &AppState,
+    profile_id: &str,
+    detectors: &[DetectorPatch],
+) -> Result<(), WebError> {
+    let state_dir = dam_state_dir()?;
+    set_profile_detectors_in_state_dir(&state_dir, profile_id, detectors, || {
+        reconcile_running_capture_scope(state, &state_dir)
+    })?;
+    state.events.notify(EventTopic::ConnectUpdate);
+    Ok(())
 }
 
 fn set_app_enabled_in_state_dir(
@@ -338,6 +542,7 @@ fn capture_scope_for_state(
 ) -> Result<CaptureScope, WebError> {
     let mut config = config.clone();
     let integration_state_dir = state_dir.join("integrations");
+    let detector_preferences = read_detector_preferences(state_dir)?;
     let mut traffic_app_ids = None;
     if let Some(profile_ids) = dam_integrations::runtime_enabled_profile_ids(&integration_state_dir)
         .map_err(settings_error)?
@@ -348,6 +553,12 @@ fn capture_scope_for_state(
         )
         .map_err(settings_error)?;
         config.traffic.enabled_app_ids = Some(app_ids.clone());
+        apply_detector_preferences_to_config(
+            &mut config,
+            &profile_ids,
+            &detector_preferences,
+            &integration_state_dir,
+        )?;
         traffic_app_ids = Some(app_ids);
     }
     let routes = dam_net::traffic_routes_from_profile(&config.traffic.effective_profile());

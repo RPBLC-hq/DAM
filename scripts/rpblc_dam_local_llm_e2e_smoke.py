@@ -23,12 +23,28 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 SYNTHETIC_EMAIL = "alex.sandbox@example.test"
 SYNTHETIC_SSN = "123-45-6789"
 DEFAULT_UPSTREAM = "http://127.0.0.1:8080"
 DEFAULT_LISTEN = "127.0.0.1:7831"
+
+
+class SmokeRouteCase(NamedTuple):
+    """Representative MVP route target exercised through the proxy smoke."""
+
+    route_id: str
+    target_name: str
+    provider: str
+    label: str
+
+
+DEFAULT_ROUTE_CASES = (
+    SmokeRouteCase("openai-api", "openai", "openai-compatible", "OpenAI API HTTP route"),
+    SmokeRouteCase("anthropic-api", "anthropic", "anthropic", "Anthropic API HTTP route"),
+    SmokeRouteCase("claude-web", "claude-web", "generic-http", "Claude web-profile HTTP route"),
+)
 
 
 class SmokeBlocked(RuntimeError):
@@ -42,6 +58,7 @@ def proxy_command(
     upstream: str,
     vault_db: Path,
     log_db: Path,
+    route_case: SmokeRouteCase = DEFAULT_ROUTE_CASES[0],
 ) -> list[str]:
     return [
         str(binary),
@@ -49,8 +66,10 @@ def proxy_command(
         listen,
         "--upstream",
         upstream,
+        "--target-name",
+        route_case.target_name,
         "--provider",
-        "openai-compatible",
+        route_case.provider,
         "--resolve-inbound",
         "--no-api-key-env",
         "--db",
@@ -145,6 +164,61 @@ def upstream_available(upstream: str, *, timeout: float) -> bool:
         return False
 
 
+def upstream_transcript(upstream: str, *, timeout: float) -> dict[str, Any] | None:
+    transcript_url = f"{upstream.rstrip('/')}/__dam/transcript"
+    try:
+        return get_json(transcript_url, timeout=timeout)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise AssertionError(
+            f"fake upstream transcript endpoint failed closed with HTTP {error.code}: {transcript_url}"
+        ) from error
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        raise AssertionError(
+            f"fake upstream transcript endpoint was advertised but unreadable: {transcript_url}: {error}"
+        ) from error
+
+
+def transcript_requests(transcript: dict[str, Any] | None) -> list[Any]:
+    if transcript is None:
+        return []
+    requests = transcript.get("requests")
+    if not isinstance(requests, list):
+        raise AssertionError(f"fake upstream transcript returned malformed requests: {transcript!r}")
+    return requests
+
+
+def assert_upstream_transcript_protected(transcript: dict[str, Any] | None) -> list[str]:
+    if transcript is None:
+        return []
+    requests = transcript_requests(transcript)
+    if not requests:
+        raise AssertionError(f"fake upstream transcript did not record any requests: {transcript!r}")
+    path_results = []
+    payload_positions_checked = False
+    leaks: list[str] = []
+    for request in requests:
+        if not isinstance(request, dict):
+            continue
+        path_results.append(str(request.get("path", "")))
+        surfaces = [str(request.get("body", "")), str(request.get("user_content", ""))]
+        joined = "\n".join(surfaces)
+        leaks.extend(value for value in (SYNTHETIC_EMAIL, SYNTHETIC_SSN) if value in joined)
+        compact_lower = "".join(joined.split()).lower()
+        if "alpha=[email:" in compact_lower and "beta=[ssn:" in compact_lower:
+            payload_positions_checked = True
+    if leaks:
+        raise AssertionError(f"fake upstream transcript leaked raw synthetic values {sorted(set(leaks))}")
+    if not payload_positions_checked:
+        raise AssertionError(
+            "fake upstream transcript did not contain DAM references in the synthetic payload positions "
+            "alpha=[email:...] and beta=[ssn:...]: "
+            f"{transcript!r}"
+        )
+    return path_results
+
+
 def process_exit_summary(process: subprocess.Popen[str]) -> str:
     stdout, stderr = process.communicate(timeout=0.1)
     lines = []
@@ -201,31 +275,121 @@ def assert_no_raw_values_in_activity_log(log_db: Path) -> None:
         )
 
 
-def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
-    upstream = args.upstream.rstrip("/")
-    if not upstream_available(upstream, timeout=args.http_timeout):
-        raise SmokeBlocked(
-            f"local OpenAI-compatible upstream is unavailable at {upstream}; "
-            "start llama.cpp on 127.0.0.1:8080 or pass --upstream"
+def assert_health_route_matches(
+    health: dict[str, Any],
+    *,
+    route_case: SmokeRouteCase,
+    upstream: str,
+) -> None:
+    actual_target = health.get("target")
+    if actual_target != route_case.target_name:
+        raise AssertionError(
+            "dam-proxy health target did not match route smoke target: "
+            f"expected {route_case.target_name!r}, got {actual_target!r}; health={health!r}"
         )
 
-    binary = Path(args.binary)
-    if args.build:
-        subprocess.run(["cargo", "build", "-p", "dam-proxy"], check=True)
-    if not binary.exists():
-        raise SmokeBlocked(f"dam-proxy binary not found: {binary}; rerun with --build")
+    actual_upstream = health.get("upstream")
+    if str(actual_upstream).rstrip("/") != upstream.rstrip("/"):
+        raise AssertionError(
+            "dam-proxy health upstream did not match route smoke upstream: "
+            f"expected {upstream!r}, got {actual_upstream!r}; health={health!r}"
+        )
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="dam-local-llm-smoke-"))
+
+def provider_forward_messages(log_db: Path) -> list[str]:
+    if not log_db.exists():
+        return []
+    with sqlite3.connect(log_db) as connection:
+        try:
+            rows = connection.execute(
+                "select message from log_events where action = ? order by id",
+                ("provider_forward_start",),
+            ).fetchall()
+        except sqlite3.DatabaseError:
+            return []
+    return [str(row[0]) for row in rows]
+
+
+def assert_provider_forward_route_matches(
+    log_db: Path,
+    route_case: SmokeRouteCase,
+    *,
+    expected_count: int,
+) -> list[str]:
+    messages = provider_forward_messages(log_db)
+    if not messages:
+        raise AssertionError("activity log did not record any provider_forward_start route lines")
+    if len(messages) != expected_count:
+        raise AssertionError(
+            "activity log did not record one provider_forward_start route line per proof request: "
+            f"expected {expected_count}, got {len(messages)}; messages={messages!r}"
+        )
+
+    expected_target = f"target={route_case.target_name}"
+    expected_provider = f"provider={route_case.provider}"
+    if not all(expected_target in message and expected_provider in message for message in messages):
+        raise AssertionError(
+            "provider_forward_start route line did not match route smoke case: "
+            f"expected {expected_target!r} and {expected_provider!r}; messages={messages!r}"
+        )
+    return messages
+
+
+def selected_route_cases(route_ids: list[str] | None) -> list[SmokeRouteCase]:
+    if not route_ids:
+        return list(DEFAULT_ROUTE_CASES)
+    by_id = {route.route_id: route for route in DEFAULT_ROUTE_CASES}
+    unknown = sorted(set(route_ids) - set(by_id))
+    if unknown:
+        supported = ", ".join(sorted(by_id))
+        raise SmokeBlocked(f"unknown --route value(s) {', '.join(unknown)}; supported: {supported}")
+    return [by_id[route_id] for route_id in route_ids]
+
+
+def upstream_transcript_request_count(upstream: str, *, timeout: float) -> int | None:
+    transcript = upstream_transcript(upstream, timeout=timeout)
+    if transcript is None:
+        return None
+    return len(transcript_requests(transcript))
+
+
+def route_scoped_transcript(upstream: str, baseline: int | None, *, timeout: float) -> dict[str, Any] | None:
+    transcript = upstream_transcript(upstream, timeout=timeout)
+    if transcript is None or baseline is None:
+        return transcript
+    return {"requests": transcript_requests(transcript)[baseline:]}
+
+
+def stop_process(process: subprocess.Popen[str]) -> None:
+    if process.poll() is None:
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
+def run_route_smoke(
+    args: argparse.Namespace,
+    *,
+    binary: Path,
+    upstream: str,
+    route_case: SmokeRouteCase,
+) -> dict[str, Any]:
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"dam-{route_case.route_id}-smoke-"))
     vault_db = temp_dir / "vault.sqlite"
     log_db = temp_dir / "activity.sqlite"
     listen = args.listen
     base_url = f"http://{listen}"
+    baseline_transcript_count = upstream_transcript_request_count(upstream, timeout=args.http_timeout)
     command = proxy_command(
         binary=binary,
         listen=listen,
         upstream=upstream,
         vault_db=vault_db,
         log_db=log_db,
+        route_case=route_case,
     )
 
     process = subprocess.Popen(
@@ -238,6 +402,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     )
     try:
         health = wait_for_proxy(base_url, timeout=args.startup_timeout, process=process)
+        assert_health_route_matches(health, route_case=route_case, upstream=upstream)
         exact_prompt = exact_echo_prompt()
         exact_text = response_text(
             post_json(
@@ -260,8 +425,23 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
 
         assert_no_raw_values_in_activity_log(log_db)
         raw_in_log = raw_values_in_file(log_db)
+        provider_forward_route_messages = assert_provider_forward_route_matches(
+            log_db,
+            route_case,
+            expected_count=2,
+        )
+        transcript = route_scoped_transcript(
+            upstream,
+            baseline_transcript_count,
+            timeout=args.http_timeout,
+        )
+        transcript_paths = assert_upstream_transcript_protected(transcript)
 
         return {
+            "route_id": route_case.route_id,
+            "route_label": route_case.label,
+            "target_name": route_case.target_name,
+            "target_provider": route_case.provider,
             "upstream": upstream,
             "proxy": base_url,
             "health": health,
@@ -269,21 +449,45 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             "log_db": str(log_db),
             "log_rows": count_log_rows(log_db),
             "raw_synthetic_values_in_local_activity_log": raw_in_log,
+            "provider_forward_route_messages": provider_forward_route_messages,
+            "upstream_transcript_paths": transcript_paths,
+            "upstream_transcript_checked": transcript is not None,
             "exact_echo_response": exact_text,
             "transformed_token_response": transformed_text,
             "cleanup": "kept" if args.keep_temp else "removed",
             "temp_dir": str(temp_dir),
         }
     finally:
-        if process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait(timeout=5)
+        stop_process(process)
         if not args.keep_temp:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
+    upstream = args.upstream.rstrip("/")
+    if not upstream_available(upstream, timeout=args.http_timeout):
+        raise SmokeBlocked(
+            f"local OpenAI-compatible upstream is unavailable at {upstream}; "
+            "start llama.cpp on 127.0.0.1:8080 or pass --upstream"
+        )
+
+    binary = Path(args.binary)
+    if args.build:
+        subprocess.run(["cargo", "build", "-p", "dam-proxy"], check=True)
+    if not binary.exists():
+        raise SmokeBlocked(f"dam-proxy binary not found: {binary}; rerun with --build")
+
+    route_cases = selected_route_cases(args.routes)
+    route_results = [
+        run_route_smoke(args, binary=binary, upstream=upstream, route_case=route_case)
+        for route_case in route_cases
+    ]
+    return {
+        "upstream": upstream,
+        "routes_checked": [route.route_id for route in route_cases],
+        "route_results": route_results,
+        "cleanup": "kept" if args.keep_temp else "removed",
+    }
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -293,6 +497,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--binary", default="target/debug/dam-proxy")
     parser.add_argument("--build", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--keep-temp", action="store_true")
+    parser.add_argument(
+        "--route",
+        dest="routes",
+        action="append",
+        choices=[route.route_id for route in DEFAULT_ROUTE_CASES],
+        help="Representative MVP route ID to exercise; repeat to select a subset. Defaults to the route matrix.",
+    )
     parser.add_argument("--startup-timeout", type=float, default=10)
     parser.add_argument("--http-timeout", type=float, default=30)
     return parser.parse_args(argv)

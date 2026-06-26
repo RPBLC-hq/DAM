@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 dam-config.workspace = true
 dam-consent.workspace = true
+dam-core.workspace = true
 dam-daemon.workspace = true
 dam-diagnostics.workspace = true
 dam-net.workspace = true
@@ -14,4 +15,9 @@ dam-trust.workspace = true
 dam-vault.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+bs58.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

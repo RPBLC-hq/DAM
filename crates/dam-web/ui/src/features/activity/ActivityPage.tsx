@@ -14,11 +14,12 @@ import {
 import { ApiError, api, apiPost } from '@/lib/api/client'
 import { useI18n, type MessageKey } from '@/lib/i18n'
 import { useUrlSearchParam, useUrlSearchString } from '@/lib/url-search'
+import { activityDetectedLabel, activityIdentifierLabel } from './display'
+import { sinceTimestamp, type Since } from './since'
 import type { ActivityDecision, ActivityEvent, ActivityView } from './types'
 import type { WalletDetail, WalletKind } from '@/features/wallet/types'
 
 type Decision = 'all' | ActivityDecision
-type Since = '1h' | 'today' | '7d' | '30d' | 'all'
 
 const DECISION_VALUES: Decision[] = ['all', 'granted', 'sealed', 'denied']
 const SINCE_VALUES: Since[] = ['1h', 'today', '7d', '30d', 'all']
@@ -231,18 +232,6 @@ function ActivityRow({
   )
 }
 
-function activityDetectedLabel(item: ActivityEvent, unavailable: string): string {
-  if (item.value) return item.value
-  if (item.kind !== 'unknown') return `[${item.kind}]`
-  return unavailable
-}
-
-function activityIdentifierLabel(item: ActivityEvent): string {
-  if (item.reference) return item.reference
-  if (item.kind !== 'unknown') return item.kind
-  return item.audit_id
-}
-
 function ActivityIdentifier({ value }: { value: string }) {
   return (
     <span className="dam-activity__fact dam-activity__identifier">
@@ -334,17 +323,4 @@ function sinceLabelKey(value: Since): MessageKey {
   if (value === '7d') return 'activity.since.7d'
   if (value === '30d') return 'activity.since.30d'
   return 'activity.since.all'
-}
-
-function sinceTimestamp(value: Since): number | null {
-  if (value === 'all') return 0
-  const now = Math.floor(Date.now() / 1000)
-  if (value === '1h') return now - 3_600
-  if (value === 'today') {
-    const start = new Date()
-    start.setHours(0, 0, 0, 0)
-    return Math.floor(start.getTime() / 1000)
-  }
-  if (value === '30d') return now - 30 * 86_400
-  return now - 7 * 86_400
 }

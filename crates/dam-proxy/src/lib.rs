@@ -1390,7 +1390,7 @@ where
         return Ok(());
     }
 
-    let Some(authority) = https_authority(&request.uri, &request.headers) else {
+    let Some(request_authority) = https_authority(&request.uri, &request.headers) else {
         write_intercepted_error(
             &mut client_tls,
             StatusCode::BAD_REQUEST,
@@ -1399,17 +1399,108 @@ where
         .await?;
         return Ok(());
     };
-    let upstream_tcp = connect_target(&authority).await?;
-    let connector = upstream_tls_connector();
-    let server_name = ServerName::try_from(authority.host.clone())
-        .map_err(|_| "WebSocket target host is not a valid TLS server name".to_string())?;
-    let mut upstream_tls = connector
-        .connect(server_name, upstream_tcp)
-        .await
-        .map_err(|error| format!("WebSocket upstream TLS handshake failed: {error}"))?;
+    let target = route.target();
+    let inbound_plan = InboundTransformPlan {
+        resolve_references: protection_enabled && state.resolve_inbound_for_route(route),
+        protect_sensitive_data: protection_enabled && state.protect_inbound_for_route(route),
+    };
+    record_proxy_event(
+        &state,
+        operation_id,
+        LogLevel::Info,
+        LogEventType::ProxyForward,
+        "route_decision",
+        format!(
+            "route target={} provider={} method={} path={} adapter=web_socket protection_enabled={} resolve_inbound={} protect_inbound={}",
+            target.name,
+            target.provider,
+            request.method,
+            request.uri.path(),
+            protection_enabled,
+            inbound_plan.resolve_references,
+            inbound_plan.protect_sensitive_data,
+        ),
+    );
 
-    write_websocket_upgrade_request(&mut upstream_tls, &request, &authority).await?;
-    let upstream_head = read_intercepted_response_head(&mut upstream_tls).await?;
+    let Some((upstream_authority, upstream_uses_tls)) =
+        websocket_upstream_authority(&target.upstream)
+    else {
+        record_proxy_event(
+            &state,
+            operation_id,
+            LogLevel::Error,
+            LogEventType::ProxyFailure,
+            "invalid_websocket_upstream",
+            format!(
+                "WebSocket target upstream is invalid target={} provider={} adapter=web_socket",
+                target.name, target.provider
+            ),
+        );
+        write_intercepted_error(
+            &mut client_tls,
+            StatusCode::BAD_GATEWAY,
+            "WebSocket target upstream is invalid",
+        )
+        .await?;
+        return Ok(());
+    };
+    let upstream_tcp = connect_target(&upstream_authority).await?;
+
+    let protection = WebSocketProtection {
+        target_name: target.name.clone(),
+        target_provider: target.provider.clone(),
+        enabled: protection_enabled,
+        inbound_plan,
+        consent_scopes,
+    };
+
+    if upstream_uses_tls {
+        let connector = upstream_tls_connector();
+        let server_name = ServerName::try_from(upstream_authority.host.clone())
+            .map_err(|_| "WebSocket target host is not a valid TLS server name".to_string())?;
+        let upstream_tls = connector
+            .connect(server_name, upstream_tcp)
+            .await
+            .map_err(|error| format!("WebSocket upstream TLS handshake failed: {error}"))?;
+        finish_intercepted_websocket_upstream(
+            state,
+            operation_id,
+            client_tls,
+            upstream_tls,
+            &request,
+            &request_authority,
+            protection,
+        )
+        .await
+    } else {
+        finish_intercepted_websocket_upstream(
+            state,
+            operation_id,
+            client_tls,
+            upstream_tcp,
+            &request,
+            &request_authority,
+            protection,
+        )
+        .await
+    }
+}
+
+async fn finish_intercepted_websocket_upstream<T, U>(
+    state: Arc<ProxyState>,
+    operation_id: &str,
+    mut client_tls: tokio_rustls::server::TlsStream<T>,
+    mut upstream: U,
+    request: &InterceptedHttpRequest,
+    request_authority: &TargetAuthority,
+    protection: WebSocketProtection,
+) -> Result<(), String>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+    U: AsyncRead + AsyncWrite + Unpin,
+{
+    write_websocket_upgrade_request(&mut upstream, request, request_authority).await?;
+    let upstream_head = read_intercepted_response_head(&mut upstream).await?;
     if !websocket::response_is_switching_protocols(&upstream_head)? {
         write_intercepted_error(
             &mut client_tls,
@@ -1434,29 +1525,34 @@ where
         operation_id,
         LogLevel::Info,
         LogEventType::ProxyForward,
-        if protection_enabled {
+        if protection.enabled {
             "protected"
         } else {
             "bypassing"
         },
-        if protection_enabled {
+        if protection.enabled {
             "WebSocket tunnel established with connection protection snapshot enabled"
         } else {
             "WebSocket tunnel established with connection protection snapshot disabled"
         },
     );
+    record_proxy_event(
+        &state,
+        operation_id,
+        LogLevel::Info,
+        LogEventType::ProxyForward,
+        "provider_forward_start",
+        format!(
+            "provider forward start target={} provider={} adapter=web_socket resolve_inbound={} transform_streaming={}",
+            protection.target_name,
+            protection.target_provider,
+            protection.inbound_plan.resolve_references,
+            protection.inbound_plan.resolve_references
+                || protection.inbound_plan.protect_sensitive_data,
+        ),
+    );
 
-    let protection = WebSocketProtection {
-        target_name: route.target().name.clone(),
-        enabled: protection_enabled,
-        inbound_plan: InboundTransformPlan {
-            resolve_references: protection_enabled && state.resolve_inbound_for_route(route),
-            protect_sensitive_data: protection_enabled && state.protect_inbound_for_route(route),
-        },
-        consent_scopes,
-    };
-
-    proxy_websocket_frames(state, operation_id, client_tls, upstream_tls, protection).await
+    proxy_websocket_frames(state, operation_id, client_tls, upstream, protection).await
 }
 
 async fn proxy_websocket_frames<C, U>(
@@ -1513,6 +1609,7 @@ enum WebSocketClientFrameOutcome {
 #[derive(Clone)]
 struct WebSocketProtection {
     target_name: String,
+    target_provider: String,
     enabled: bool,
     inbound_plan: InboundTransformPlan,
     consent_scopes: Arc<Vec<String>>,
@@ -3006,6 +3103,39 @@ fn https_authority(uri: &Uri, headers: &HeaderMap) -> Option<TargetAuthority> {
                 .and_then(|value| value.to_str().ok())
         })
         .and_then(|value| parse_target_authority(value, 443))
+}
+
+fn websocket_upstream_authority(upstream: &str) -> Option<(TargetAuthority, bool)> {
+    let uri = upstream.parse::<Uri>().ok()?;
+    let scheme = uri.scheme_str().unwrap_or("https");
+    let uses_tls = match scheme {
+        scheme if scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("wss") => {
+            true
+        }
+        scheme if scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("ws") => false,
+        _ => return None,
+    };
+    let default_port = if uses_tls { 443 } else { 80 };
+    let authority = uri.authority()?.as_str();
+    if !authority_port_is_valid(authority) {
+        return None;
+    }
+    parse_target_authority(authority, default_port).map(|authority| (authority, uses_tls))
+}
+
+fn authority_port_is_valid(authority: &str) -> bool {
+    let authority = authority.trim();
+    if let Some(rest) = authority.strip_prefix('[') {
+        let Some((_, remainder)) = rest.split_once(']') else {
+            return false;
+        };
+        return remainder
+            .strip_prefix(':')
+            .is_none_or(|port| !port.is_empty() && port.parse::<u16>().is_ok());
+    }
+    authority
+        .rsplit_once(':')
+        .is_none_or(|(_, port)| !port.is_empty() && port.parse::<u16>().is_ok())
 }
 
 fn parse_target_authority(value: &str, default_port: u16) -> Option<TargetAuthority> {

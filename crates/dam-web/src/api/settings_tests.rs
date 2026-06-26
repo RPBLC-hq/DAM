@@ -194,6 +194,150 @@ fn settings_app_toggle_rejects_hidden_custom_profile_ids() {
 }
 
 #[test]
+fn settings_apps_include_detector_toggles_with_safe_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+    let state = test_state(dir.path());
+
+    let apps = app_settings_for_state_dir(&state, &state_dir).unwrap();
+    let claude = apps.iter().find(|app| app.id == "claude").unwrap();
+
+    assert_eq!(
+        claude
+            .detectors
+            .iter()
+            .map(|detector| detector.key.as_str())
+            .collect::<Vec<_>>(),
+        vec!["email", "phone", "ssn", "credit_card", "api_key"]
+    );
+    assert!(claude.detectors.iter().all(|detector| detector.enabled));
+}
+
+#[test]
+fn settings_detector_toggle_rejects_hidden_profile_and_unknown_detector_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+
+    let hidden_profile = set_profile_detector_preferences(
+        &state_dir,
+        "example-mail",
+        &[DetectorPatch {
+            key: "email".into(),
+            enabled: false,
+        }],
+    )
+    .unwrap_err();
+    assert_eq!(hidden_profile.code, WebErrorCode::InvalidRequest);
+
+    let unknown_key = set_profile_detector_preferences(
+        &state_dir,
+        "claude",
+        &[DetectorPatch {
+            key: "totally_unknown".into(),
+            enabled: false,
+        }],
+    )
+    .unwrap_err();
+    assert_eq!(unknown_key.code, WebErrorCode::InvalidRequest);
+}
+
+#[test]
+fn detector_preferences_persist_and_relax_only_selected_kinds() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+    let integration_dir = state_dir.join("integrations");
+    dam_integrations::ensure_bundled_profile_files(&integration_dir).unwrap();
+
+    set_profile_detector_preferences(
+        &state_dir,
+        "claude",
+        &[
+            DetectorPatch {
+                key: "email".into(),
+                enabled: false,
+            },
+            DetectorPatch {
+                key: "phone".into(),
+                enabled: true,
+            },
+        ],
+    )
+    .unwrap();
+
+    let prefs = read_detector_preferences(&state_dir).unwrap();
+    assert_eq!(
+        prefs.profiles.get("claude").unwrap().disabled_kinds,
+        vec!["email".to_string()]
+    );
+
+    let mut config = dam_config::DamConfig::default();
+    config.traffic.profile = dam_net::llm_mvp_profile();
+    let profile_ids = vec!["claude".to_string(), "chatgpt".to_string()];
+    apply_detector_preferences_to_config(&mut config, &profile_ids, &prefs, &integration_dir)
+        .unwrap();
+    let anthropic_api = config
+        .traffic
+        .profile
+        .apps
+        .iter()
+        .find(|app| app.id == "anthropic-api")
+        .unwrap();
+
+    assert_eq!(
+        anthropic_api.outbound.filter.types.get("email"),
+        Some(&dam_net::SensitiveDataAction::Allow)
+    );
+    assert_eq!(anthropic_api.outbound.filter.types.get("phone"), None);
+    let openai_api = config
+        .traffic
+        .profile
+        .apps
+        .iter()
+        .find(|app| app.id == "openai-api")
+        .unwrap();
+    assert_eq!(openai_api.outbound.filter.types.get("email"), None);
+}
+
+#[test]
+fn detector_preference_write_rolls_back_on_reconcile_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let state_dir = dir.path().join("state");
+
+    set_profile_detector_preferences(
+        &state_dir,
+        "claude",
+        &[DetectorPatch {
+            key: "email".into(),
+            enabled: false,
+        }],
+    )
+    .unwrap();
+
+    let mut reconcile_calls = 0;
+    let error = set_profile_detectors_in_state_dir(
+        &state_dir,
+        "claude",
+        &[DetectorPatch {
+            key: "email".into(),
+            enabled: true,
+        }],
+        || {
+            reconcile_calls += 1;
+            Err(WebError::new(WebErrorCode::DaemonUnreachable))
+        },
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code, WebErrorCode::DaemonUnreachable);
+    assert_eq!(reconcile_calls, 2);
+    let prefs = read_detector_preferences(&state_dir).unwrap();
+    assert_eq!(
+        prefs.profiles.get("claude").unwrap().disabled_kinds,
+        vec!["email".to_string()]
+    );
+}
+
+#[test]
 fn pending_network_extension_approval_keeps_profile_toggle_state() {
     assert_eq!(
         network_extension_result_to_reconcile_outcome(

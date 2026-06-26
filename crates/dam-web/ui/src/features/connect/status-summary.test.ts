@@ -83,6 +83,66 @@ test('maps connected-setup milestone before trust completion to connected copy',
   assert.equal(connectNavLabelKey(connectView), 'nav.connecting')
 })
 
+test('maps waiting-for-reboot setup to connecting copy', () => {
+  const connectView = view({
+    setup_plan: {
+      current_step_id: 'ne_reboot',
+      steps: [
+        step({ id: 'ne_enable', label: 'Enable network extension', state: 'done', detail: 'enabled' }),
+        step({ id: 'ne_reboot', label: 'Restart macOS', state: 'blocked', detail: 'waiting_for_reboot' }),
+      ],
+    },
+  })
+
+  assert.equal(connectStatusMessageKey(connectView), 'connect.summary.waiting_for_reboot')
+  assert.equal(connectNavLabelKey(connectView), 'nav.connecting')
+})
+
+test('maps failed setup to repair-needed copy', () => {
+  const connectView = view({
+    state: 'degraded',
+    message: 'degraded',
+    setup_plan: {
+      current_step_id: 'ne_start',
+      steps: [
+        step({
+          id: 'ne_start',
+          label: 'Enable protection layer',
+          state: 'failed',
+          detail: 'failed',
+          reason_code: 'setup_step_failed',
+        }),
+      ],
+    },
+  })
+
+  assert.equal(connectStatusMessageKey(connectView), 'connect.summary.failed')
+  assert.equal(connectNavLabelKey(connectView), 'nav.repairNeeded')
+})
+
+test('maps generic needs-setup state without setup progress to setup-needed copy', () => {
+  const connectView = view({
+    setup_plan: {
+      current_step_id: 'setup',
+      steps: [],
+    },
+  })
+
+  assert.equal(connectStatusMessageKey(connectView), 'connect.setupStatus')
+  assert.equal(connectNavLabelKey(connectView), 'nav.setupNeeded')
+})
+
+test('maps disconnected state to the off brand-bar label', () => {
+  const connectView = view({
+    state: 'disconnected',
+    message: 'disconnected',
+    setup_plan: null,
+  })
+
+  assert.equal(connectStatusMessageKey(connectView), 'connect.disconnectedLede')
+  assert.equal(connectNavLabelKey(connectView), 'nav.off')
+})
+
 test('maps rolled-back setup to repair-needed copy', () => {
   const connectView = view({
     state: 'degraded',

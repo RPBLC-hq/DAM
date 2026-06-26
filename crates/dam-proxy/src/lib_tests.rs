@@ -190,6 +190,7 @@ fn inbound_plan(resolve_references: bool, protect_sensitive_data: bool) -> Inbou
 fn websocket_protection(enabled: bool, inbound_plan: InboundTransformPlan) -> WebSocketProtection {
     WebSocketProtection {
         target_name: "test-openai".to_string(),
+        target_provider: "openai-compatible".to_string(),
         enabled,
         inbound_plan,
         consent_scopes: Arc::new(Vec::new()),
@@ -227,6 +228,33 @@ async fn spawn_app(app: Router) -> String {
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
         axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}")
+}
+
+async fn spawn_capture_websocket_upstream(seen_text: Arc<Mutex<Option<String>>>) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request_head = read_until_headers(&mut stream).await;
+        let request_head = String::from_utf8_lossy(&request_head);
+        assert!(request_head.starts_with("GET /backend-api/realtime HTTP/1.1"));
+        assert!(request_head.contains("host: chatgpt.com"));
+        tokio::io::AsyncWriteExt::write_all(
+            &mut stream,
+            b"HTTP/1.1 101 Switching Protocols\r\nconnection: Upgrade\r\nupgrade: websocket\r\n\r\n",
+        )
+        .await
+        .unwrap();
+        let frame = websocket::read_frame(&mut stream).await.unwrap().unwrap();
+        let text = String::from_utf8(frame.payload).unwrap();
+        *seen_text.lock().unwrap() = Some(text);
+        let _ = websocket::write_unmasked_frame(
+            &mut stream,
+            &websocket::WebSocketFrame::close(1000, ""),
+        )
+        .await;
     });
     format!("http://{addr}")
 }
@@ -2243,6 +2271,168 @@ async fn proxy_value_probe_confirms_https_interception_forwards_token_not_raw_va
     let response_body = response.split("\r\n\r\n").nth(1).unwrap_or_default();
     assert_probe_response_proves_upstream_was_tokenized(response_body);
     let _ = shutdown_tx.send(());
+}
+
+#[tokio::test]
+async fn transparent_chatgpt_websocket_route_protects_outbound_text_frames() {
+    let upstream_seen = Arc::new(Mutex::new(None::<String>));
+    let upstream = spawn_capture_websocket_upstream(upstream_seen.clone()).await;
+    let mut config = proxy_config_with_provider(upstream.clone(), "openai-compatible");
+    config.proxy.targets[0].name = "chatgpt-web".to_string();
+    config.proxy.targets[0].auth = dam_net::UpstreamAuthConfig::default();
+    config
+        .traffic
+        .profile
+        .apps
+        .push(dam_net::TrafficAppProfile {
+            id: "chatgpt-web".to_string(),
+            name: Some("ChatGPT Web loopback smoke".to_string()),
+            enabled: true,
+            priority: 0,
+            match_rules: dam_net::TrafficMatch {
+                domains: vec!["chatgpt.com".to_string(), "ab.chatgpt.com".to_string()],
+                ports: vec![443],
+                protocols: vec![dam_net::TrafficProtocol::WebSocket],
+                ..dam_net::TrafficMatch::default()
+            },
+            action: dam_net::TrafficAction::Inspect,
+            adapter: dam_net::ProtocolAdapterKind::WebSocket,
+            provider: Some("openai-compatible".to_string()),
+            target_name: Some("chatgpt-web".to_string()),
+            upstream: Some(upstream),
+            auth: dam_net::UpstreamAuthConfig::default(),
+            steps: Vec::new(),
+            outbound: dam_net::TrafficDirectionPolicy::default(),
+            inbound: dam_net::TrafficInboundPolicy {
+                resolve_references: true,
+                ..dam_net::TrafficInboundPolicy::default()
+            },
+        });
+    let log_path = config.log.sqlite_path.clone();
+    let dir = tempfile::tempdir().unwrap();
+    let artifact = dam_trust::generate_local_ca_artifact_at(dir.path(), 1).unwrap();
+    let mut record = artifact.record;
+    record.installed_at_unix = Some(1);
+    let trust = dam_trust::TrustState {
+        mode: dam_trust::TrustMode::LocalCa,
+        local_ca: Some(record),
+        ..dam_trust::TrustState::default()
+    };
+    let interception = TransparentInterceptionConfig {
+        state_dir: dir.path().to_path_buf(),
+        network_mode: dam_net::CaptureMode::SystemProxy,
+        system_proxy_active: true,
+        tun_active: false,
+        routes: dam_net::default_traffic_routes(),
+        trust,
+        user_consented: true,
+        protection_control_path: None,
+    };
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        serve_transparent_with_shutdown(listener, config, interception, async {
+            let _ = shutdown_rx.await;
+        })
+        .await
+        .unwrap();
+    });
+
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    tokio::io::AsyncWriteExt::write_all(
+        &mut stream,
+        b"CONNECT chatgpt.com:443 HTTP/1.1\r\nHost: chatgpt.com:443\r\n\r\n",
+    )
+    .await
+    .unwrap();
+    let connect_response = read_until_headers(&mut stream).await;
+    assert!(String::from_utf8_lossy(&connect_response).starts_with("HTTP/1.1 200"));
+
+    let mut roots = RootCertStore::empty();
+    let ca_der = dam_trust::issue_local_ca_leaf_certificate(dir.path(), "chatgpt.com")
+        .unwrap()
+        .ca_certificate_der;
+    roots.add(CertificateDer::from(ca_der)).unwrap();
+    let client_config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(client_config));
+    let server_name = ServerName::try_from("chatgpt.com".to_string()).unwrap();
+    let mut tls = connector.connect(server_name, stream).await.unwrap();
+
+    tokio::io::AsyncWriteExt::write_all(
+        &mut tls,
+        b"GET /backend-api/realtime HTTP/1.1\r\nHost: chatgpt.com\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n",
+    )
+    .await
+    .unwrap();
+    let upgrade_response = read_until_headers(&mut tls).await;
+    assert!(String::from_utf8_lossy(&upgrade_response).starts_with("HTTP/1.1 101"));
+    websocket::write_masked_frame(
+        &mut tls,
+        &websocket::WebSocketFrame {
+            fin: true,
+            opcode: websocket::OPCODE_TEXT,
+            payload: br#"{"type":"input.delta","delta":"email scrabb@jnjjj.com"}"#.to_vec(),
+        },
+    )
+    .await
+    .unwrap();
+    websocket::write_masked_frame(&mut tls, &websocket::WebSocketFrame::close(1000, ""))
+        .await
+        .unwrap();
+
+    let upstream_body = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Some(value) = upstream_seen.lock().unwrap().clone() {
+                return value;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(!upstream_body.contains(PROBE_EMAIL));
+    assert!(upstream_body.contains("[email:"));
+    let logs = dam_log::LogStore::open(log_path).unwrap().list().unwrap();
+    assert!(logs.iter().any(|entry| {
+        entry.action.as_deref() == Some("route_decision")
+            && entry.message.contains("target=chatgpt-web")
+            && entry.message.contains("adapter=web_socket")
+    }));
+    assert!(logs.iter().any(|entry| {
+        entry.action.as_deref() == Some("provider_forward_start")
+            && entry.message.contains("target=chatgpt-web")
+            && entry.message.contains("provider=openai-compatible")
+            && entry.message.contains("adapter=web_socket")
+    }));
+    assert!(
+        logs.iter().all(|entry| {
+            ![
+                entry.kind.as_deref(),
+                entry.value.as_deref(),
+                entry.reference.as_deref(),
+                entry.action.as_deref(),
+                Some(entry.message.as_str()),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|field| field.contains(PROBE_EMAIL))
+        }),
+        "logs must not contain raw synthetic values in any persisted string field"
+    );
+    let _ = shutdown_tx.send(());
+}
+
+#[test]
+fn websocket_upstream_authority_rejects_unparseable_route_targets() {
+    assert!(websocket_upstream_authority("http://127.0.0.1:18080").is_some());
+    assert!(websocket_upstream_authority("https://chatgpt.example.test").is_some());
+    assert!(websocket_upstream_authority("http://[::1]:18080").is_some());
+    assert!(websocket_upstream_authority("ftp://chatgpt.example.test").is_none());
+    assert!(websocket_upstream_authority("http://[::1]:999999").is_none());
+    assert!(websocket_upstream_authority("http://chatgpt.example.test:999999").is_none());
 }
 
 #[tokio::test]

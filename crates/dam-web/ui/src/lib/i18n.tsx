@@ -117,6 +117,8 @@ export type MessageKey =
   | 'request.deny'
   | 'connect.grants'
   | 'connect.grantsAria'
+  | 'connect.blockedToday'
+  | 'connect.blockedTodayAria'
   | 'connect.redactedToday'
   | 'connect.redactedTodayAria'
   | 'connect.appsMediated'
@@ -198,6 +200,7 @@ export type MessageKey =
   | 'settings.appsProfile'
   | 'settings.appsTarget'
   | 'settings.appsInstallState'
+  | 'settings.appsDetectorHint'
   | 'settings.appsModified'
   | 'settings.installState.applied'
   | 'settings.installState.modified'
@@ -477,6 +480,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'request.deny': 'deny',
     'connect.grants': 'allowed',
     'connect.grantsAria': 'open allowed wallet values',
+    'connect.blockedToday': 'blocked today',
+    'connect.blockedTodayAria': 'open blocked activity',
     'connect.redactedToday': 'redacted today',
     'connect.redactedTodayAria': 'open redacted activity',
     'connect.appsMediated': 'apps mediated',
@@ -584,6 +589,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'settings.appsProfile': 'profile',
     'settings.appsTarget': 'profile file',
     'settings.appsInstallState': 'profile state',
+    'settings.appsDetectorHint':
+      'Each profile starts with DAM’s current protection defaults. Turning one off allows that kind for this app only.',
     'settings.appsModified':
       'A profile file changed outside DAM. Review the file before changing it.',
     'settings.installState.applied': 'saved',
@@ -886,6 +893,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'request.deny': 'refuser',
     'connect.grants': 'autorisés',
     'connect.grantsAria': 'voir les valeurs autorisées du portefeuille',
+    'connect.blockedToday': 'bloqués aujourd’hui',
+    'connect.blockedTodayAria': 'voir l’activité bloquée',
     'connect.redactedToday': 'masqués aujourd’hui',
     'connect.redactedTodayAria': 'voir l’activité masquée',
     'connect.appsMediated': 'apps encadrées',
@@ -993,6 +1002,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     'settings.appsProfile': 'profil',
     'settings.appsTarget': 'fichier profil',
     'settings.appsInstallState': 'état du profil',
+    'settings.appsDetectorHint':
+      'Chaque profil démarre avec les protections actuelles de DAM. Désactiver une détection autorise ce type pour cette app seulement.',
     'settings.appsModified':
       'Un fichier profil a changé hors de DAM. Vérifiez le fichier avant de le modifier.',
     'settings.installState.applied': 'enregistré',

@@ -8,6 +8,8 @@ use std::path::Path;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod direct_access;
+
 pub const DEFAULT_SCOPE: &str = "global";
 
 #[derive(Debug, thiserror::Error)]
@@ -26,6 +28,9 @@ pub enum ConsentError {
 
     #[error("vault read failed")]
     VaultRead,
+
+    #[error("request duration must be positive")]
+    InvalidDuration,
 }
 
 impl From<VaultReadError> for ConsentError {
@@ -82,6 +87,83 @@ pub struct ConsentMatch {
     pub kind: SensitiveType,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirectAccessStatus {
+    Pending,
+    Approved,
+    Denied,
+    Expired,
+    Revoked,
+    Consumed,
+}
+
+impl DirectAccessStatus {
+    pub fn tag(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Approved => "approved",
+            Self::Denied => "denied",
+            Self::Expired => "expired",
+            Self::Revoked => "revoked",
+            Self::Consumed => "consumed",
+        }
+    }
+
+    fn from_tag(tag: &str) -> Option<Self> {
+        match tag {
+            "pending" => Some(Self::Pending),
+            "approved" => Some(Self::Approved),
+            "denied" => Some(Self::Denied),
+            "expired" => Some(Self::Expired),
+            "revoked" => Some(Self::Revoked),
+            "consumed" => Some(Self::Consumed),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectAccessRequest {
+    pub request_id: String,
+    pub grant_id: Option<String>,
+    pub kind: SensitiveType,
+    pub value_fingerprint: String,
+    pub vault_key: String,
+    pub actor_id: String,
+    pub requesting_actor: String,
+    pub purpose: String,
+    pub reason: Option<String>,
+    pub requested_duration_seconds: u64,
+    pub pending_expires_at: i64,
+    pub status: DirectAccessStatus,
+    pub decision_reason: Option<String>,
+    pub created_at: i64,
+    pub decided_at: Option<i64>,
+    pub grant_expires_at: Option<i64>,
+    pub max_resolves: u64,
+    pub resolve_count: u64,
+    pub correlation_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateDirectAccessRequest {
+    pub vault_key: String,
+    pub actor_id: String,
+    pub requesting_actor: String,
+    pub purpose: String,
+    pub reason: Option<String>,
+    pub requested_duration_seconds: u64,
+    pub pending_timeout_seconds: u64,
+    pub correlation_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectAccessResolveResult {
+    pub request: DirectAccessRequest,
+    pub value: Option<String>,
+    pub outcome_reason: Option<String>,
+}
+
 pub struct ConsentStore {
     conn: Mutex<Connection>,
 }
@@ -119,6 +201,7 @@ impl ConsentStore {
                 ON consents(vault_key);
             ",
         )?;
+        direct_access::initialize_schema(&conn)?;
 
         Ok(Self {
             conn: Mutex::new(conn),
@@ -219,6 +302,66 @@ impl ConsentStore {
             },
             scope,
         )
+    }
+
+    pub fn create_direct_access_request(
+        &self,
+        request: &CreateDirectAccessRequest,
+        vault: &(impl VaultReader + ?Sized),
+    ) -> ConsentResult<DirectAccessRequest> {
+        let conn = self.conn.lock().expect("consent sqlite mutex poisoned");
+        direct_access::create_request(&conn, request, vault)
+    }
+
+    pub fn list_direct_access_requests(&self) -> ConsentResult<Vec<DirectAccessRequest>> {
+        let conn = self.conn.lock().expect("consent sqlite mutex poisoned");
+        direct_access::list_requests(&conn)
+    }
+
+    pub fn direct_access_request(
+        &self,
+        request_id: &str,
+    ) -> ConsentResult<Option<DirectAccessRequest>> {
+        let conn = self.conn.lock().expect("consent sqlite mutex poisoned");
+        direct_access::get_request(&conn, request_id)
+    }
+
+    pub fn approve_direct_access_request(
+        &self,
+        request_id: &str,
+        grant_duration_seconds: u64,
+        decision_reason: Option<String>,
+    ) -> ConsentResult<Option<DirectAccessRequest>> {
+        let conn = self.conn.lock().expect("consent sqlite mutex poisoned");
+        direct_access::approve_request(&conn, request_id, grant_duration_seconds, decision_reason)
+    }
+
+    pub fn deny_direct_access_request(
+        &self,
+        request_id: &str,
+        decision_reason: Option<String>,
+    ) -> ConsentResult<Option<DirectAccessRequest>> {
+        let conn = self.conn.lock().expect("consent sqlite mutex poisoned");
+        direct_access::deny_request(&conn, request_id, decision_reason)
+    }
+
+    pub fn revoke_direct_access_request(
+        &self,
+        request_id: &str,
+        decision_reason: Option<String>,
+    ) -> ConsentResult<Option<DirectAccessRequest>> {
+        let conn = self.conn.lock().expect("consent sqlite mutex poisoned");
+        direct_access::revoke_request(&conn, request_id, decision_reason)
+    }
+
+    pub fn resolve_direct_access_request(
+        &self,
+        request_id: &str,
+        actor_id: &str,
+        vault: &(impl VaultReader + ?Sized),
+    ) -> ConsentResult<Option<DirectAccessResolveResult>> {
+        let conn = self.conn.lock().expect("consent sqlite mutex poisoned");
+        direct_access::resolve_request(&conn, request_id, actor_id, vault)
     }
 
     pub fn active_for_value(
@@ -464,6 +607,16 @@ fn generate_consent_id() -> String {
     format!("consent_{}", bs58::encode(uuid.as_bytes()).into_string())
 }
 
+pub(crate) fn generate_request_id() -> String {
+    let uuid = uuid::Uuid::new_v4();
+    format!("request_{}", bs58::encode(uuid.as_bytes()).into_string())
+}
+
+pub(crate) fn generate_grant_id() -> String {
+    let uuid = uuid::Uuid::new_v4();
+    format!("grant_{}", bs58::encode(uuid.as_bytes()).into_string())
+}
+
 fn normalize_scope(scope: &str) -> String {
     let trimmed = scope.trim();
     if trimmed.is_empty() {
@@ -484,7 +637,7 @@ fn lookup_scopes(scopes: &[String]) -> Vec<String> {
     normalized
 }
 
-fn now_unix_secs() -> ConsentResult<i64> {
+pub(crate) fn now_unix_secs() -> ConsentResult<i64> {
     let duration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| ConsentError::Clock)?;
@@ -494,3 +647,7 @@ fn now_unix_secs() -> ConsentResult<i64> {
 #[cfg(test)]
 #[path = "lib_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "direct_access_tests.rs"]
+mod direct_access_tests;

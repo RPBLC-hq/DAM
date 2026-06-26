@@ -23,6 +23,8 @@ fn defaults_are_local_development_safe() {
     assert_eq!(config.consent.sqlite_path, PathBuf::from("consent.db"));
     assert_eq!(config.consent.default_ttl_seconds, 86_400);
     assert!(config.consent.mcp_write_enabled);
+    assert_eq!(config.consent.pending_timeout_seconds, 60);
+    assert_eq!(config.consent.max_request_duration_seconds, 86_400);
     assert_eq!(
         config
             .traffic
@@ -120,6 +122,8 @@ fn config_file_values_are_loaded() {
             path = "file-consent.db"
             default_ttl_seconds = 3600
             mcp_write_enabled = false
+            pending_timeout_seconds = 120
+            max_request_duration_seconds = 1800
 
             [policy]
             default_action = "redact"
@@ -174,6 +178,8 @@ fn config_file_values_are_loaded() {
     assert_eq!(config.consent.sqlite_path, PathBuf::from("file-consent.db"));
     assert_eq!(config.consent.default_ttl_seconds, 3600);
     assert!(!config.consent.mcp_write_enabled);
+    assert_eq!(config.consent.pending_timeout_seconds, 120);
+    assert_eq!(config.consent.max_request_duration_seconds, 1800);
     assert_eq!(config.policy.default_action, PolicyAction::Redact);
     assert!(!config.policy.deduplicate_replacements);
     assert_eq!(
@@ -248,6 +254,8 @@ fn env_overrides_config_file() {
             ("DAM_CONSENT_PATH", "env-consent.db"),
             ("DAM_CONSENT_DEFAULT_TTL_SECONDS", "7200"),
             ("DAM_CONSENT_MCP_WRITE_ENABLED", "false"),
+            ("DAM_CONSENT_PENDING_TIMEOUT_SECONDS", "90"),
+            ("DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS", "600"),
             ("DAM_POLICY_DEDUPLICATE_REPLACEMENTS", "false"),
             ("DAM_TRAFFIC_ENABLED_APPS", "anthropic-api, chatgpt-web"),
             ("DAM_PROXY_ENABLED", "true"),
@@ -267,6 +275,8 @@ fn env_overrides_config_file() {
     assert_eq!(config.consent.sqlite_path, PathBuf::from("env-consent.db"));
     assert_eq!(config.consent.default_ttl_seconds, 7200);
     assert!(!config.consent.mcp_write_enabled);
+    assert_eq!(config.consent.pending_timeout_seconds, 90);
+    assert_eq!(config.consent.max_request_duration_seconds, 600);
     assert!(!config.policy.deduplicate_replacements);
     assert_eq!(
         config.traffic.enabled_app_ids,
@@ -289,6 +299,71 @@ fn env_overrides_config_file() {
             .map(|key| key.expose()),
         Some("secret-value")
     );
+}
+
+#[test]
+fn consent_direct_access_durations_are_validated() {
+    let invalid_values = [
+        (
+            env(&[("DAM_CONSENT_PENDING_TIMEOUT_SECONDS", "0")]),
+            "consent.pending_timeout_seconds",
+            "expected a positive integer",
+        ),
+        (
+            env(&[("DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS", "0")]),
+            "consent.max_request_duration_seconds",
+            "expected an integer >= 30",
+        ),
+        (
+            env(&[("DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS", "29")]),
+            "consent.max_request_duration_seconds",
+            "expected an integer >= 30",
+        ),
+    ];
+
+    for (env, expected_field, expected_message) in invalid_values {
+        let error = load_with_env(&ConfigOverrides::default(), env).unwrap_err();
+
+        assert!(matches!(
+            error,
+            ConfigError::InvalidValue { field, .. } if field == expected_field
+        ));
+        assert!(
+            error.to_string().contains(expected_message),
+            "error {error} did not mention {expected_message}"
+        );
+    }
+}
+
+#[test]
+fn config_file_rejects_unusable_direct_access_duration() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("dam.toml");
+    fs::write(
+        &config_path,
+        r#"
+            [consent]
+            max_request_duration_seconds = 1
+        "#,
+    )
+    .unwrap();
+
+    let error = load_with_env(
+        &ConfigOverrides {
+            config_path: Some(config_path),
+            ..ConfigOverrides::default()
+        },
+        env(&[]),
+    )
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        ConfigError::InvalidValue {
+            field: "consent.max_request_duration_seconds",
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -600,6 +675,36 @@ fn network_ai_routes_config_is_rejected_with_profile_migration_message() {
         }
     ));
     assert!(error.to_string().contains("traffic profile JSON apps"));
+}
+
+#[test]
+fn consent_direct_access_durations_must_be_usable() {
+    let zero_pending = load_with_env(
+        &ConfigOverrides::default(),
+        env(&[("DAM_CONSENT_PENDING_TIMEOUT_SECONDS", "0")]),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        zero_pending,
+        ConfigError::InvalidValue {
+            field: "consent.pending_timeout_seconds",
+            ..
+        }
+    ));
+
+    let short_max = load_with_env(
+        &ConfigOverrides::default(),
+        env(&[("DAM_CONSENT_MAX_REQUEST_DURATION_SECONDS", "29")]),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        short_max,
+        ConfigError::InvalidValue {
+            field: "consent.max_request_duration_seconds",
+            ..
+        }
+    ));
+    assert!(short_max.to_string().contains(">= 30"));
 }
 
 #[test]

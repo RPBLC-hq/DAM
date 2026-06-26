@@ -3,7 +3,14 @@ use std::env;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
 
+mod direct_access;
+
+use direct_access::{ActorBinding, bound_actor_binding};
+#[cfg(test)]
+use direct_access::{bound_actor_binding_from_values, label_bound_actor_id};
+
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+const MIN_DIRECT_ACCESS_DURATION_SECONDS: u64 = 30;
 
 #[derive(Debug, Clone, Default)]
 struct CliArgs {
@@ -125,6 +132,8 @@ fn tools(config: &dam_config::DamConfig) -> Vec<Value> {
         }),
     ];
 
+    tools.extend(direct_access::tool_definitions(config));
+
     if config.consent.mcp_write_enabled {
         tools.push(json!({
             "name": "dam_consent_grant",
@@ -137,15 +146,6 @@ fn tools(config: &dam_config::DamConfig) -> Vec<Value> {
                     "reason": { "type": "string" }
                 },
                 "required": ["vault_key"]
-            }
-        }));
-        tools.push(json!({
-            "name": "dam_consent_revoke",
-            "description": "Revoke a DAM passthrough consent by consent id.",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "consent_id": { "type": "string" } },
-                "required": ["consent_id"]
             }
         }));
     }
@@ -185,6 +185,15 @@ fn call_tool(
     name: &str,
     arguments: &Value,
 ) -> Result<String, String> {
+    call_tool_with_actor(config, name, arguments, bound_actor_binding())
+}
+
+fn call_tool_with_actor(
+    config: &dam_config::DamConfig,
+    name: &str,
+    arguments: &Value,
+    actor: Option<ActorBinding>,
+) -> Result<String, String> {
     match name {
         "dam_status" => dam_status_tool(),
         "dam_setup_plan" => dam_setup_plan_tool(config),
@@ -192,11 +201,6 @@ fn call_tool(
         "dam_setup_rescue" => dam_setup_rescue_tool(arguments),
         "dam_setup_repair" => dam_setup_repair_tool(config, arguments),
         "dam_setup_export_diagnostics" => dam_setup_export_diagnostics_tool(config),
-        "dam_consent_list" => {
-            let store = open_consent_store(config)?;
-            let entries = store.list().map_err(|error| error.to_string())?;
-            Ok(serde_json::to_string(&json!({ "consents": entries_to_json(&entries) })).unwrap())
-        }
         "dam_consent_grant" if config.consent.mcp_write_enabled => {
             let store = open_consent_store(config)?;
             let vault_key = arguments
@@ -217,19 +221,8 @@ fn call_tool(
                 .map_err(|error| error.to_string())?;
             Ok(serde_json::to_string(&entry_to_json(&entry)).unwrap())
         }
-        "dam_consent_revoke" if config.consent.mcp_write_enabled => {
-            let store = open_consent_store(config)?;
-            let consent_id = arguments
-                .get("consent_id")
-                .and_then(Value::as_str)
-                .ok_or_else(|| "consent_id is required".to_string())?;
-            let revoked = store
-                .revoke(consent_id)
-                .map_err(|error| error.to_string())?;
-            Ok(serde_json::to_string(&json!({ "revoked": revoked })).unwrap())
-        }
-        "dam_consent_request" => Err("dam_consent_request is parked until dam-notify".to_string()),
-        _ => Err("unknown or disabled tool".to_string()),
+        _ => direct_access::maybe_call_tool(config, name, arguments, actor)
+            .unwrap_or_else(|| Err("unknown or disabled tool".to_string())),
     }
 }
 

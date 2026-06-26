@@ -17,6 +17,8 @@ backend = "sqlite"
 path = "consent.db"
 default_ttl_seconds = 86400
 mcp_write_enabled = true
+pending_timeout_seconds = 60
+max_request_duration_seconds = 86400
 
 [policy]
 default_action = "tokenize"

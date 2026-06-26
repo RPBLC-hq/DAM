@@ -35,6 +35,8 @@ class DamBuildScriptTests(unittest.TestCase):
 
         self.assertIn("agent-protection-smoke", result.stdout)
         self.assertIn("agent-visible-evidence-smoke", result.stdout)
+        self.assertIn("agent-websocket-smoke", result.stdout)
+        self.assertIn("agent-dogfood-verify", result.stdout)
         self.assertIn("agent-recovery-smoke", result.stdout)
         self.assertIn("agent-repair-smoke", result.stdout)
         self.assertIn("DAM_AGENT_E2E_UPSTREAM", result.stdout)
@@ -44,6 +46,8 @@ class DamBuildScriptTests(unittest.TestCase):
         self.assertIn("DAM_AGENT_E2E_WEB_ADDR", result.stdout)
         self.assertIn("DAM_AGENT_E2E_BUILD", result.stdout)
         self.assertIn("DAM_AGENT_E2E_KEEP_TEMP", result.stdout)
+        self.assertIn("DAM_AGENT_E2E_WEB_ADDR", result.stdout)
+        self.assertIn("DAM_AGENT_E2E_VERIFY_SCRIPT", result.stdout)
         self.assertIn("DAM_AGENT_STATE_DIR", result.stdout)
 
     def test_agent_protection_smoke_invokes_local_smoke_script_with_safe_defaults(self):
@@ -154,6 +158,113 @@ class DamBuildScriptTests(unittest.TestCase):
                 ],
             )
 
+    def test_agent_websocket_smoke_invokes_focused_loopback_route_test(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "argv.txt"
+            cargo_stub = Path(temp_dir) / "cargo"
+            cargo_stub.write_text(
+                textwrap.dedent(
+                    f"""
+                    #!/usr/bin/env python3
+                    import pathlib
+                    import sys
+                    pathlib.Path({str(output_path)!r}).write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
+                    raise SystemExit(0)
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            cargo_stub.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{temp_dir}{os.pathsep}{env['PATH']}"
+
+            subprocess.run(
+                [str(BUILD_SCRIPT), "agent-websocket-smoke"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            self.assertEqual(
+                output_path.read_text(encoding="utf-8").splitlines(),
+                [
+                    "test",
+                    "-q",
+                    "-p",
+                    "dam-proxy",
+                    "transparent_chatgpt_websocket_route_protects_outbound_text_frames",
+                    "--",
+                    "--nocapture",
+                ],
+            )
+
+    def test_agent_dogfood_verify_invokes_vps_verifier_with_shared_proxy_web_args(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "argv.txt"
+            stub_path = Path(temp_dir) / "verify_stub.py"
+            stub_path.write_text(
+                textwrap.dedent(
+                    f"""
+                    import pathlib
+                    import sys
+                    pathlib.Path({str(output_path)!r}).write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
+                    raise SystemExit(0)
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "DAM_AGENT_E2E_VERIFY_SCRIPT": str(stub_path),
+                    "DAM_AGENT_E2E_UPSTREAM": "http://127.0.0.1:18080",
+                    "DAM_AGENT_E2E_LISTEN": "127.0.0.1:17828",
+                    "DAM_AGENT_E2E_WEB_ADDR": "127.0.0.1:12896",
+                    "DAM_AGENT_STATE_DIR": "/tmp/dam-hermes",
+                    "DAM_AGENT_E2E_BUILD": "0",
+                    "DAM_AGENT_E2E_KEEP_TEMP": "1",
+                }
+            )
+            subprocess.run(
+                [str(BUILD_SCRIPT), "agent-dogfood-verify"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            argv = output_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(
+                argv,
+                [
+                    "verify",
+                    "--upstream",
+                    "http://127.0.0.1:18080",
+                    "--listen",
+                    "127.0.0.1:17828",
+                    "--web-addr",
+                    "127.0.0.1:12896",
+                    "--proxy-binary",
+                    str(ROOT / "target" / "debug" / "dam-proxy"),
+                    "--web-binary",
+                    str(ROOT / "target" / "debug" / "dam-web"),
+                    "--startup-timeout",
+                    "30",
+                    "--http-timeout",
+                    "60",
+                    "--state-dir",
+                    "/tmp/dam-hermes",
+                    "--no-build",
+                    "--keep-state",
+                ],
+            )
+
     def test_agent_visible_evidence_smoke_allocates_free_loopback_web_addr_by_default(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "argv.txt"
@@ -192,8 +303,55 @@ class DamBuildScriptTests(unittest.TestCase):
 
             argv = output_path.read_text(encoding="utf-8").splitlines()
             web_addr = argv[argv.index("--web-addr") + 1]
-            self.assertRegex(web_addr, r"^127\.0\.0\.1:\d+$")
+            host, port = web_addr.split(":", 1)
+            self.assertEqual(host, "127.0.0.1")
             self.assertNotEqual(web_addr, "127.0.0.1:2896")
+            self.assertGreater(int(port), 0)
+
+    def test_agent_dogfood_verify_allocates_isolated_loopback_web_addr_when_unset(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "argv.txt"
+            stub_path = Path(temp_dir) / "verify_stub.py"
+            stub_path.write_text(
+                textwrap.dedent(
+                    f"""
+                    import pathlib
+                    import sys
+                    pathlib.Path({str(output_path)!r}).write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
+                    raise SystemExit(0)
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "DAM_AGENT_E2E_VERIFY_SCRIPT": str(stub_path),
+                    "DAM_AGENT_E2E_UPSTREAM": "http://127.0.0.1:18080",
+                    "DAM_AGENT_E2E_LISTEN": "127.0.0.1:17828",
+                    "DAM_AGENT_STATE_DIR": "/tmp/dam-hermes",
+                    "DAM_AGENT_E2E_BUILD": "0",
+                    "DAM_AGENT_E2E_KEEP_TEMP": "1",
+                }
+            )
+            env.pop("DAM_AGENT_E2E_WEB_ADDR", None)
+            subprocess.run(
+                [str(BUILD_SCRIPT), "agent-dogfood-verify"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            argv = output_path.read_text(encoding="utf-8").splitlines()
+            web_addr = argv[argv.index("--web-addr") + 1]
+            host, port = web_addr.split(":", 1)
+            self.assertEqual(host, "127.0.0.1")
+            self.assertNotEqual(web_addr, "127.0.0.1:2896")
+            self.assertGreater(int(port), 0)
 
     def test_visible_evidence_smoke_sanitizes_wallet_add_output(self):
         result = visible_evidence_smoke.sanitize_wallet_add_result(
