@@ -5,8 +5,10 @@ Implements the tiny API surface needed by `scripts/dam-build.sh agent-protection
 - GET /v1/models
 - POST /v1/chat/completions
 
-The handler echoes exact-echo prompts and deliberately breaks DAM reference syntax for
-adversarial token-transformation prompts. Keep this loopback-only and synthetic-data-only.
+The handler echoes exact-echo prompts, deliberately breaks DAM reference syntax for
+adversarial token-transformation prompts, and exposes the loopback-only
+`/__dam/transcript` endpoint so proof scripts can assert what the upstream received.
+Keep this loopback-only and synthetic-data-only.
 """
 
 from __future__ import annotations
@@ -33,6 +35,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         if self.path == "/v1/models":
             self._send_json(200, {"object": "list", "data": [{"id": "fake-deterministic"}]})
+        elif self.path == "/__dam/transcript":
+            self._send_json(200, {"requests": list(getattr(self.server, "transcript", []))})
         else:
             self._send_json(404, {"error": "not found"})
 
@@ -49,6 +53,14 @@ class Handler(BaseHTTPRequestHandler):
             if message.get("role") == "user":
                 user_content = str(message.get("content") or "")
                 break
+
+        getattr(self.server, "transcript", []).append(
+            {
+                "path": self.path,
+                "body": raw.decode("utf-8", errors="replace"),
+                "user_content": user_content,
+            }
+        )
 
         if "Text:" in user_content:
             content = user_content.split("Text:", 1)[1].strip()
@@ -80,7 +92,9 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18080)
     args = parser.parse_args()
-    ThreadingHTTPServer((args.host, args.port), Handler).serve_forever()
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server.transcript = []  # type: ignore[attr-defined]
+    server.serve_forever()
 
 
 if __name__ == "__main__":

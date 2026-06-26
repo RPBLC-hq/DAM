@@ -149,6 +149,29 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "DAM token"):
             smoke.assert_transformed_token_only("model saw [ not-a-dam-reference ]")
 
+    def test_upstream_transcript_assertion_requires_tokens_without_raw_values(self):
+        smoke = load_module()
+
+        paths = smoke.assert_upstream_transcript_protected(
+            {
+                "requests": [
+                    {
+                        "path": "/v1/chat/completions",
+                        "body": '{"content":"alpha=[email:abc]; beta=[ssn:def]"}',
+                        "user_content": "alpha=[email:abc]; beta=[ssn:def]",
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(paths, ["/v1/chat/completions"])
+        with self.assertRaisesRegex(AssertionError, "raw synthetic values"):
+            smoke.assert_upstream_transcript_protected(
+                {"requests": [{"body": f"leaked {smoke.SYNTHETIC_EMAIL} [ssn:def]"}]}
+            )
+        with self.assertRaisesRegex(AssertionError, "expected DAM references"):
+            smoke.assert_upstream_transcript_protected({"requests": [{"body": "redacted text only"}]})
+
 
 if __name__ == "__main__":
     unittest.main()

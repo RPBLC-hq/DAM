@@ -145,6 +145,43 @@ def upstream_available(upstream: str, *, timeout: float) -> bool:
         return False
 
 
+def upstream_transcript(upstream: str, *, timeout: float) -> dict[str, Any] | None:
+    try:
+        return get_json(f"{upstream.rstrip('/')}/__dam/transcript", timeout=timeout)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        return None
+
+
+def assert_upstream_transcript_protected(transcript: dict[str, Any] | None) -> list[str]:
+    if transcript is None:
+        return []
+    requests = transcript.get("requests")
+    if not isinstance(requests, list) or not requests:
+        raise AssertionError(f"fake upstream transcript did not record any requests: {transcript!r}")
+    surfaces = []
+    for request in requests:
+        if isinstance(request, dict):
+            surfaces.append(str(request.get("body", "")))
+            surfaces.append(str(request.get("user_content", "")))
+    joined = "\n".join(surfaces)
+    leaks = [value for value in (SYNTHETIC_EMAIL, SYNTHETIC_SSN) if value in joined]
+    if leaks:
+        raise AssertionError(f"fake upstream transcript leaked raw synthetic values {leaks}")
+    compact_lower = "".join(joined.split()).lower()
+    required_refs = ["[email:", "[ssn:"]
+    missing_refs = [reference for reference in required_refs if reference not in compact_lower]
+    if missing_refs:
+        raise AssertionError(
+            "fake upstream transcript did not contain expected DAM references "
+            f"{missing_refs}: {transcript!r}"
+        )
+    return [str(request.get("path", "")) for request in requests if isinstance(request, dict)]
+
+
 def process_exit_summary(process: subprocess.Popen[str]) -> str:
     stdout, stderr = process.communicate(timeout=0.1)
     lines = []
@@ -260,6 +297,8 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
 
         assert_no_raw_values_in_activity_log(log_db)
         raw_in_log = raw_values_in_file(log_db)
+        transcript = upstream_transcript(upstream, timeout=args.http_timeout)
+        transcript_paths = assert_upstream_transcript_protected(transcript)
 
         return {
             "upstream": upstream,
@@ -269,6 +308,8 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             "log_db": str(log_db),
             "log_rows": count_log_rows(log_db),
             "raw_synthetic_values_in_local_activity_log": raw_in_log,
+            "upstream_transcript_paths": transcript_paths,
+            "upstream_transcript_checked": transcript is not None,
             "exact_echo_response": exact_text,
             "transformed_token_response": transformed_text,
             "cleanup": "kept" if args.keep_temp else "removed",
