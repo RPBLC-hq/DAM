@@ -145,6 +145,52 @@ def upstream_available(upstream: str, *, timeout: float) -> bool:
         return False
 
 
+def upstream_transcript(upstream: str, *, timeout: float) -> dict[str, Any] | None:
+    transcript_url = f"{upstream.rstrip('/')}/__dam/transcript"
+    try:
+        return get_json(transcript_url, timeout=timeout)
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise AssertionError(
+            f"fake upstream transcript endpoint failed closed with HTTP {error.code}: {transcript_url}"
+        ) from error
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as error:
+        raise AssertionError(
+            f"fake upstream transcript endpoint was advertised but unreadable: {transcript_url}: {error}"
+        ) from error
+
+
+def assert_upstream_transcript_protected(transcript: dict[str, Any] | None) -> list[str]:
+    if transcript is None:
+        return []
+    requests = transcript.get("requests")
+    if not isinstance(requests, list) or not requests:
+        raise AssertionError(f"fake upstream transcript did not record any requests: {transcript!r}")
+    path_results = []
+    payload_positions_checked = False
+    leaks: list[str] = []
+    for request in requests:
+        if not isinstance(request, dict):
+            continue
+        path_results.append(str(request.get("path", "")))
+        surfaces = [str(request.get("body", "")), str(request.get("user_content", ""))]
+        joined = "\n".join(surfaces)
+        leaks.extend(value for value in (SYNTHETIC_EMAIL, SYNTHETIC_SSN) if value in joined)
+        compact_lower = "".join(joined.split()).lower()
+        if "alpha=[email:" in compact_lower and "beta=[ssn:" in compact_lower:
+            payload_positions_checked = True
+    if leaks:
+        raise AssertionError(f"fake upstream transcript leaked raw synthetic values {sorted(set(leaks))}")
+    if not payload_positions_checked:
+        raise AssertionError(
+            "fake upstream transcript did not contain DAM references in the synthetic payload positions "
+            "alpha=[email:...] and beta=[ssn:...]: "
+            f"{transcript!r}"
+        )
+    return path_results
+
+
 def process_exit_summary(process: subprocess.Popen[str]) -> str:
     stdout, stderr = process.communicate(timeout=0.1)
     lines = []
@@ -260,6 +306,8 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
 
         assert_no_raw_values_in_activity_log(log_db)
         raw_in_log = raw_values_in_file(log_db)
+        transcript = upstream_transcript(upstream, timeout=args.http_timeout)
+        transcript_paths = assert_upstream_transcript_protected(transcript)
 
         return {
             "upstream": upstream,
@@ -269,6 +317,8 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             "log_db": str(log_db),
             "log_rows": count_log_rows(log_db),
             "raw_synthetic_values_in_local_activity_log": raw_in_log,
+            "upstream_transcript_paths": transcript_paths,
+            "upstream_transcript_checked": transcript is not None,
             "exact_echo_response": exact_text,
             "transformed_token_response": transformed_text,
             "cleanup": "kept" if args.keep_temp else "removed",
