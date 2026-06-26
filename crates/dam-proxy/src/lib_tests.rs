@@ -2425,6 +2425,13 @@ async fn transparent_chatgpt_websocket_route_protects_outbound_text_frames() {
     let _ = shutdown_tx.send(());
 }
 
+#[test]
+fn websocket_upstream_authority_rejects_unparseable_route_targets() {
+    assert!(websocket_upstream_authority("http://127.0.0.1:18080").is_some());
+    assert!(websocket_upstream_authority("https://chatgpt.example.test").is_some());
+    assert!(websocket_upstream_authority("ftp://chatgpt.example.test").is_none());
+}
+
 #[tokio::test]
 async fn transparent_chatgpt_backend_http_requests_use_route_target() {
     use tokio_rustls::TlsConnector;
