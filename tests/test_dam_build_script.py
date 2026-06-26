@@ -24,6 +24,7 @@ class DamBuildScriptTests(unittest.TestCase):
         )
 
         self.assertIn("agent-protection-smoke", result.stdout)
+        self.assertIn("agent-websocket-smoke", result.stdout)
         self.assertIn("agent-dogfood-verify", result.stdout)
         self.assertIn("agent-recovery-smoke", result.stdout)
         self.assertIn("agent-repair-smoke", result.stdout)
@@ -85,6 +86,49 @@ class DamBuildScriptTests(unittest.TestCase):
                     "11",
                     "--binary",
                     str(ROOT / "target" / "debug" / "dam-proxy"),
+                ],
+            )
+
+    def test_agent_websocket_smoke_invokes_focused_loopback_route_test(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = Path(temp_dir) / "argv.txt"
+            cargo_stub = Path(temp_dir) / "cargo"
+            cargo_stub.write_text(
+                textwrap.dedent(
+                    f"""
+                    #!/usr/bin/env python3
+                    import pathlib
+                    import sys
+                    pathlib.Path({str(output_path)!r}).write_text("\\n".join(sys.argv[1:]), encoding="utf-8")
+                    raise SystemExit(0)
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            cargo_stub.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{temp_dir}{os.pathsep}{env['PATH']}"
+
+            subprocess.run(
+                [str(BUILD_SCRIPT), "agent-websocket-smoke"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            self.assertEqual(
+                output_path.read_text(encoding="utf-8").splitlines(),
+                [
+                    "test",
+                    "-q",
+                    "-p",
+                    "dam-proxy",
+                    "transparent_chatgpt_websocket_route_protects_outbound_text_frames",
+                    "--",
+                    "--nocapture",
                 ],
             )
 
