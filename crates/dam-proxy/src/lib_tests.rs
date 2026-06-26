@@ -2429,7 +2429,10 @@ async fn transparent_chatgpt_websocket_route_protects_outbound_text_frames() {
 fn websocket_upstream_authority_rejects_unparseable_route_targets() {
     assert!(websocket_upstream_authority("http://127.0.0.1:18080").is_some());
     assert!(websocket_upstream_authority("https://chatgpt.example.test").is_some());
+    assert!(websocket_upstream_authority("http://[::1]:18080").is_some());
     assert!(websocket_upstream_authority("ftp://chatgpt.example.test").is_none());
+    assert!(websocket_upstream_authority("http://[::1]:999999").is_none());
+    assert!(websocket_upstream_authority("http://chatgpt.example.test:999999").is_none());
 }
 
 #[tokio::test]

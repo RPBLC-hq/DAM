@@ -3116,8 +3116,26 @@ fn websocket_upstream_authority(upstream: &str) -> Option<(TargetAuthority, bool
         _ => return None,
     };
     let default_port = if uses_tls { 443 } else { 80 };
-    let authority = uri.authority().map(|authority| authority.as_str())?;
+    let authority = uri.authority()?.as_str();
+    if !authority_port_is_valid(authority) {
+        return None;
+    }
     parse_target_authority(authority, default_port).map(|authority| (authority, uses_tls))
+}
+
+fn authority_port_is_valid(authority: &str) -> bool {
+    let authority = authority.trim();
+    if let Some(rest) = authority.strip_prefix('[') {
+        let Some((_, remainder)) = rest.split_once(']') else {
+            return false;
+        };
+        return remainder
+            .strip_prefix(':')
+            .is_none_or(|port| !port.is_empty() && port.parse::<u16>().is_ok());
+    }
+    authority
+        .rsplit_once(':')
+        .is_none_or(|(_, port)| !port.is_empty() && port.parse::<u16>().is_ok())
 }
 
 fn parse_target_authority(value: &str, default_port: u16) -> Option<TargetAuthority> {
