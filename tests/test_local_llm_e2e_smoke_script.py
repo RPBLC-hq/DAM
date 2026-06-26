@@ -36,6 +36,8 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
                 "127.0.0.1:7831",
                 "--upstream",
                 "http://127.0.0.1:8080",
+                "--target-name",
+                "openai-api",
                 "--provider",
                 "openai-compatible",
                 "--resolve-inbound",
@@ -45,6 +47,27 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
                 "--log",
                 "/tmp/dam-smoke/log.sqlite",
             ],
+        )
+
+    def test_proxy_command_records_route_id_and_provider_for_each_route_case(self):
+        smoke = load_module()
+
+        for route_case in smoke.DEFAULT_ROUTE_CASES:
+            with self.subTest(route_id=route_case.route_id):
+                command = smoke.proxy_command(
+                    binary=Path("target/debug/dam-proxy"),
+                    listen="127.0.0.1:7831",
+                    upstream="http://127.0.0.1:8080",
+                    vault_db=Path("/tmp/dam-smoke/vault.sqlite"),
+                    log_db=Path("/tmp/dam-smoke/log.sqlite"),
+                    route_case=route_case,
+                )
+                self.assertEqual(command[command.index("--target-name") + 1], route_case.route_id)
+                self.assertEqual(command[command.index("--provider") + 1], route_case.provider)
+
+        self.assertEqual(
+            [route.route_id for route in smoke.DEFAULT_ROUTE_CASES],
+            ["openai-api", "anthropic-api", "claude-web"],
         )
 
     def test_prompts_are_deterministic_and_contain_synthetic_values_only(self):
@@ -181,6 +204,39 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
                     ]
                 }
             )
+
+    def test_route_selection_defaults_to_representative_mvp_matrix(self):
+        smoke = load_module()
+
+        self.assertEqual(
+            [route.route_id for route in smoke.selected_route_cases(None)],
+            ["openai-api", "anthropic-api", "claude-web"],
+        )
+        self.assertEqual(
+            [route.route_id for route in smoke.selected_route_cases(["anthropic-api"])],
+            ["anthropic-api"],
+        )
+        with self.assertRaisesRegex(smoke.SmokeBlocked, "unknown --route"):
+            smoke.selected_route_cases(["not-a-route"])
+
+    def test_route_scoped_transcript_ignores_prior_requests(self):
+        smoke = load_module()
+        original_upstream_transcript = smoke.__dict__["upstream_transcript"]
+        try:
+            smoke.__dict__["upstream_transcript"] = lambda upstream, *, timeout: {
+                "requests": [
+                    {"path": "/old", "body": "raw old request"},
+                    {
+                        "path": "/new",
+                        "body": '{"content":"alpha=[email:abc]; beta=[ssn:def]"}',
+                        "user_content": "alpha=[email:abc]; beta=[ssn:def]",
+                    },
+                ]
+            }
+            scoped = smoke.route_scoped_transcript("http://127.0.0.1:18080", 1, timeout=1)
+            self.assertEqual(smoke.assert_upstream_transcript_protected(scoped), ["/new"])
+        finally:
+            smoke.__dict__["upstream_transcript"] = original_upstream_transcript
 
     def test_upstream_transcript_missing_endpoint_is_optional_but_malformed_endpoint_fails_closed(self):
         smoke = load_module()

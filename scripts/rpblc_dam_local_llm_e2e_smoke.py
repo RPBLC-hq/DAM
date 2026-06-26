@@ -23,12 +23,27 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 SYNTHETIC_EMAIL = "alex.sandbox@example.test"
 SYNTHETIC_SSN = "123-45-6789"
 DEFAULT_UPSTREAM = "http://127.0.0.1:8080"
 DEFAULT_LISTEN = "127.0.0.1:7831"
+
+
+class SmokeRouteCase(NamedTuple):
+    """Representative MVP route target exercised through the proxy smoke."""
+
+    route_id: str
+    provider: str
+    label: str
+
+
+DEFAULT_ROUTE_CASES = (
+    SmokeRouteCase("openai-api", "openai-compatible", "OpenAI API HTTP route"),
+    SmokeRouteCase("anthropic-api", "anthropic", "Anthropic API HTTP route"),
+    SmokeRouteCase("claude-web", "generic-http", "Claude web-profile HTTP route"),
+)
 
 
 class SmokeBlocked(RuntimeError):
@@ -42,6 +57,7 @@ def proxy_command(
     upstream: str,
     vault_db: Path,
     log_db: Path,
+    route_case: SmokeRouteCase = DEFAULT_ROUTE_CASES[0],
 ) -> list[str]:
     return [
         str(binary),
@@ -49,8 +65,10 @@ def proxy_command(
         listen,
         "--upstream",
         upstream,
+        "--target-name",
+        route_case.route_id,
         "--provider",
-        "openai-compatible",
+        route_case.provider,
         "--resolve-inbound",
         "--no-api-key-env",
         "--db",
@@ -161,11 +179,20 @@ def upstream_transcript(upstream: str, *, timeout: float) -> dict[str, Any] | No
         ) from error
 
 
-def assert_upstream_transcript_protected(transcript: dict[str, Any] | None) -> list[str]:
+def transcript_requests(transcript: dict[str, Any] | None) -> list[Any]:
     if transcript is None:
         return []
     requests = transcript.get("requests")
-    if not isinstance(requests, list) or not requests:
+    if not isinstance(requests, list):
+        raise AssertionError(f"fake upstream transcript returned malformed requests: {transcript!r}")
+    return requests
+
+
+def assert_upstream_transcript_protected(transcript: dict[str, Any] | None) -> list[str]:
+    if transcript is None:
+        return []
+    requests = transcript_requests(transcript)
+    if not requests:
         raise AssertionError(f"fake upstream transcript did not record any requests: {transcript!r}")
     path_results = []
     payload_positions_checked = False
@@ -247,31 +274,61 @@ def assert_no_raw_values_in_activity_log(log_db: Path) -> None:
         )
 
 
-def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
-    upstream = args.upstream.rstrip("/")
-    if not upstream_available(upstream, timeout=args.http_timeout):
-        raise SmokeBlocked(
-            f"local OpenAI-compatible upstream is unavailable at {upstream}; "
-            "start llama.cpp on 127.0.0.1:8080 or pass --upstream"
-        )
+def selected_route_cases(route_ids: list[str] | None) -> list[SmokeRouteCase]:
+    if not route_ids:
+        return list(DEFAULT_ROUTE_CASES)
+    by_id = {route.route_id: route for route in DEFAULT_ROUTE_CASES}
+    unknown = sorted(set(route_ids) - set(by_id))
+    if unknown:
+        supported = ", ".join(sorted(by_id))
+        raise SmokeBlocked(f"unknown --route value(s) {', '.join(unknown)}; supported: {supported}")
+    return [by_id[route_id] for route_id in route_ids]
 
-    binary = Path(args.binary)
-    if args.build:
-        subprocess.run(["cargo", "build", "-p", "dam-proxy"], check=True)
-    if not binary.exists():
-        raise SmokeBlocked(f"dam-proxy binary not found: {binary}; rerun with --build")
 
-    temp_dir = Path(tempfile.mkdtemp(prefix="dam-local-llm-smoke-"))
+def upstream_transcript_request_count(upstream: str, *, timeout: float) -> int | None:
+    transcript = upstream_transcript(upstream, timeout=timeout)
+    if transcript is None:
+        return None
+    return len(transcript_requests(transcript))
+
+
+def route_scoped_transcript(upstream: str, baseline: int | None, *, timeout: float) -> dict[str, Any] | None:
+    transcript = upstream_transcript(upstream, timeout=timeout)
+    if transcript is None or baseline is None:
+        return transcript
+    return {"requests": transcript_requests(transcript)[baseline:]}
+
+
+def stop_process(process: subprocess.Popen[str]) -> None:
+    if process.poll() is None:
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait(timeout=5)
+
+
+def run_route_smoke(
+    args: argparse.Namespace,
+    *,
+    binary: Path,
+    upstream: str,
+    route_case: SmokeRouteCase,
+) -> dict[str, Any]:
+    temp_dir = Path(tempfile.mkdtemp(prefix=f"dam-{route_case.route_id}-smoke-"))
     vault_db = temp_dir / "vault.sqlite"
     log_db = temp_dir / "activity.sqlite"
     listen = args.listen
     base_url = f"http://{listen}"
+    baseline_transcript_count = upstream_transcript_request_count(upstream, timeout=args.http_timeout)
     command = proxy_command(
         binary=binary,
         listen=listen,
         upstream=upstream,
         vault_db=vault_db,
         log_db=log_db,
+        route_case=route_case,
     )
 
     process = subprocess.Popen(
@@ -306,10 +363,17 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
 
         assert_no_raw_values_in_activity_log(log_db)
         raw_in_log = raw_values_in_file(log_db)
-        transcript = upstream_transcript(upstream, timeout=args.http_timeout)
+        transcript = route_scoped_transcript(
+            upstream,
+            baseline_transcript_count,
+            timeout=args.http_timeout,
+        )
         transcript_paths = assert_upstream_transcript_protected(transcript)
 
         return {
+            "route_id": route_case.route_id,
+            "route_label": route_case.label,
+            "target_provider": route_case.provider,
             "upstream": upstream,
             "proxy": base_url,
             "health": health,
@@ -325,15 +389,36 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             "temp_dir": str(temp_dir),
         }
     finally:
-        if process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait(timeout=5)
+        stop_process(process)
         if not args.keep_temp:
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
+    upstream = args.upstream.rstrip("/")
+    if not upstream_available(upstream, timeout=args.http_timeout):
+        raise SmokeBlocked(
+            f"local OpenAI-compatible upstream is unavailable at {upstream}; "
+            "start llama.cpp on 127.0.0.1:8080 or pass --upstream"
+        )
+
+    binary = Path(args.binary)
+    if args.build:
+        subprocess.run(["cargo", "build", "-p", "dam-proxy"], check=True)
+    if not binary.exists():
+        raise SmokeBlocked(f"dam-proxy binary not found: {binary}; rerun with --build")
+
+    route_cases = selected_route_cases(args.routes)
+    route_results = [
+        run_route_smoke(args, binary=binary, upstream=upstream, route_case=route_case)
+        for route_case in route_cases
+    ]
+    return {
+        "upstream": upstream,
+        "routes_checked": [route.route_id for route in route_cases],
+        "route_results": route_results,
+        "cleanup": "kept" if args.keep_temp else "removed",
+    }
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -343,6 +428,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--binary", default="target/debug/dam-proxy")
     parser.add_argument("--build", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--keep-temp", action="store_true")
+    parser.add_argument(
+        "--route",
+        dest="routes",
+        action="append",
+        choices=[route.route_id for route in DEFAULT_ROUTE_CASES],
+        help="Representative MVP route ID to exercise; repeat to select a subset. Defaults to the route matrix.",
+    )
     parser.add_argument("--startup-timeout", type=float, default=10)
     parser.add_argument("--http-timeout", type=float, default=30)
     return parser.parse_args(argv)
