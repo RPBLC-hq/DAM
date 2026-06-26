@@ -118,6 +118,58 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
 
             self.assertEqual(smoke.count_log_rows(db_path), 3)
 
+    def test_health_route_assertion_fails_when_proxy_reports_different_target(self):
+        smoke = load_module()
+        route_case = smoke.DEFAULT_ROUTE_CASES[1]
+
+        smoke.assert_health_route_matches(
+            {"target": "anthropic", "upstream": "http://127.0.0.1:18080/"},
+            route_case=route_case,
+            upstream="http://127.0.0.1:18080",
+        )
+
+        with self.assertRaisesRegex(AssertionError, "health target"):
+            smoke.assert_health_route_matches(
+                {"target": "openai", "upstream": "http://127.0.0.1:18080"},
+                route_case=route_case,
+                upstream="http://127.0.0.1:18080",
+            )
+
+    def test_provider_forward_route_assertion_uses_actual_activity_route_line(self):
+        smoke = load_module()
+        route_case = smoke.DEFAULT_ROUTE_CASES[2]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "activity.sqlite"
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    "create table log_events (id integer primary key, action text, message text)"
+                )
+                connection.executemany(
+                    "insert into log_events (action, message) values (?, ?)",
+                    [
+                        (
+                            "provider_forward_start",
+                            "provider forward start target=claude-web provider=generic-http resolve_inbound=true transform_streaming=true",
+                        ),
+                        (
+                            "provider_forward_start",
+                            "provider forward start target=claude-web provider=generic-http resolve_inbound=true transform_streaming=true",
+                        ),
+                    ],
+                )
+
+            self.assertEqual(len(smoke.assert_provider_forward_route_matches(db_path, route_case)), 2)
+
+            with sqlite3.connect(db_path) as connection:
+                connection.execute(
+                    "update log_events set message = ? where id = 2",
+                    ("provider forward start target=openai provider=openai-compatible",),
+                )
+
+            with self.assertRaisesRegex(AssertionError, "provider_forward_start route line"):
+                smoke.assert_provider_forward_route_matches(db_path, route_case)
+
     def test_wait_for_proxy_reports_early_process_exit_stderr(self):
         smoke = load_module()
         process = smoke.subprocess.Popen(

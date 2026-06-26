@@ -275,6 +275,56 @@ def assert_no_raw_values_in_activity_log(log_db: Path) -> None:
         )
 
 
+def assert_health_route_matches(
+    health: dict[str, Any],
+    *,
+    route_case: SmokeRouteCase,
+    upstream: str,
+) -> None:
+    actual_target = health.get("target")
+    if actual_target != route_case.target_name:
+        raise AssertionError(
+            "dam-proxy health target did not match route smoke target: "
+            f"expected {route_case.target_name!r}, got {actual_target!r}; health={health!r}"
+        )
+
+    actual_upstream = health.get("upstream")
+    if str(actual_upstream).rstrip("/") != upstream.rstrip("/"):
+        raise AssertionError(
+            "dam-proxy health upstream did not match route smoke upstream: "
+            f"expected {upstream!r}, got {actual_upstream!r}; health={health!r}"
+        )
+
+
+def provider_forward_messages(log_db: Path) -> list[str]:
+    if not log_db.exists():
+        return []
+    with sqlite3.connect(log_db) as connection:
+        try:
+            rows = connection.execute(
+                "select message from log_events where action = ? order by id",
+                ("provider_forward_start",),
+            ).fetchall()
+        except sqlite3.DatabaseError:
+            return []
+    return [str(row[0]) for row in rows]
+
+
+def assert_provider_forward_route_matches(log_db: Path, route_case: SmokeRouteCase) -> list[str]:
+    messages = provider_forward_messages(log_db)
+    if not messages:
+        raise AssertionError("activity log did not record any provider_forward_start route lines")
+
+    expected_target = f"target={route_case.target_name}"
+    expected_provider = f"provider={route_case.provider}"
+    if not all(expected_target in message and expected_provider in message for message in messages):
+        raise AssertionError(
+            "provider_forward_start route line did not match route smoke case: "
+            f"expected {expected_target!r} and {expected_provider!r}; messages={messages!r}"
+        )
+    return messages
+
+
 def selected_route_cases(route_ids: list[str] | None) -> list[SmokeRouteCase]:
     if not route_ids:
         return list(DEFAULT_ROUTE_CASES)
@@ -342,6 +392,7 @@ def run_route_smoke(
     )
     try:
         health = wait_for_proxy(base_url, timeout=args.startup_timeout, process=process)
+        assert_health_route_matches(health, route_case=route_case, upstream=upstream)
         exact_prompt = exact_echo_prompt()
         exact_text = response_text(
             post_json(
@@ -364,6 +415,7 @@ def run_route_smoke(
 
         assert_no_raw_values_in_activity_log(log_db)
         raw_in_log = raw_values_in_file(log_db)
+        provider_forward_route_messages = assert_provider_forward_route_matches(log_db, route_case)
         transcript = route_scoped_transcript(
             upstream,
             baseline_transcript_count,
@@ -383,6 +435,7 @@ def run_route_smoke(
             "log_db": str(log_db),
             "log_rows": count_log_rows(log_db),
             "raw_synthetic_values_in_local_activity_log": raw_in_log,
+            "provider_forward_route_messages": provider_forward_route_messages,
             "upstream_transcript_paths": transcript_paths,
             "upstream_transcript_checked": transcript is not None,
             "exact_echo_response": exact_text,
