@@ -831,6 +831,10 @@ class DamBuildScriptTests(unittest.TestCase):
             cargo.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
             cargo.chmod(0o755)
 
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Linux\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
+
             node = bin_dir / "node"
             node.write_text(
                 textwrap.dedent(
@@ -922,6 +926,14 @@ JSON
             self.assertIn("registry_version: 0.3.3", result.stdout)
             self.assertIn("npm_auth: missing", result.stdout)
             self.assertIn("pack_native_files_present: yes", result.stdout)
+            self.assertIn("release_artifact_source: target/release", result.stdout)
+            self.assertIn("release_artifacts_consistent: yes", result.stdout)
+            self.assertIn("macos_app_artifact_check: skipped_non_macos", result.stdout)
+            self.assertIn("macos_app_artifact_blocker: notarized installed-app validation requires macOS", result.stdout)
+            self.assertIn(
+                "notarized installed-app validation requires macOS; run the macOS release-path validation before production release",
+                result.stdout,
+            )
             self.assertIn(
                 "local package version 0.3.2 is not greater than published npm version 0.3.3",
                 result.stdout,
@@ -1033,9 +1045,125 @@ JSON
                     if binary.exists():
                         binary.unlink()
 
-            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
             self.assertIn("pack_native_files_present: yes", result.stdout)
+            self.assertIn("release_artifacts_consistent: yes", result.stdout)
+            self.assertIn(
+                "notarized installed-app validation requires macOS; run the macOS release-path validation before production release",
+                result.stdout,
+            )
             self.assertNotIn("missing staged native package files", result.stderr)
+
+    def test_agent_npm_readiness_fails_when_staged_native_binary_differs_from_release_artifact(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            bin_dir.mkdir()
+
+            real_node = shutil.which("node")
+            self.assertIsNotNone(real_node)
+
+            cargo = bin_dir / "cargo"
+            cargo.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
+            cargo.chmod(0o755)
+
+            cp = bin_dir / "cp"
+            cp.write_text(
+                textwrap.dedent(
+                    """
+                    #!/usr/bin/env sh
+                    src="$1"
+                    dest="$2"
+                    mkdir -p "$(dirname "$dest")"
+                    if printf '%s\n' "$dest" | grep -q '/npm/native/'; then
+                      printf 'stale payload copied from %s\n' "$src" > "$dest"
+                      exit 0
+                    fi
+                    exec /bin/cp "$@"
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            cp.chmod(0o755)
+
+            node = bin_dir / "node"
+            node.write_text(
+                textwrap.dedent(
+                    f"""
+                    #!/usr/bin/env sh
+                    if [ "$1" = "-p" ] && [ "$2" = "process.platform + '-' + process.arch" ]; then
+                      printf 'linux-x64\\n'
+                      exit 0
+                    fi
+                    if [ "$1" = "npm/bin/dam.js" ] && [ "$2" = "package-doctor" ] && [ "$3" = "--json" ]; then
+                      printf '{{"state":"ready"}}\\n'
+                      exit 0
+                    fi
+                    exec {real_node} "$@"
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            node.chmod(0o755)
+
+            npm = bin_dir / "npm"
+            npm.write_text(
+                textwrap.dedent(
+                    """
+                    #!/usr/bin/env sh
+                    if [ "$1" = "config" ]; then printf 'https://registry.npmjs.org/\n'; exit 0; fi
+                    if [ "$1" = "view" ]; then printf '"0.0.1"\n'; exit 0; fi
+                    if [ "$1" = "owner" ]; then printf 'rpblc-alexy <contact@rpblc.com>\n'; exit 0; fi
+                    if [ "$1" = "whoami" ]; then printf 'rpblc-alexy\n'; exit 0; fi
+                    if [ "$1" = "pack" ]; then
+                      cat <<'JSON'
+[{"id":"@rpblc/dam@0.3.2","name":"@rpblc/dam","version":"0.3.2","filename":"rpblc-dam-0.3.2.tgz","files":[{"path":"npm/native/linux-x64/dam"},{"path":"npm/native/linux-x64/damctl"},{"path":"npm/native/linux-x64/dam-web"},{"path":"npm/native/linux-x64/dam-proxy"},{"path":"npm/native/linux-x64/dam-mcp"},{"path":"npm/native/linux-x64/dam-tray"}]}]
+JSON
+                      exit 0
+                    fi
+                    exit 1
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            npm.chmod(0o755)
+
+            release_dir = ROOT / "target" / "release"
+            release_dir.mkdir(parents=True, exist_ok=True)
+            created_release_files = []
+            for name in ["dam", "damctl", "dam-web", "dam-proxy", "dam-mcp", "dam-tray"]:
+                binary = release_dir / name
+                if not binary.exists():
+                    binary.write_text(f"#!/usr/bin/env sh\nprintf '{name} release artifact\\n'\n", encoding="utf-8")
+                    binary.chmod(0o755)
+                    created_release_files.append(binary)
+
+            staged_dir = ROOT / "npm" / "native" / "linux-x64"
+            if staged_dir.exists():
+                shutil.rmtree(staged_dir)
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+            try:
+                result = subprocess.run(
+                    [str(BUILD_SCRIPT), "agent-npm-readiness"],
+                    cwd=ROOT,
+                    env=env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+            finally:
+                if staged_dir.exists():
+                    shutil.rmtree(staged_dir)
+                for binary in created_release_files:
+                    if binary.exists():
+                        binary.unlink()
+
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            self.assertIn("release_artifacts_consistent: no", result.stdout)
+            self.assertIn("staged native binary does not match release artifact", result.stdout)
+            self.assertIn("staged npm native binaries do not match the release artifacts", result.stdout)
 
     def test_agent_npm_readiness_reports_blocker_when_pack_payload_missing_native_binaries(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1049,6 +1177,10 @@ JSON
             cargo = bin_dir / "cargo"
             cargo.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
             cargo.chmod(0o755)
+
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Linux\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
 
             node = bin_dir / "node"
             node.write_text(
@@ -1185,6 +1317,10 @@ JSON
             )
             cargo.chmod(0o755)
 
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Linux\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
+
             node = bin_dir / "node"
             node.write_text(
                 textwrap.dedent(
@@ -1274,14 +1410,36 @@ JSON
                     if binary.exists():
                         binary.unlink()
 
-            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            stubbed_host = subprocess.run(
+                ["uname", "-s"],
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            ).stdout.strip()
+            self.assertEqual("Linux", stubbed_host)
             self.assertIn("DAM agent MVP release readiness", result.stdout)
-            self.assertIn("package_installability_result: pass", result.stdout)
+            if stubbed_host == "Darwin":
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertIn("package_installability_result: pass", result.stdout)
+            else:
+                self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+                self.assertIn("package_installability_result: fail", result.stdout)
+                self.assertIn(
+                    "notarized installed-app validation requires macOS; run the macOS release-path validation before production release",
+                    result.stdout,
+                )
             self.assertIn("setup_doctor_readiness_result: pass", result.stdout)
             self.assertIn("setup_status_exit_status: 1", result.stdout)
             self.assertIn("setup_next_action_exit_status: 1", result.stdout)
             self.assertIn("protection_proof_result: pass", result.stdout)
-            self.assertIn("readiness_result: pass", result.stdout)
+            if stubbed_host == "Darwin":
+                self.assertIn("readiness_failures: 0", result.stdout)
+                self.assertIn("readiness_result: pass", result.stdout)
+            else:
+                self.assertIn("readiness_failures: 1", result.stdout)
+                self.assertIn("readiness_result: fail", result.stdout)
             self.assertFalse(staged_existed_after_run)
 
     def test_agent_mvp_readiness_rejects_external_protection_upstream(self):
@@ -1468,6 +1626,10 @@ JSON
                 encoding="utf-8",
             )
             cargo.chmod(0o755)
+
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Linux\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
 
             node = bin_dir / "node"
             node.write_text(
