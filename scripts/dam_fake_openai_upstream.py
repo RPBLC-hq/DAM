@@ -67,6 +67,8 @@ class Handler(BaseHTTPRequestHandler):
             content = content.replace("[email:", "[ email:").replace("[ssn:", "[ ssn:")
         elif "alpha=" in user_content:
             content = user_content[user_content.index("alpha=") :].strip()
+        elif "Fixture: agent_session_mixed_pii_secret_v1" in user_content:
+            content = "agent-session fixture observed without raw synthetic values"
         else:
             content = user_content
 

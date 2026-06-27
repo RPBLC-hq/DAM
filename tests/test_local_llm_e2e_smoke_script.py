@@ -93,15 +93,22 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
 
         exact_prompt = smoke.exact_echo_prompt()
         transform_prompt = smoke.transform_token_prompt()
+        agent_prompt = smoke.agent_session_prompt()
         request = smoke.chat_request(exact_prompt, max_tokens=48)
 
         self.assertEqual(request["model"], "local")
         self.assertEqual(request["temperature"], 0)
         self.assertEqual(request["max_tokens"], 48)
         self.assertEqual(request["messages"][-1]["content"], exact_prompt)
-        serialized = smoke.json.dumps([exact_prompt, transform_prompt, request])
+        serialized = smoke.json.dumps([exact_prompt, transform_prompt, agent_prompt, request])
         self.assertIn(smoke.SYNTHETIC_EMAIL, serialized)
+        self.assertIn(smoke.SYNTHETIC_PHONE, serialized)
         self.assertIn(smoke.SYNTHETIC_SSN, serialized)
+        self.assertIn(smoke.SYNTHETIC_ENV_SECRET, serialized)
+        self.assertIn(smoke.synthetic_github_token(), serialized)
+        self.assertIn(smoke.AGENT_SESSION_FIXTURE_NAME, agent_prompt)
+        self.assertIn("OPENAI_API_KEY=", agent_prompt)
+        self.assertIn("GITHUB_TOKEN=", agent_prompt)
         self.assertIn("one space after the opening bracket", transform_prompt)
         self.assertIn("[ email:abc]", transform_prompt)
         self.assertNotIn("every character separated", transform_prompt)
@@ -276,6 +283,60 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
                         {
                             "body": "instructions mention [email:abc] and [ssn:def]",
                             "user_content": "alpha was dropped; beta was dropped",
+                        }
+                    ]
+                }
+            )
+
+    def test_agent_session_transcript_requires_mixed_kind_protection_without_raw_values(self):
+        smoke = load_module()
+        transcript = {
+            "requests": [
+                {
+                    "path": "/v1/chat/completions",
+                    "body": smoke.json.dumps(
+                        {
+                            "content": "\n".join(
+                                [
+                                    f"Fixture: {smoke.AGENT_SESSION_FIXTURE_NAME}",
+                                    "email=[email:abc] phone=[phone:def] ssn=[ssn:ghi]",
+                                    "OPENAI_API_KEY=[api_key:jkl] GITHUB_TOKEN=[api_key:mno]",
+                                ]
+                            )
+                        }
+                    ),
+                    "user_content": "",
+                }
+            ]
+        }
+
+        self.assertEqual(
+            smoke.assert_agent_session_transcript_protected(transcript),
+            {
+                "email": "reference_or_redaction_observed",
+                "phone": "reference_or_redaction_observed",
+                "ssn": "reference_or_redaction_observed",
+                "api_key": "reference_or_redaction_observed",
+            },
+        )
+        with self.assertRaisesRegex(AssertionError, "raw synthetic values"):
+            smoke.assert_agent_session_transcript_protected(
+                {
+                    "requests": [
+                        {
+                            "body": f"Fixture: {smoke.AGENT_SESSION_FIXTURE_NAME} leaked {smoke.SYNTHETIC_ENV_SECRET}",
+                            "user_content": "",
+                        }
+                    ]
+                }
+            )
+        with self.assertRaisesRegex(AssertionError, "expected DAM references"):
+            smoke.assert_agent_session_transcript_protected(
+                {
+                    "requests": [
+                        {
+                            "body": f"Fixture: {smoke.AGENT_SESSION_FIXTURE_NAME} email=[email:abc]",
+                            "user_content": "",
                         }
                     ]
                 }

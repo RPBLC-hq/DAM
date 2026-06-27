@@ -123,6 +123,40 @@ class DamFakeOpenAiUpstreamTests(unittest.TestCase):
             server.server_close()
             thread.join(timeout=5)
 
+    def test_agent_session_fixture_returns_safe_summary_while_transcript_records_request(self):
+        fake = load_module()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), fake.Handler)
+        setattr(server, "transcript", [])
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            content = "Fixture: agent_session_mixed_pii_secret_v1\nemail=[email:abc]\napi=[api_key:def]"
+            body = json.dumps(
+                {
+                    "model": "local",
+                    "messages": [{"role": "user", "content": content}],
+                }
+            ).encode("utf-8")
+            request = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/v1/chat/completions",
+                data=body,
+                headers={"content-type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request) as response:
+                payload = json.load(response)
+            self.assertEqual(
+                payload["choices"][0]["message"]["content"],
+                "agent-session fixture observed without raw synthetic values",
+            )
+            with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/__dam/transcript") as response:
+                transcript = json.load(response)
+            self.assertIn("agent_session_mixed_pii_secret_v1", transcript["requests"][0]["user_content"])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
 
 if __name__ == "__main__":
     unittest.main()
