@@ -339,13 +339,14 @@ if not entries:
     print("npm pack output was empty", file=sys.stderr)
     raise SystemExit(1)
 files = {entry.get("path") for entry in entries[0].get("files", [])}
+exe_suffix = ".exe" if platform_dir.startswith("win32-") else ""
 expected = [
-    f"npm/native/{platform_dir}/dam",
-    f"npm/native/{platform_dir}/damctl",
-    f"npm/native/{platform_dir}/dam-web",
-    f"npm/native/{platform_dir}/dam-proxy",
-    f"npm/native/{platform_dir}/dam-mcp",
-    f"npm/native/{platform_dir}/dam-tray",
+    f"npm/native/{platform_dir}/dam{exe_suffix}",
+    f"npm/native/{platform_dir}/damctl{exe_suffix}",
+    f"npm/native/{platform_dir}/dam-web{exe_suffix}",
+    f"npm/native/{platform_dir}/dam-proxy{exe_suffix}",
+    f"npm/native/{platform_dir}/dam-mcp{exe_suffix}",
+    f"npm/native/{platform_dir}/dam-tray{exe_suffix}",
 ]
 missing = [path for path in expected if path not in files]
 if missing:

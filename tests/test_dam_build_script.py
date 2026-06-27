@@ -928,6 +928,115 @@ JSON
             )
             self.assertIn("npm publish auth is not configured on this machine", result.stdout)
 
+    def test_agent_npm_readiness_accepts_windows_exe_native_pack_payload(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            bin_dir.mkdir()
+
+            real_node = shutil.which("node")
+            self.assertIsNotNone(real_node)
+
+            cargo = bin_dir / "cargo"
+            cargo.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
+            cargo.chmod(0o755)
+
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'MINGW64_NT-10.0\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
+
+            node = bin_dir / "node"
+            node.write_text(
+                textwrap.dedent(
+                    f"""
+                    #!/usr/bin/env sh
+                    if [ "$1" = "-p" ] && [ "$2" = "process.platform + '-' + process.arch" ]; then
+                      printf 'win32-x64\\n'
+                      exit 0
+                    fi
+                    if [ "$2" = "package-doctor" ] && [ "$3" = "--json" ]; then
+                      printf '{{"state":"ready"}}\\n'
+                      exit 0
+                    fi
+                    exec {real_node} "$@"
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            node.chmod(0o755)
+
+            npm = bin_dir / "npm"
+            npm.write_text(
+                textwrap.dedent(
+                    """
+                    #!/usr/bin/env sh
+                    if [ "$1" = "config" ] && [ "$2" = "get" ] && [ "$3" = "registry" ]; then
+                      printf 'https://registry.npmjs.org/\n'
+                      exit 0
+                    fi
+                    if [ "$1" = "view" ] && [ "$2" = "@rpblc/dam" ] && [ "$3" = "version" ] && [ "$4" = "--json" ]; then
+                      printf '"0.0.1"\n'
+                      exit 0
+                    fi
+                    if [ "$1" = "owner" ] && [ "$2" = "ls" ] && [ "$3" = "@rpblc/dam" ]; then
+                      printf 'rpblc-alexy <contact@rpblc.com>\n'
+                      exit 0
+                    fi
+                    if [ "$1" = "whoami" ]; then
+                      printf 'rpblc-alexy\n'
+                      exit 0
+                    fi
+                    if [ "$1" = "pack" ]; then
+                      cat <<'JSON'
+[{"id":"@rpblc/dam@0.3.2","name":"@rpblc/dam","version":"0.3.2","filename":"rpblc-dam-0.3.2.tgz","files":[{"path":"npm/native/win32-x64/dam.exe"},{"path":"npm/native/win32-x64/damctl.exe"},{"path":"npm/native/win32-x64/dam-web.exe"},{"path":"npm/native/win32-x64/dam-proxy.exe"},{"path":"npm/native/win32-x64/dam-mcp.exe"},{"path":"npm/native/win32-x64/dam-tray.exe"}]}]
+JSON
+                      exit 0
+                    fi
+                    printf 'unexpected npm invocation: %s\n' "$*" >&2
+                    exit 1
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            npm.chmod(0o755)
+
+            release_dir = ROOT / "target" / "release"
+            release_dir.mkdir(parents=True, exist_ok=True)
+            created_release_files = []
+            for name in ["dam", "damctl", "dam-web", "dam-proxy", "dam-mcp", "dam-tray"]:
+                binary = release_dir / f"{name}.exe"
+                if not binary.exists():
+                    binary.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
+                    binary.chmod(0o755)
+                    created_release_files.append(binary)
+
+            staged_dir = ROOT / "npm" / "native" / "win32-x64"
+            if staged_dir.exists():
+                shutil.rmtree(staged_dir)
+
+            env = os.environ.copy()
+            env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+
+            try:
+                result = subprocess.run(
+                    [str(BUILD_SCRIPT), "agent-npm-readiness"],
+                    cwd=ROOT,
+                    env=env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+            finally:
+                if staged_dir.exists():
+                    shutil.rmtree(staged_dir)
+                for binary in created_release_files:
+                    if binary.exists():
+                        binary.unlink()
+
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertIn("pack_native_files_present: yes", result.stdout)
+            self.assertNotIn("missing staged native package files", result.stderr)
+
     def test_agent_npm_readiness_reports_blocker_when_pack_payload_missing_native_binaries(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
