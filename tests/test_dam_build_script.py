@@ -1410,6 +1410,15 @@ JSON
                     if binary.exists():
                         binary.unlink()
 
+            stubbed_host = subprocess.run(
+                ["uname", "-s"],
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            ).stdout.strip()
+            self.assertEqual("Linux", stubbed_host)
             self.assertEqual(1, result.returncode, result.stdout + result.stderr)
             self.assertIn("DAM agent MVP release readiness", result.stdout)
             self.assertIn("package_installability_result: fail", result.stdout)
