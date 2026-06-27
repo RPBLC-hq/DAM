@@ -380,6 +380,16 @@ def count_log_rows(log_db: Path) -> int:
             return 0
 
 
+def max_log_event_id(log_db: Path) -> int:
+    if not log_db.exists():
+        return 0
+    with sqlite3.connect(log_db) as connection:
+        try:
+            return int(connection.execute("select coalesce(max(id), 0) from log_events").fetchone()[0])
+        except sqlite3.DatabaseError:
+            return 0
+
+
 def raw_values_in_file(path: Path) -> list[str]:
     if not path.exists():
         return []
@@ -431,20 +441,32 @@ def provider_forward_messages(log_db: Path) -> list[str]:
     return [str(row[0]) for row in rows]
 
 
-def detector_kind_action_counts(log_db: Path) -> dict[str, int]:
+def detector_kind_action_counts(log_db: Path, *, after_id: int | None = None) -> dict[str, int]:
     if not log_db.exists():
         return {}
     with sqlite3.connect(log_db) as connection:
         try:
-            rows = connection.execute(
-                """
-                select kind, action, count(*)
-                from log_events
-                where kind is not null and action is not null
-                group by kind, action
-                order by kind, action
-                """
-            ).fetchall()
+            if after_id is None:
+                rows = connection.execute(
+                    """
+                    select kind, action, count(*)
+                    from log_events
+                    where kind is not null and action is not null
+                    group by kind, action
+                    order by kind, action
+                    """
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    select kind, action, count(*)
+                    from log_events
+                    where id > ? and kind is not null and action is not null
+                    group by kind, action
+                    order by kind, action
+                    """,
+                    (after_id,),
+                ).fetchall()
         except sqlite3.DatabaseError:
             return {}
     return {f"{row[0]}:{row[1]}": int(row[2]) for row in rows}
@@ -577,6 +599,7 @@ def run_route_smoke(
         )
         assert_transformed_token_only(transformed_text)
 
+        agent_session_log_baseline = max_log_event_id(log_db)
         agent_session_text = response_text(
             post_json(
                 f"{base_url}/v1/chat/completions",
@@ -594,7 +617,13 @@ def run_route_smoke(
             expected_count=3,
         )
         detector_counts = detector_kind_action_counts(log_db)
-        agent_session_detector_kinds = assert_agent_session_detector_kinds_observed(detector_counts)
+        agent_session_detector_counts = detector_kind_action_counts(
+            log_db,
+            after_id=agent_session_log_baseline,
+        )
+        agent_session_detector_kinds = assert_agent_session_detector_kinds_observed(
+            agent_session_detector_counts
+        )
         transcript = route_scoped_transcript(
             upstream,
             baseline_transcript_count,
@@ -627,6 +656,7 @@ def run_route_smoke(
             "raw_synthetic_values_in_local_activity_log": raw_in_log,
             "raw_leak_scan": "passed",
             "detector_kind_action_counts": detector_counts,
+            "agent_session_detector_kind_action_counts": agent_session_detector_counts,
             "agent_session_detector_kinds_observed": agent_session_detector_kinds,
             "agent_session_kinds_observed": agent_session_kinds,
             "provider_forward_route_messages": provider_forward_route_messages,
