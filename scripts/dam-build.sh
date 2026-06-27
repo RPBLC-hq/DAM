@@ -13,6 +13,7 @@ AGENT_STATUS_STRICT="${DAM_AGENT_STATUS_STRICT:-0}"
 AGENT_NETWORK_MODE="${DAM_AGENT_NETWORK_MODE:-tun}"
 AGENT_TRUST_MODE="${DAM_AGENT_TRUST_MODE:-local_ca}"
 AGENT_STATE_DIR="${DAM_AGENT_STATE_DIR:-}"
+AGENT_MVP_SETUP_MODE="${DAM_AGENT_MVP_SETUP_MODE:-source}"
 AGENT_E2E_UPSTREAM="${DAM_AGENT_E2E_UPSTREAM:-http://127.0.0.1:8080}"
 AGENT_E2E_LISTEN="${DAM_AGENT_E2E_LISTEN:-127.0.0.1:7831}"
 AGENT_E2E_STARTUP_TIMEOUT="${DAM_AGENT_E2E_STARTUP_TIMEOUT:-30}"
@@ -41,6 +42,8 @@ Commands:
   release-macos Run checks, build signed DAM.app, notarize, staple, and zip it
   deploy-local  Build signed DAM.app and copy it to /Applications or --install-dir
   agent-check   Run the standard verification suite plus repo whitespace checks
+  agent-mvp-readiness
+               Run the read-only MVP release-readiness gate (package, setup, protection)
   agent-npm-readiness
                Stage npm native binaries, validate the package payload, and report publish blockers
   detector-bench
@@ -92,6 +95,7 @@ Environment:
   DAM_AGENT_NETWORK_MODE    Setup mode for agent-status, currently tun
   DAM_AGENT_TRUST_MODE      Trust mode for agent-status, currently local_ca
   DAM_AGENT_STATE_DIR       Optional state directory for setup/doctor probes
+  DAM_AGENT_MVP_SETUP_MODE  source or installed setup probes for agent-mvp-readiness, currently ${DAM_AGENT_MVP_SETUP_MODE:-source}
   DAM_AGENT_E2E_UPSTREAM    Local OpenAI-compatible smoke upstream, currently $AGENT_E2E_UPSTREAM
   DAM_AGENT_E2E_LISTEN      Loopback listen address for smoke proxy, currently $AGENT_E2E_LISTEN
   DAM_AGENT_E2E_WEB_ADDR    Loopback listen address for dogfood web proof, currently $AGENT_E2E_WEB_ADDR
@@ -335,13 +339,14 @@ if not entries:
     print("npm pack output was empty", file=sys.stderr)
     raise SystemExit(1)
 files = {entry.get("path") for entry in entries[0].get("files", [])}
+exe_suffix = ".exe" if platform_dir.startswith("win32-") else ""
 expected = [
-    f"npm/native/{platform_dir}/dam",
-    f"npm/native/{platform_dir}/damctl",
-    f"npm/native/{platform_dir}/dam-web",
-    f"npm/native/{platform_dir}/dam-proxy",
-    f"npm/native/{platform_dir}/dam-mcp",
-    f"npm/native/{platform_dir}/dam-tray",
+    f"npm/native/{platform_dir}/dam{exe_suffix}",
+    f"npm/native/{platform_dir}/damctl{exe_suffix}",
+    f"npm/native/{platform_dir}/dam-web{exe_suffix}",
+    f"npm/native/{platform_dir}/dam-proxy{exe_suffix}",
+    f"npm/native/{platform_dir}/dam-mcp{exe_suffix}",
+    f"npm/native/{platform_dir}/dam-tray{exe_suffix}",
 ]
 missing = [path for path in expected if path not in files]
 if missing:
@@ -428,6 +433,189 @@ else:
   for blocker in "${blockers[@]}"; do
     printf '  - %s\n' "$blocker"
   done
+  return 1
+}
+
+agent_mvp_restore_native_staging() {
+  local native_out="$1"
+  local backup_dir="$2"
+  rm -rf "$native_out"
+  if [[ -e "$backup_dir/native" ]]; then
+    mkdir -p "$(dirname "$native_out")"
+    cp -a "$backup_dir/native" "$native_out"
+  fi
+  rm -rf "$backup_dir"
+}
+
+cmd_agent_mvp_package_readiness() {
+  local platform_dir native_out backup_dir
+  platform_dir="$(node -p "process.platform + '-' + process.arch")"
+  native_out="$ROOT/npm/native/$platform_dir"
+  backup_dir="$(mktemp -d "${TMPDIR:-/tmp}/dam-mvp-native-$platform_dir.XXXXXX")"
+
+  if [[ -e "$native_out" ]]; then
+    cp -a "$native_out" "$backup_dir/native"
+  fi
+  trap 'agent_mvp_restore_native_staging "$native_out" "$backup_dir"' EXIT
+
+  cmd_agent_npm_readiness
+
+  trap - EXIT
+  agent_mvp_restore_native_staging "$native_out" "$backup_dir"
+  return 0
+}
+
+agent_mvp_loopback_upstream() {
+  python3 -c 'import ipaddress, sys
+from urllib.parse import urlparse
+parsed = urlparse(sys.argv[1])
+host = parsed.hostname
+if parsed.scheme not in {"http", "https"} or not host:
+    raise SystemExit(1)
+if host == "localhost":
+    raise SystemExit(0)
+try:
+    if ipaddress.ip_address(host).is_loopback:
+        raise SystemExit(0)
+except ValueError:
+    pass
+raise SystemExit(1)' "$AGENT_E2E_UPSTREAM"
+}
+
+agent_mvp_section() {
+  local name="$1"
+  shift
+  printf '\n== %s ==\n' "$name"
+  set +e
+  (
+    set -euo pipefail
+    "$@"
+  )
+  local status=$?
+  if [[ "$status" == "0" ]]; then
+    printf '%s_result: pass\n' "$name"
+  else
+    printf '%s_result: fail\n' "$name"
+    printf '%s_exit_status: %s\n' "$name" "$status"
+  fi
+  return "$status"
+}
+
+agent_mvp_run_section() {
+  local status
+  set +e
+  agent_mvp_section "$@"
+  status=$?
+  return "$status"
+}
+
+agent_mvp_json_probe() {
+  local name="$1"
+  local allow_needs_action="$2"
+  shift 2
+  local output status setup_state
+  printf '+'
+  printf ' %q' "$@"
+  printf '\n'
+  set +e
+  output="$("$@" 2>&1)"
+  status=$?
+  set -e
+  printf '%s\n' "$output"
+  if ! printf '%s' "$output" | python3 -m json.tool >/dev/null; then
+    printf '%s_json: invalid\n' "$name"
+    return 1
+  fi
+  printf '%s_json: valid\n' "$name"
+  printf '%s_exit_status: %s\n' "$name" "$status"
+  setup_state="$(printf '%s' "$output" | python3 -c 'import json, sys
+payload = json.load(sys.stdin)
+state = payload.get("state") if isinstance(payload, dict) else None
+print(state or "unknown")')"
+  printf '%s_state: %s\n' "$name" "$setup_state"
+  if [[ "$status" == "0" ]]; then
+    return 0
+  fi
+  if [[ "$allow_needs_action" != "1" ]]; then
+    return "$status"
+  fi
+  if [[ "$setup_state" == "needs_action" ]]; then
+    return 0
+  fi
+  printf '%s_needs_action: rejected\n' "$name"
+  return "$status"
+}
+
+cmd_agent_mvp_setup_readiness() {
+  local state_args=()
+  if [[ -n "$AGENT_STATE_DIR" ]]; then
+    state_args=(--state-dir "$AGENT_STATE_DIR")
+  fi
+
+  case "$AGENT_MVP_SETUP_MODE" in
+    source)
+      local failures=0
+      printf 'setup_probe_mode: source\n'
+      printf 'setup_probe_network_mode: %s\n' "$AGENT_NETWORK_MODE"
+      printf 'setup_probe_trust_mode: %s\n' "$AGENT_TRUST_MODE"
+      if [[ -n "$AGENT_STATE_DIR" ]]; then
+        printf 'setup_probe_state_dir: %s\n' "$AGENT_STATE_DIR"
+      fi
+      agent_mvp_json_probe doctor 0 cargo run -q -p dam -- doctor --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json || failures=$((failures + 1))
+      agent_mvp_json_probe setup_status 1 cargo run -q -p dam -- setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json || failures=$((failures + 1))
+      agent_mvp_json_probe setup_next_action 1 cargo run -q -p dam -- setup next-action --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json || failures=$((failures + 1))
+      return "$failures"
+      ;;
+    installed)
+      printf 'setup_probe_mode: installed\n'
+      AGENT_STATUS_STRICT=1 cmd_agent_status
+      ;;
+    *)
+      echo "invalid DAM_AGENT_MVP_SETUP_MODE: $AGENT_MVP_SETUP_MODE (expected source or installed)" >&2
+      return 2
+      ;;
+  esac
+}
+
+cmd_agent_mvp_readiness() {
+  local failures=0 section_status
+  printf 'DAM agent MVP release readiness\n'
+  printf 'safety_boundary: read-only; synthetic protection traffic only; no publish, provider calls, host routing, trust, or deploy mutation\n'
+  printf 'setup_probe_mode: %s\n' "$AGENT_MVP_SETUP_MODE"
+
+  agent_mvp_run_section package_installability cmd_agent_mvp_package_readiness
+  section_status=$?
+  set -e
+  if [[ "$section_status" != "0" ]]; then
+    failures=$((failures + 1))
+  fi
+  agent_mvp_run_section setup_doctor_readiness cmd_agent_mvp_setup_readiness
+  section_status=$?
+  set -e
+  if [[ "$section_status" != "0" ]]; then
+    failures=$((failures + 1))
+  fi
+  if ! agent_mvp_loopback_upstream; then
+    printf '\n== protection_proof ==\n'
+    printf 'protection_proof_result: fail\n'
+    printf 'protection_proof_exit_status: 2\n'
+    printf 'protection_proof_upstream: rejected_non_loopback\n'
+    failures=$((failures + 1))
+  else
+    agent_mvp_run_section protection_proof cmd_agent_protection_smoke
+    section_status=$?
+    set -e
+    if [[ "$section_status" != "0" ]]; then
+      failures=$((failures + 1))
+    fi
+  fi
+
+  printf '\nreadiness_failures: %s\n' "$failures"
+  if [[ "$failures" == "0" ]]; then
+    printf 'readiness_result: pass\n'
+    return 0
+  fi
+  printf 'readiness_result: fail\n'
   return 1
 }
 
@@ -859,6 +1047,13 @@ case "$AGENT_TRUST_MODE" in
     mode_errors=1
     ;;
 esac
+case "$AGENT_MVP_SETUP_MODE" in
+  source|installed) ;;
+  *)
+    echo "invalid DAM_AGENT_MVP_SETUP_MODE: $AGENT_MVP_SETUP_MODE (expected source or installed)" >&2
+    mode_errors=1
+    ;;
+esac
 if [[ "$mode_errors" != "0" ]]; then
   exit 2
 fi
@@ -874,6 +1069,7 @@ case "$COMMAND" in
   release-macos) cmd_release_macos ;;
   deploy-local) cmd_deploy_local ;;
   agent-check) cmd_agent_check ;;
+  agent-mvp-readiness) cmd_agent_mvp_readiness ;;
   agent-npm-readiness) cmd_agent_npm_readiness ;;
   detector-bench) cmd_detector_bench ;;
   agent-protection-smoke) cmd_agent_protection_smoke ;;
