@@ -1899,6 +1899,57 @@ JSON
                 ],
             )
 
+    def test_agent_uninstall_smoke_rejects_blocked_cleanup_status_even_on_zero_exit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            bin_dir.mkdir()
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
+
+            install_dir = temp_path / "install"
+            dam_bin = install_dir / "DAM.app" / "Contents" / "MacOS" / "dam"
+            dam_bin.parent.mkdir(parents=True)
+            dam_bin.write_text(
+                textwrap.dedent(
+                    """
+                    #!/usr/bin/env sh
+                    if [ "$1" = "setup" ] && [ "$2" = "status" ]; then
+                      printf '{"state":"blocked","message":"synthetic cleanup blocker"}\n'
+                    fi
+                    exit 0
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            dam_bin.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                    "DAM_INSTALL_DIR": str(install_dir),
+                    "DAM_AGENT_NETWORK_MODE": "explicit_proxy",
+                    "DAM_AGENT_TRUST_MODE": "disabled",
+                }
+            )
+
+            result = subprocess.run(
+                [str(BUILD_SCRIPT), "agent-uninstall-smoke", "--confirm-mutation"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            self.assertIn("cleanup_status_json: valid", result.stdout)
+            self.assertIn("cleanup_status_exit_status: 0", result.stdout)
+            self.assertIn("cleanup_status_state: blocked", result.stdout)
+            self.assertIn("cleanup_status_state_allowed: rejected", result.stdout)
+
     def test_agent_mvp_readiness_rejects_invalid_setup_mode_before_subchecks(self):
         env = os.environ.copy()
         env["DAM_AGENT_MVP_SETUP_MODE"] = "mutating"

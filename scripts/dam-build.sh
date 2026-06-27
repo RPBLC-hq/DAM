@@ -624,6 +624,38 @@ print(state or "unknown")')"
   return "$status"
 }
 
+agent_cleanup_status_probe() {
+  local output status setup_state
+  printf '+'
+  printf ' %q' "$@"
+  printf '\n'
+  set +e
+  output="$("$@" 2>&1)"
+  status=$?
+  set -e
+  printf '%s\n' "$output"
+  if ! printf '%s' "$output" | python3 -m json.tool >/dev/null; then
+    printf 'cleanup_status_json: invalid\n'
+    return 1
+  fi
+  printf 'cleanup_status_json: valid\n'
+  printf 'cleanup_status_exit_status: %s\n' "$status"
+  setup_state="$(printf '%s' "$output" | python3 -c 'import json, sys
+payload = json.load(sys.stdin)
+state = payload.get("state") if isinstance(payload, dict) else None
+print(state or "unknown")')"
+  printf 'cleanup_status_state: %s\n' "$setup_state"
+  case "$setup_state" in
+    ready|needs_action)
+      return 0
+      ;;
+    *)
+      printf 'cleanup_status_state_allowed: rejected\n'
+      return 1
+      ;;
+  esac
+}
+
 cmd_agent_mvp_setup_readiness() {
   local state_args=()
   if [[ -n "$AGENT_STATE_DIR" ]]; then
@@ -1048,7 +1080,7 @@ cmd_agent_uninstall_smoke() {
   if [[ -n "$AGENT_STATE_DIR" ]]; then
     state_args=(--state-dir "$AGENT_STATE_DIR")
   fi
-  agent_mvp_json_probe cleanup_status 1 "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
+  agent_cleanup_status_probe "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
 }
 
 cmd_agent_install() {
