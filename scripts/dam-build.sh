@@ -359,7 +359,8 @@ print(entries[0].get("filename", ""))' "$platform_dir"
 
 verify_npm_native_release_artifacts() {
   local platform_dir="$1"
-  python3 - "$ROOT" "$platform_dir" <<'PY'
+  local host_os="$2"
+  python3 - "$ROOT" "$platform_dir" "$host_os" <<'PY'
 import hashlib
 import os
 import sys
@@ -367,6 +368,7 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 platform_dir = sys.argv[2]
+host_os = sys.argv[3]
 exe_suffix = ".exe" if platform_dir.startswith("win32-") else ""
 expected = ["dam", "damctl", "dam-web", "dam-proxy", "dam-mcp", "dam-tray"]
 errors = []
@@ -397,7 +399,7 @@ for name in expected:
 
 print("release_artifact_source: target/release")
 print(f"release_artifact_native_payload: npm/native/{platform_dir}")
-if sys.platform == "darwin":
+if host_os == "Darwin":
     print("macos_app_artifact_check: use agent-install/agent-status for notarized installed-app validation")
 else:
     print("macos_app_artifact_check: skipped_non_macos")
@@ -412,20 +414,21 @@ PY
 }
 
 cmd_agent_npm_readiness() {
-  local package_name local_version registry_url platform_dir doctor_output pack_output pack_filename artifact_output
+  local package_name local_version registry_url platform_dir host_os doctor_output pack_output pack_filename artifact_output
   local registry_version owners whoami_output blockers=()
 
   platform_dir="$(node -p "process.platform + '-' + process.arch")"
+  host_os="$(uname -s)"
   cmd_npm_native
 
   package_name="$(package_manifest_field name)"
   local_version="$(package_manifest_field version)"
   registry_url="$(npm config get registry)"
 
-  if ! artifact_output="$(verify_npm_native_release_artifacts "$platform_dir" 2>&1)"; then
+  if ! artifact_output="$(verify_npm_native_release_artifacts "$platform_dir" "$host_os" 2>&1)"; then
     blockers+=("staged npm native binaries do not match the release artifacts under target/release")
   fi
-  if [[ "$(uname -s)" != "Darwin" ]]; then
+  if [[ "$host_os" != "Darwin" ]]; then
     artifact_output="${artifact_output}"$'\n''macos_app_artifact_blocker: notarized installed-app validation requires macOS'
     blockers+=("notarized installed-app validation requires macOS; run the macOS release-path validation before production release")
   fi
