@@ -357,16 +357,75 @@ if missing:
 print(entries[0].get("filename", ""))' "$platform_dir"
 }
 
+verify_npm_native_release_artifacts() {
+  local platform_dir="$1"
+  python3 - "$ROOT" "$platform_dir" <<'PY'
+import hashlib
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+platform_dir = sys.argv[2]
+exe_suffix = ".exe" if platform_dir.startswith("win32-") else ""
+expected = ["dam", "damctl", "dam-web", "dam-proxy", "dam-mcp", "dam-tray"]
+errors = []
+
+def digest(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+for name in expected:
+    release = root / "target" / "release" / f"{name}{exe_suffix}"
+    staged = root / "npm" / "native" / platform_dir / f"{name}{exe_suffix}"
+    if not release.is_file():
+        errors.append(f"missing release binary: {release.relative_to(root)}")
+        continue
+    if not staged.is_file():
+        errors.append(f"missing staged native binary: {staged.relative_to(root)}")
+        continue
+    if digest(release) != digest(staged):
+        errors.append(
+            "staged native binary does not match release artifact: "
+            f"{staged.relative_to(root)} != {release.relative_to(root)}"
+        )
+    if not os.access(staged, os.X_OK):
+        errors.append(f"staged native binary is not executable: {staged.relative_to(root)}")
+
+print("release_artifact_source: target/release")
+print(f"release_artifact_native_payload: npm/native/{platform_dir}")
+if sys.platform == "darwin":
+    print("macos_app_artifact_check: use agent-install/agent-status for notarized installed-app validation")
+else:
+    print("macos_app_artifact_check: skipped_non_macos")
+    print("macos_app_artifact_blocker: notarized installed-app validation requires macOS")
+if errors:
+    print("release_artifacts_consistent: no")
+    print("release artifact consistency failed:", file=sys.stderr)
+    for error in errors:
+        print(f"  - {error}", file=sys.stderr)
+    raise SystemExit(1)
+print("release_artifacts_consistent: yes")
+PY
+}
+
 cmd_agent_npm_readiness() {
-  local package_name local_version registry_url platform_dir doctor_output pack_output pack_filename
+  local package_name local_version registry_url platform_dir doctor_output pack_output pack_filename artifact_output
   local registry_version owners whoami_output blockers=()
 
+  platform_dir="$(node -p "process.platform + '-' + process.arch")"
   cmd_npm_native
 
   package_name="$(package_manifest_field name)"
   local_version="$(package_manifest_field version)"
   registry_url="$(npm config get registry)"
-  platform_dir="$(node -p "process.platform + '-' + process.arch")"
+
+  if ! artifact_output="$(verify_npm_native_release_artifacts "$platform_dir" 2>&1)"; then
+    blockers+=("staged npm native binaries do not match the release artifacts under target/release")
+  fi
 
   if ! doctor_output="$(node "$ROOT/npm/bin/dam.js" package-doctor --json)"; then
     printf '%s\n' "$doctor_output"
@@ -417,6 +476,7 @@ else:
   printf 'registry: %s\n' "$registry_url"
   printf 'registry_version: %s\n' "$registry_version"
   printf 'platform_dir: %s\n' "$platform_dir"
+  printf '%s\n' "$artifact_output"
   printf 'package_doctor_state: ready\n'
   printf 'pack_file: %s\n' "$pack_filename"
   printf 'pack_native_files_present: %s\n' "$( [[ -n "$pack_filename" ]] && printf yes || printf no )"
