@@ -60,6 +60,10 @@ Commands:
                 Run read-only installed rescue/repair/diagnostics recovery probes
   agent-repair-smoke
                 Run mutating installed rescue/repair recovery probes with confirmation
+  agent-cleanup-smoke
+                Run read-only installed uninstall/cleanup preview probes
+  agent-uninstall-smoke
+                Run mutating installed daemon/routing/trust cleanup probes with confirmation
   agent-install Build, notarize when enabled, install, verify, restart, and status DAM
   agent-status  Print installed app, process, package, doctor, and setup status
 
@@ -115,7 +119,7 @@ Environment:
   DAM_AGENT_E2E_BUILD      Set to 0 to reuse the binary without cargo build, currently $AGENT_E2E_BUILD
   DAM_AGENT_E2E_KEEP_TEMP  Set to 1 to keep smoke temp vault/log files, currently $AGENT_E2E_KEEP_TEMP
   DAM_AGENT_CONFIRM_MUTATION
-                           Set to 1 to allow mutating agent repair smoke probes
+                           Set to 1 to allow mutating agent repair/uninstall smoke probes
 EOF
 }
 
@@ -971,6 +975,74 @@ cmd_agent_repair_smoke() {
   run "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
 }
 
+cmd_agent_cleanup_smoke() {
+  require_macos
+  local dam_bin
+  print_agent_setup_probe_header "agent cleanup smoke"
+  dam_bin="$(installed_dam_binary)"
+
+  case "$AGENT_NETWORK_MODE" in
+    tun)
+      run "$dam_bin" network remove-network-extension --json
+      ;;
+    system_proxy)
+      run "$dam_bin" network remove-system-proxy --json
+      ;;
+    explicit_proxy)
+      printf 'cleanup_network_preview: explicit_proxy_no_system_route\n'
+      ;;
+  esac
+
+  case "$AGENT_TRUST_MODE" in
+    local_ca)
+      run "$dam_bin" trust remove-local-ca --json
+      ;;
+    disabled)
+      printf 'cleanup_trust_preview: disabled_no_local_ca\n'
+      ;;
+  esac
+}
+
+cmd_agent_uninstall_smoke() {
+  if [[ "$AGENT_CONFIRM_MUTATION" != "1" ]]; then
+    echo "agent-uninstall-smoke mutates installed DAM daemon/routing/trust cleanup; pass --confirm-mutation or set DAM_AGENT_CONFIRM_MUTATION=1" >&2
+    exit 2
+  fi
+  require_macos
+
+  local dam_bin
+  print_agent_setup_probe_header "agent uninstall smoke"
+  dam_bin="$(installed_dam_binary)"
+
+  run "$dam_bin" disconnect --stop --json
+  case "$AGENT_NETWORK_MODE" in
+    tun)
+      run "$dam_bin" network remove-network-extension --yes --json
+      ;;
+    system_proxy)
+      run "$dam_bin" network remove-system-proxy --yes --json
+      ;;
+    explicit_proxy)
+      printf 'cleanup_network_apply: explicit_proxy_no_system_route\n'
+      ;;
+  esac
+
+  case "$AGENT_TRUST_MODE" in
+    local_ca)
+      run "$dam_bin" trust remove-local-ca --yes --json
+      ;;
+    disabled)
+      printf 'cleanup_trust_apply: disabled_no_local_ca\n'
+      ;;
+  esac
+
+  local state_args=()
+  if [[ -n "$AGENT_STATE_DIR" ]]; then
+    state_args=(--state-dir "$AGENT_STATE_DIR")
+  fi
+  run "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
+}
+
 cmd_agent_install() {
   require_macos
   if [[ "${SKIP_CHECKS:-0}" != "1" ]]; then
@@ -1144,6 +1216,8 @@ case "$COMMAND" in
   agent-dogfood-verify) cmd_agent_dogfood_verify ;;
   agent-recovery-smoke) cmd_agent_recovery_smoke ;;
   agent-repair-smoke) cmd_agent_repair_smoke ;;
+  agent-cleanup-smoke) cmd_agent_cleanup_smoke ;;
+  agent-uninstall-smoke) cmd_agent_uninstall_smoke ;;
   agent-install) cmd_agent_install ;;
   agent-status) cmd_agent_status ;;
   *)
