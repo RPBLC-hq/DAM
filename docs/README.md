@@ -10,6 +10,7 @@ DAM is designed for macOS, Linux, and Windows. Platform-specific routing, trust,
 
 ## Operational Guides
 
+- [build-release](build-release.md): local build, package, release, and agent verification commands, including the read-only `agent-mvp-readiness` gate for package/installability, setup/doctor, and synthetic protection-proof readiness.
 - [security-review-bundle](security-review-bundle.md): local synthetic-data-only trust/evidence checklist for reviewers.
 
 ## Modules

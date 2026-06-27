@@ -435,6 +435,52 @@ else:
   return 1
 }
 
+agent_mvp_restore_native_staging() {
+  local native_out="$1"
+  local backup_dir="$2"
+  rm -rf "$native_out"
+  if [[ -e "$backup_dir/native" ]]; then
+    mkdir -p "$(dirname "$native_out")"
+    cp -a "$backup_dir/native" "$native_out"
+  fi
+  rm -rf "$backup_dir"
+}
+
+cmd_agent_mvp_package_readiness() {
+  local platform_dir native_out backup_dir
+  platform_dir="$(node -p "process.platform + '-' + process.arch")"
+  native_out="$ROOT/npm/native/$platform_dir"
+  backup_dir="$(mktemp -d "${TMPDIR:-/tmp}/dam-mvp-native-$platform_dir.XXXXXX")"
+
+  if [[ -e "$native_out" ]]; then
+    cp -a "$native_out" "$backup_dir/native"
+  fi
+  trap 'agent_mvp_restore_native_staging "$native_out" "$backup_dir"' EXIT
+
+  cmd_agent_npm_readiness
+
+  trap - EXIT
+  agent_mvp_restore_native_staging "$native_out" "$backup_dir"
+  return 0
+}
+
+agent_mvp_loopback_upstream() {
+  python3 -c 'import ipaddress, sys
+from urllib.parse import urlparse
+parsed = urlparse(sys.argv[1])
+host = parsed.hostname
+if parsed.scheme not in {"http", "https"} or not host:
+    raise SystemExit(1)
+if host == "localhost":
+    raise SystemExit(0)
+try:
+    if ipaddress.ip_address(host).is_loopback:
+        raise SystemExit(0)
+except ValueError:
+    pass
+raise SystemExit(1)' "$AGENT_E2E_UPSTREAM"
+}
+
 agent_mvp_section() {
   local name="$1"
   shift
@@ -536,7 +582,7 @@ cmd_agent_mvp_readiness() {
   printf 'safety_boundary: read-only; synthetic protection traffic only; no publish, provider calls, host routing, trust, or deploy mutation\n'
   printf 'setup_probe_mode: %s\n' "$AGENT_MVP_SETUP_MODE"
 
-  agent_mvp_run_section package_installability cmd_agent_npm_readiness
+  agent_mvp_run_section package_installability cmd_agent_mvp_package_readiness
   section_status=$?
   set -e
   if [[ "$section_status" != "0" ]]; then
@@ -548,11 +594,19 @@ cmd_agent_mvp_readiness() {
   if [[ "$section_status" != "0" ]]; then
     failures=$((failures + 1))
   fi
-  agent_mvp_run_section protection_proof cmd_agent_protection_smoke
-  section_status=$?
-  set -e
-  if [[ "$section_status" != "0" ]]; then
+  if ! agent_mvp_loopback_upstream; then
+    printf '\n== protection_proof ==\n'
+    printf 'protection_proof_result: fail\n'
+    printf 'protection_proof_exit_status: 2\n'
+    printf 'protection_proof_upstream: rejected_non_loopback\n'
     failures=$((failures + 1))
+  else
+    agent_mvp_run_section protection_proof cmd_agent_protection_smoke
+    section_status=$?
+    set -e
+    if [[ "$section_status" != "0" ]]; then
+      failures=$((failures + 1))
+    fi
   fi
 
   printf '\nreadiness_failures: %s\n' "$failures"

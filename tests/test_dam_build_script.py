@@ -1147,6 +1147,7 @@ JSON
                 }
             )
 
+            staged_existed_after_run = None
             try:
                 result = subprocess.run(
                     [str(BUILD_SCRIPT), "agent-mvp-readiness"],
@@ -1156,6 +1157,7 @@ JSON
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                 )
+                staged_existed_after_run = staged_dir.exists()
             finally:
                 if staged_dir.exists():
                     shutil.rmtree(staged_dir)
@@ -1171,6 +1173,67 @@ JSON
             self.assertIn("setup_next_action_exit_status: 1", result.stdout)
             self.assertIn("protection_proof_result: pass", result.stdout)
             self.assertIn("readiness_result: pass", result.stdout)
+            self.assertFalse(staged_existed_after_run)
+
+    def test_agent_mvp_readiness_rejects_external_protection_upstream(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            bin_dir.mkdir()
+
+            cargo = bin_dir / "cargo"
+            cargo.write_text(
+                textwrap.dedent(
+                    """
+                    #!/usr/bin/env sh
+                    if [ "$1" = "build" ]; then
+                      exit 1
+                    fi
+                    if [ "$1" = "run" ]; then
+                      printf '{"state":"ready"}\n'
+                      exit 0
+                    fi
+                    exit 1
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            cargo.chmod(0o755)
+
+            npm = bin_dir / "npm"
+            npm.write_text("#!/usr/bin/env sh\nexit 1\n", encoding="utf-8")
+            npm.chmod(0o755)
+
+            smoke_marker = temp_path / "smoke-ran"
+            smoke_stub = temp_path / "smoke_stub.py"
+            smoke_stub.write_text(
+                f"from pathlib import Path\nPath({str(smoke_marker)!r}).write_text('ran')\nraise SystemExit(0)\n",
+                encoding="utf-8",
+            )
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                    "DAM_AGENT_E2E_SMOKE_SCRIPT": str(smoke_stub),
+                    "DAM_AGENT_E2E_UPSTREAM": "https://api.example.invalid/v1",
+                    "DAM_AGENT_NETWORK_MODE": "explicit_proxy",
+                    "DAM_AGENT_TRUST_MODE": "disabled",
+                }
+            )
+
+            result = subprocess.run(
+                [str(BUILD_SCRIPT), "agent-mvp-readiness"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            self.assertIn("protection_proof_upstream: rejected_non_loopback", result.stdout)
+            self.assertFalse(smoke_marker.exists())
 
     def test_agent_mvp_readiness_fails_closed_when_package_build_fails_with_stale_binaries(self):
         with tempfile.TemporaryDirectory() as temp_dir:
