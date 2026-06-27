@@ -401,7 +401,6 @@ if sys.platform == "darwin":
     print("macos_app_artifact_check: use agent-install/agent-status for notarized installed-app validation")
 else:
     print("macos_app_artifact_check: skipped_non_macos")
-    print("macos_app_artifact_blocker: notarized installed-app validation requires macOS")
 if errors:
     print("release_artifacts_consistent: no")
     print("release artifact consistency failed:", file=sys.stderr)
@@ -427,6 +426,7 @@ cmd_agent_npm_readiness() {
     blockers+=("staged npm native binaries do not match the release artifacts under target/release")
   fi
   if [[ "$(uname -s)" != "Darwin" ]]; then
+    artifact_output="${artifact_output}"$'\n''macos_app_artifact_blocker: notarized installed-app validation requires macOS'
     blockers+=("notarized installed-app validation requires macOS; run the macOS release-path validation before production release")
   fi
 
