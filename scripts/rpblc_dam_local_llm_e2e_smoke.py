@@ -28,7 +28,7 @@ from typing import Any, NamedTuple
 SYNTHETIC_EMAIL = "alex.sandbox@example.test"
 SYNTHETIC_PHONE = "+14155550123"
 SYNTHETIC_SSN = "123-45-6789"
-SYNTHETIC_ENV_SECRET = "sandbox_local_secret_value_0001"
+SYNTHETIC_ENV_SECRET = "SandboxLocalSecretValue0001"
 AGENT_SESSION_FIXTURE_NAME = "agent_session_mixed_pii_secret_v1"
 DEFAULT_UPSTREAM = "http://127.0.0.1:8080"
 DEFAULT_LISTEN = "127.0.0.1:7831"
@@ -48,6 +48,12 @@ def raw_synthetic_values() -> tuple[str, ...]:
         SYNTHETIC_ENV_SECRET,
         synthetic_github_token(),
     )
+
+
+def leak_summary(leaks: list[str]) -> str:
+    """Describe leaked synthetic values without printing the values themselves."""
+
+    return f"{len(set(leaks))} raw synthetic value(s)"
 
 
 class SmokeRouteCase(NamedTuple):
@@ -212,7 +218,9 @@ def assert_agent_session_response_safe(text: str) -> None:
     compact_text = "".join(text.split())
     leaks = [value for value in raw_synthetic_values() if value in compact_text]
     if leaks:
-        raise AssertionError(f"agent-session response leaked raw synthetic values {leaks}: {text!r}")
+        raise AssertionError(
+            f"agent-session response leaked {leak_summary(leaks)}; response redacted"
+        )
 
 
 def post_json(url: str, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
@@ -284,7 +292,9 @@ def assert_upstream_transcript_protected(transcript: dict[str, Any] | None) -> l
         if "alpha=[email:" in compact_lower and "beta=[ssn:" in compact_lower:
             payload_positions_checked = True
     if leaks:
-        raise AssertionError(f"fake upstream transcript leaked raw synthetic values {sorted(set(leaks))}")
+        raise AssertionError(
+            f"fake upstream transcript leaked {leak_summary(leaks)}; transcript redacted"
+        )
     if not payload_positions_checked:
         raise AssertionError(
             "fake upstream transcript did not contain DAM references in the synthetic payload positions "
@@ -295,6 +305,8 @@ def assert_upstream_transcript_protected(transcript: dict[str, Any] | None) -> l
 
 
 def assert_agent_session_transcript_protected(transcript: dict[str, Any] | None) -> dict[str, str]:
+    if transcript is None:
+        return {}
     requests = transcript_requests(transcript)
     fixture_requests = []
     for request in requests:
@@ -309,7 +321,9 @@ def assert_agent_session_transcript_protected(transcript: dict[str, Any] | None)
     joined_fixture = "\n".join(fixture_requests)
     leaks = [value for value in raw_synthetic_values() if value in joined_fixture]
     if leaks:
-        raise AssertionError(f"agent-session transcript leaked raw synthetic values {sorted(set(leaks))}")
+        raise AssertionError(
+            f"agent-session transcript leaked {leak_summary(leaks)}; transcript redacted"
+        )
 
     compact_lower = "".join(joined_fixture.split()).lower()
     expected_kinds = ("email", "phone", "ssn", "api_key")
@@ -376,7 +390,7 @@ def assert_no_raw_values_in_activity_log(log_db: Path) -> None:
     if leaked_values:
         raise AssertionError(
             "activity log leaked raw synthetic values outside the vault: "
-            f"{', '.join(leaked_values)}"
+            f"{leak_summary(leaked_values)}; activity log redacted"
         )
 
 

@@ -270,7 +270,7 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
         )
 
         self.assertEqual(paths, ["/v1/chat/completions"])
-        with self.assertRaisesRegex(AssertionError, "raw synthetic values"):
+        with self.assertRaisesRegex(AssertionError, "raw synthetic value"):
             smoke.assert_upstream_transcript_protected(
                 {"requests": [{"body": f"leaked {smoke.SYNTHETIC_EMAIL} [ssn:def]"}]}
             )
@@ -319,7 +319,8 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
                 "api_key": "reference_or_redaction_observed",
             },
         )
-        with self.assertRaisesRegex(AssertionError, "raw synthetic values"):
+        self.assertEqual(smoke.assert_agent_session_transcript_protected(None), {})
+        with self.assertRaisesRegex(AssertionError, "raw synthetic value") as context:
             smoke.assert_agent_session_transcript_protected(
                 {
                     "requests": [
@@ -330,6 +331,7 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
                     ]
                 }
             )
+        self.assertNotIn(smoke.SYNTHETIC_ENV_SECRET, str(context.exception))
         with self.assertRaisesRegex(AssertionError, "expected DAM references"):
             smoke.assert_agent_session_transcript_protected(
                 {
