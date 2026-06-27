@@ -233,8 +233,9 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, smoke.SYNTHETIC_EMAIL):
             smoke.assert_exact_echo_resolved("client sees only [email:abc123]")
 
-        with self.assertRaisesRegex(AssertionError, "raw synthetic values"):
+        with self.assertRaisesRegex(AssertionError, "raw synthetic value") as context:
             smoke.assert_transformed_token_only(f"leaked {smoke.SYNTHETIC_EMAIL}")
+        self.assertNotIn(smoke.SYNTHETIC_EMAIL, str(context.exception))
 
     def test_transformed_token_assertion_rejects_whitespace_obfuscated_raw_values(self):
         smoke = load_module()
@@ -242,9 +243,9 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
         obfuscated_email = " \n ".join(smoke.SYNTHETIC_EMAIL)
         obfuscated_ssn = "\t".join(smoke.SYNTHETIC_SSN)
 
-        with self.assertRaisesRegex(AssertionError, "raw synthetic values"):
+        with self.assertRaisesRegex(AssertionError, "raw synthetic value"):
             smoke.assert_transformed_token_only(obfuscated_email)
-        with self.assertRaisesRegex(AssertionError, "raw synthetic values"):
+        with self.assertRaisesRegex(AssertionError, "raw synthetic value"):
             smoke.assert_transformed_token_only(obfuscated_ssn)
 
     def test_transformed_token_assertion_requires_dam_reference_kind(self):
@@ -342,6 +343,30 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
                         }
                     ]
                 }
+            )
+
+    def test_agent_session_detector_kind_assertion_requires_all_mixed_fixture_kinds(self):
+        smoke = load_module()
+
+        self.assertEqual(
+            smoke.assert_agent_session_detector_kinds_observed(
+                {
+                    "email:tokenize": 1,
+                    "phone:tokenize": 1,
+                    "ssn:tokenize": 1,
+                    "api_key:tokenize": 2,
+                }
+            ),
+            {
+                "email": "detector_log_observed",
+                "phone": "detector_log_observed",
+                "ssn": "detector_log_observed",
+                "api_key": "detector_log_observed",
+            },
+        )
+        with self.assertRaisesRegex(AssertionError, "missing=\['phone'\]"):
+            smoke.assert_agent_session_detector_kinds_observed(
+                {"email:tokenize": 1, "ssn:tokenize": 1, "api_key:tokenize": 2}
             )
 
     def test_route_selection_defaults_to_representative_mvp_matrix(self):
