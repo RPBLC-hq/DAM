@@ -1048,7 +1048,7 @@ cmd_agent_uninstall_smoke() {
   if [[ -n "$AGENT_STATE_DIR" ]]; then
     state_args=(--state-dir "$AGENT_STATE_DIR")
   fi
-  run "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
+  agent_mvp_json_probe cleanup_status 1 "$dam_bin" setup status --network-mode "$AGENT_NETWORK_MODE" --trust-mode "$AGENT_TRUST_MODE" "${state_args[@]}" --json
 }
 
 cmd_agent_install() {

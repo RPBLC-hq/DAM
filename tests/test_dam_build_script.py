@@ -1796,6 +1796,10 @@ JSON
                     f"""
                     #!/usr/bin/env sh
                     printf '%s\\n' "$*" >> {str(argv_path)!r}
+                    if [ "$1" = "setup" ] && [ "$2" = "status" ]; then
+                      printf '{{"state":"needs_action","message":"synthetic cleanup complete"}}\\n'
+                      exit 1
+                    fi
                     exit 0
                     """
                 ).lstrip(),
@@ -1826,6 +1830,7 @@ JSON
 
             self.assertIn("cleanup_network_apply: explicit_proxy_no_system_route", result.stdout)
             self.assertIn("cleanup_trust_apply: disabled_no_local_ca", result.stdout)
+            self.assertIn("cleanup_status_state: needs_action", result.stdout)
             self.assertEqual(
                 argv_path.read_text(encoding="utf-8").splitlines(),
                 [
@@ -1852,6 +1857,9 @@ JSON
                     f"""
                     #!/usr/bin/env sh
                     printf '%s :: %s\\n' "${{DAM_STATE_DIR:-<unset>}}" "$*" >> {str(argv_path)!r}
+                    if [ "$1" = "setup" ] && [ "$2" = "status" ]; then
+                      printf '{{"state":"ready"}}\\n'
+                    fi
                     exit 0
                     """
                 ).lstrip(),
