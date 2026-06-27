@@ -13,6 +13,7 @@ scripts/dam-build.sh notarize --app target/dam-build/macos/DAM.app --notary-prof
 scripts/dam-build.sh release-macos --mode developer-id
 scripts/dam-build.sh deploy-local --mode development
 scripts/dam-build.sh agent-check
+scripts/dam-build.sh agent-mvp-readiness
 scripts/dam-build.sh agent-npm-readiness
 scripts/dam-build.sh agent-protection-smoke
 scripts/dam-build.sh agent-visible-evidence-smoke
@@ -39,6 +40,8 @@ scripts/dam-build.sh agent-status --network-mode tun --trust-mode local_ca [--st
 `deploy-local` builds or accepts an existing `DAM.app` and copies it to `/Applications` by default.
 
 `agent-check` is the default verification command for local agents and maintainers. It runs `check` and adds `git diff --check` when the source tree is a git checkout.
+
+`agent-mvp-readiness` is the one-command read-only MVP release-readiness gate for the local known-provider shield. It prints separate pass/fail sections for package/installability readiness (`agent-npm-readiness`), local setup/doctor readiness, and synthetic protection proof readiness (`agent-protection-smoke`). The default setup probe mode is `source`: it runs source-tree `dam doctor --json`, `dam setup status --json`, and `dam setup next-action --json` through `cargo run -q -p dam -- ...` with the configured setup modes, accepting setup `needs_action` exit codes as readable readiness evidence while still failing on invalid JSON or failed `doctor`. Set `DAM_AGENT_MVP_SETUP_MODE=installed` to make the setup section use installed-app `agent-status --strict-status` instead. The command does not publish to npm, call real providers, use credentials, mutate host routing/trust/PAC/TUN/firewall state, or deploy public artifacts; the protection section remains synthetic-only and should use a loopback OpenAI-compatible upstream such as `DAM_AGENT_E2E_UPSTREAM=http://127.0.0.1:18080` with `scripts/dam_fake_openai_upstream.py --port 18080` when no local model endpoint is available.
 
 `agent-npm-readiness` is the local/read-only npm installability probe. It stages current-platform native binaries under `npm/native/<platform>-<arch>/`, runs `dam package-doctor --json`, verifies that `npm pack --dry-run --ignore-scripts --json` includes the staged binaries, reports the current registry owner and published version for `@rpblc/dam`, and fails closed when the local package version is not publishable or this machine lacks npm publish auth. It does not publish, mutate system routing/trust, or require package credentials in repository files.
 
@@ -85,6 +88,7 @@ Use this matrix when validating release-path recovery without guessing which com
 - `DAM_SKIP_NOTARIZE`: set to `1` to skip notarization in `agent-install`.
 - `DAM_RESTART_AFTER_INSTALL`: set to `0` to install without restarting daemon/tray.
 - `DAM_AGENT_STATUS_STRICT`: set to `1` to make `agent-status` fail when any probe fails.
+- `DAM_AGENT_MVP_SETUP_MODE`: setup probe mode for `agent-mvp-readiness`: `source` (default) or `installed`.
 - `DAM_AGENT_NETWORK_MODE`: setup mode for `agent-status`, default `tun`.
 - `DAM_AGENT_TRUST_MODE`: trust mode for `agent-status`, default `local_ca`.
 - `DAM_AGENT_STATE_DIR`: optional state directory for installed-app `agent-status`, `agent-recovery-smoke`, and `agent-repair-smoke` probes.
