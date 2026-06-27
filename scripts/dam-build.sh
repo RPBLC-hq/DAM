@@ -486,14 +486,17 @@ payload = json.load(sys.stdin)
 state = payload.get("state") if isinstance(payload, dict) else None
 print(state or "unknown")')"
   printf '%s_state: %s\n' "$name" "$setup_state"
-  if [[ "$status" != "0" && "$allow_needs_action" != "1" ]]; then
+  if [[ "$status" == "0" ]]; then
+    return 0
+  fi
+  if [[ "$allow_needs_action" != "1" ]]; then
     return "$status"
   fi
-  if [[ "$status" != "0" && "$allow_needs_action" == "1" && "$setup_state" != "needs_action" ]]; then
-    printf '%s_needs_action: rejected\n' "$name"
-    return "$status"
+  if [[ "$setup_state" == "needs_action" ]]; then
+    return 0
   fi
-  return 0
+  printf '%s_needs_action: rejected\n' "$name"
+  return "$status"
 }
 
 cmd_agent_mvp_setup_readiness() {
