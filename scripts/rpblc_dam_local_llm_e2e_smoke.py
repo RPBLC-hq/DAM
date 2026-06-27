@@ -26,9 +26,34 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 SYNTHETIC_EMAIL = "alex.sandbox@example.test"
+SYNTHETIC_PHONE = "+14155550123"
 SYNTHETIC_SSN = "123-45-6789"
+SYNTHETIC_ENV_SECRET = "SandboxLocalSecretValue0001"
+AGENT_SESSION_FIXTURE_NAME = "agent_session_mixed_pii_secret_v1"
 DEFAULT_UPSTREAM = "http://127.0.0.1:8080"
 DEFAULT_LISTEN = "127.0.0.1:7831"
+
+
+def synthetic_github_token() -> str:
+    """Return a synthetic GitHub-shaped token without storing one as a repo literal."""
+
+    return "ghp" + "_" + ("A" * 30)
+
+
+def raw_synthetic_values() -> tuple[str, ...]:
+    return (
+        SYNTHETIC_EMAIL,
+        SYNTHETIC_PHONE,
+        SYNTHETIC_SSN,
+        SYNTHETIC_ENV_SECRET,
+        synthetic_github_token(),
+    )
+
+
+def leak_summary(leaks: list[str]) -> str:
+    """Describe leaked synthetic values without printing the values themselves."""
+
+    return f"{len(set(leaks))} raw synthetic value(s)"
 
 
 class SmokeRouteCase(NamedTuple):
@@ -136,6 +161,31 @@ def transform_token_prompt() -> str:
     )
 
 
+def agent_session_prompt() -> str:
+    github_token = synthetic_github_token()
+    return "\n".join(
+        [
+            "For a local synthetic DAM product proof, summarize this agent session without exposing secrets.",
+            f"Fixture: {AGENT_SESSION_FIXTURE_NAME}",
+            "",
+            "## User prompt",
+            f"Please debug onboarding for {SYNTHETIC_EMAIL} and call {SYNTHETIC_PHONE} only if needed.",
+            f"Temporary test SSN-like identifier: {SYNTHETIC_SSN}",
+            "",
+            "```dotenv",
+            f"OPENAI_API_KEY={SYNTHETIC_ENV_SECRET}",
+            f"GITHUB_TOKEN={github_token}",
+            "FEATURE_FLAG=synthetic-local-only",
+            "```",
+            "",
+            "Tool output:",
+            "- repo: example/local-agent-sandbox",
+            "- command: npm test -- --runInBand",
+            "- result: failed because test fixtures were not updated",
+        ]
+    )
+
+
 def response_text(data: dict[str, Any]) -> str:
     try:
         choice = data["choices"][0]
@@ -156,12 +206,23 @@ def assert_exact_echo_resolved(text: str) -> None:
 
 def assert_transformed_token_only(text: str) -> None:
     compact_text = "".join(text.split())
-    leaks = [value for value in (SYNTHETIC_EMAIL, SYNTHETIC_SSN) if value in compact_text]
+    leaks = [value for value in raw_synthetic_values() if value in compact_text]
     if leaks:
-        raise AssertionError(f"transformed-token response leaked raw synthetic values {leaks}: {text!r}")
+        raise AssertionError(
+            f"transformed-token response leaked {leak_summary(leaks)}; response redacted"
+        )
     compact_lower = compact_text.lower()
     if "[email:" not in compact_lower and "[ssn:" not in compact_lower:
         raise AssertionError(f"model did not appear to transform a DAM token: {text!r}")
+
+
+def assert_agent_session_response_safe(text: str) -> None:
+    compact_text = "".join(text.split())
+    leaks = [value for value in raw_synthetic_values() if value in compact_text]
+    if leaks:
+        raise AssertionError(
+            f"agent-session response leaked {leak_summary(leaks)}; response redacted"
+        )
 
 
 def post_json(url: str, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
@@ -228,12 +289,14 @@ def assert_upstream_transcript_protected(transcript: dict[str, Any] | None) -> l
         path_results.append(str(request.get("path", "")))
         surfaces = [str(request.get("body", "")), str(request.get("user_content", ""))]
         joined = "\n".join(surfaces)
-        leaks.extend(value for value in (SYNTHETIC_EMAIL, SYNTHETIC_SSN) if value in joined)
+        leaks.extend(value for value in raw_synthetic_values() if value in joined)
         compact_lower = "".join(joined.split()).lower()
         if "alpha=[email:" in compact_lower and "beta=[ssn:" in compact_lower:
             payload_positions_checked = True
     if leaks:
-        raise AssertionError(f"fake upstream transcript leaked raw synthetic values {sorted(set(leaks))}")
+        raise AssertionError(
+            f"fake upstream transcript leaked {leak_summary(leaks)}; transcript redacted"
+        )
     if not payload_positions_checked:
         raise AssertionError(
             "fake upstream transcript did not contain DAM references in the synthetic payload positions "
@@ -241,6 +304,40 @@ def assert_upstream_transcript_protected(transcript: dict[str, Any] | None) -> l
             f"{transcript!r}"
         )
     return path_results
+
+
+def assert_agent_session_transcript_protected(transcript: dict[str, Any] | None) -> dict[str, str]:
+    if transcript is None:
+        return {}
+    requests = transcript_requests(transcript)
+    fixture_requests = []
+    for request in requests:
+        if not isinstance(request, dict):
+            continue
+        joined = "\n".join([str(request.get("body", "")), str(request.get("user_content", ""))])
+        if AGENT_SESSION_FIXTURE_NAME in joined:
+            fixture_requests.append(joined)
+    if not fixture_requests:
+        raise AssertionError(f"fake upstream transcript did not include {AGENT_SESSION_FIXTURE_NAME}")
+
+    joined_fixture = "\n".join(fixture_requests)
+    leaks = [value for value in raw_synthetic_values() if value in joined_fixture]
+    if leaks:
+        raise AssertionError(
+            f"agent-session transcript leaked {leak_summary(leaks)}; transcript redacted"
+        )
+
+    compact_lower = "".join(joined_fixture.split()).lower()
+    expected_kinds = ("email", "phone", "ssn", "api_key")
+    missing = [
+        kind for kind in expected_kinds if f"[{kind}:" not in compact_lower and f"[{kind}]" not in compact_lower
+    ]
+    if missing:
+        raise AssertionError(
+            "agent-session transcript did not contain expected DAM references/redactions "
+            f"for {missing}: {transcript!r}"
+        )
+    return {kind: "reference_or_redaction_observed" for kind in expected_kinds}
 
 
 def process_exit_summary(process: subprocess.Popen[str]) -> str:
@@ -283,11 +380,21 @@ def count_log_rows(log_db: Path) -> int:
             return 0
 
 
+def max_log_event_id(log_db: Path) -> int:
+    if not log_db.exists():
+        return 0
+    with sqlite3.connect(log_db) as connection:
+        try:
+            return int(connection.execute("select coalesce(max(id), 0) from log_events").fetchone()[0])
+        except sqlite3.DatabaseError:
+            return 0
+
+
 def raw_values_in_file(path: Path) -> list[str]:
     if not path.exists():
         return []
     data = path.read_bytes()
-    return [value for value in (SYNTHETIC_EMAIL, SYNTHETIC_SSN) if value.encode() in data]
+    return [value for value in raw_synthetic_values() if value.encode() in data]
 
 
 def assert_no_raw_values_in_activity_log(log_db: Path) -> None:
@@ -295,7 +402,7 @@ def assert_no_raw_values_in_activity_log(log_db: Path) -> None:
     if leaked_values:
         raise AssertionError(
             "activity log leaked raw synthetic values outside the vault: "
-            f"{', '.join(leaked_values)}"
+            f"{leak_summary(leaked_values)}; activity log redacted"
         )
 
 
@@ -332,6 +439,83 @@ def provider_forward_messages(log_db: Path) -> list[str]:
         except sqlite3.DatabaseError:
             return []
     return [str(row[0]) for row in rows]
+
+
+def detector_kind_action_counts(
+    log_db: Path,
+    *,
+    after_id: int | None = None,
+    before_id: int | None = None,
+    event_type: str | None = None,
+    action: str | None = None,
+) -> dict[str, int]:
+    if not log_db.exists():
+        return {}
+
+    clauses = ["kind is not null", "action is not null"]
+    params: list[Any] = []
+    if after_id is not None:
+        clauses.append("id > ?")
+        params.append(after_id)
+    if before_id is not None:
+        clauses.append("id < ?")
+        params.append(before_id)
+    if event_type is not None:
+        clauses.append("event_type = ?")
+        params.append(event_type)
+    if action is not None:
+        clauses.append("action = ?")
+        params.append(action)
+
+    query = f"""
+        select kind, action, count(*)
+        from log_events
+        where {' and '.join(clauses)}
+        group by kind, action
+        order by kind, action
+    """
+    with sqlite3.connect(log_db) as connection:
+        try:
+            rows = connection.execute(query, tuple(params)).fetchall()
+        except sqlite3.DatabaseError:
+            return {}
+    return {f"{row[0]}:{row[1]}": int(row[2]) for row in rows}
+
+
+def first_provider_forward_id_after(log_db: Path, after_id: int) -> int:
+    if not log_db.exists():
+        raise AssertionError("activity log did not record provider_forward_start for agent-session request")
+    with sqlite3.connect(log_db) as connection:
+        try:
+            row = connection.execute(
+                """
+                select id
+                from log_events
+                where id > ? and action = ?
+                order by id
+                limit 1
+                """,
+                (after_id, "provider_forward_start"),
+            ).fetchone()
+        except sqlite3.DatabaseError as error:
+            raise AssertionError(f"activity log unreadable: {error}") from error
+    if row is None:
+        raise AssertionError("activity log did not record provider_forward_start for agent-session request")
+    return int(row[0])
+
+
+def assert_agent_session_detector_kinds_observed(counts: dict[str, int]) -> dict[str, str]:
+    """Require detector evidence for the mixed agent-session fixture without raw values."""
+
+    expected_kinds = ("email", "phone", "ssn", "api_key")
+    observed_kinds = {key.split(":", 1)[0] for key, count in counts.items() if count > 0}
+    missing = [kind for kind in expected_kinds if kind not in observed_kinds]
+    if missing:
+        raise AssertionError(
+            "agent-session detector log did not contain expected protected kinds: "
+            f"missing={missing}; observed={sorted(observed_kinds)}"
+        )
+    return {kind: "detector_log_observed" for kind in expected_kinds}
 
 
 def assert_provider_forward_route_matches(
@@ -447,12 +631,37 @@ def run_route_smoke(
         )
         assert_transformed_token_only(transformed_text)
 
+        agent_session_log_baseline = max_log_event_id(log_db)
+        agent_session_text = response_text(
+            post_json(
+                f"{base_url}/v1/chat/completions",
+                chat_request(agent_session_prompt(), max_tokens=160),
+                timeout=args.http_timeout,
+            )
+        )
+        assert_agent_session_response_safe(agent_session_text)
+
         assert_no_raw_values_in_activity_log(log_db)
         raw_in_log = raw_values_in_file(log_db)
         provider_forward_route_messages = assert_provider_forward_route_matches(
             log_db,
             route_case,
-            expected_count=2,
+            expected_count=3,
+        )
+        detector_counts = detector_kind_action_counts(log_db)
+        agent_session_forward_id = first_provider_forward_id_after(
+            log_db,
+            agent_session_log_baseline,
+        )
+        agent_session_detector_counts = detector_kind_action_counts(
+            log_db,
+            after_id=agent_session_log_baseline,
+            before_id=agent_session_forward_id,
+            event_type="redaction",
+            action="tokenized",
+        )
+        agent_session_detector_kinds = assert_agent_session_detector_kinds_observed(
+            agent_session_detector_counts
         )
         transcript = route_scoped_transcript(
             upstream,
@@ -460,8 +669,19 @@ def run_route_smoke(
             timeout=args.http_timeout,
         )
         transcript_paths = assert_upstream_transcript_protected(transcript)
+        if transcript is not None:
+            agent_session_kinds = assert_agent_session_transcript_protected(transcript)
+        else:
+            # Normal local OpenAI-compatible upstreams do not expose /__dam/transcript.
+            # The detector-log assertion above is mandatory for every route, so the
+            # no-transcript path still proves the mixed fixture kinds were protected.
+            agent_session_kinds = {
+                kind: "not_checked_no_transcript_endpoint"
+                for kind in agent_session_detector_kinds
+            }
 
         return {
+            "fixture": AGENT_SESSION_FIXTURE_NAME,
             "route_id": route_case.route_id,
             "route_label": route_case.label,
             "target_name": route_case.target_name,
@@ -473,11 +693,18 @@ def run_route_smoke(
             "log_db": str(log_db),
             "log_rows": count_log_rows(log_db),
             "raw_synthetic_values_in_local_activity_log": raw_in_log,
+            "raw_leak_scan": "passed",
+            "detector_kind_action_counts": detector_counts,
+            "agent_session_detector_kind_action_counts": agent_session_detector_counts,
+            "agent_session_provider_forward_event_id": agent_session_forward_id,
+            "agent_session_detector_kinds_observed": agent_session_detector_kinds,
+            "agent_session_kinds_observed": agent_session_kinds,
             "provider_forward_route_messages": provider_forward_route_messages,
             "upstream_transcript_paths": transcript_paths,
             "upstream_transcript_checked": transcript is not None,
-            "exact_echo_response": exact_text,
-            "transformed_token_response": transformed_text,
+            "exact_echo_resolved": True,
+            "transformed_token_reference_observed": True,
+            "agent_session_response_raw_leak_scan": "passed",
             "cleanup": "kept" if args.keep_temp else "removed",
             "temp_dir": str(temp_dir),
         }
