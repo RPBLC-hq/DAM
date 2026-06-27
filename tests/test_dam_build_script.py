@@ -40,6 +40,8 @@ class DamBuildScriptTests(unittest.TestCase):
         self.assertIn("agent-dogfood-verify", result.stdout)
         self.assertIn("agent-recovery-smoke", result.stdout)
         self.assertIn("agent-repair-smoke", result.stdout)
+        self.assertIn("agent-cleanup-smoke", result.stdout)
+        self.assertIn("agent-uninstall-smoke", result.stdout)
         self.assertIn("DAM_AGENT_E2E_UPSTREAM", result.stdout)
         self.assertIn("DAM_AGENT_E2E_BINARY", result.stdout)
         self.assertIn("DAM_AGENT_VISIBLE_EVIDENCE_SMOKE_SCRIPT", result.stdout)
@@ -1709,6 +1711,244 @@ JSON
             self.assertIn("setup_status_needs_action: rejected", result.stdout)
             self.assertIn("setup_doctor_readiness_result: fail", result.stdout)
             self.assertIn("readiness_result: fail", result.stdout)
+
+    def test_agent_cleanup_smoke_previews_installed_cleanup_without_confirmation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            bin_dir.mkdir()
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
+
+            install_dir = temp_path / "install"
+            dam_bin = install_dir / "DAM.app" / "Contents" / "MacOS" / "dam"
+            dam_bin.parent.mkdir(parents=True)
+            argv_path = temp_path / "argv.txt"
+            dam_bin.write_text(
+                textwrap.dedent(
+                    f"""
+                    #!/usr/bin/env sh
+                    printf '%s\\n' "$*" >> {str(argv_path)!r}
+                    exit 0
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            dam_bin.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                    "DAM_INSTALL_DIR": str(install_dir),
+                    "DAM_AGENT_NETWORK_MODE": "tun",
+                    "DAM_AGENT_TRUST_MODE": "local_ca",
+                }
+            )
+
+            result = subprocess.run(
+                [str(BUILD_SCRIPT), "agent-cleanup-smoke"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            self.assertIn("DAM agent cleanup smoke", result.stdout)
+            self.assertEqual(
+                argv_path.read_text(encoding="utf-8").splitlines(),
+                [
+                    "network remove-network-extension --json",
+                    "trust remove-local-ca --json",
+                ],
+            )
+
+    def test_agent_uninstall_smoke_requires_confirmation_before_macos_or_installed_checks(self):
+        result = subprocess.run(
+            [str(BUILD_SCRIPT), "agent-uninstall-smoke"],
+            cwd=ROOT,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertEqual(2, result.returncode)
+        self.assertIn("agent-uninstall-smoke mutates installed DAM daemon/routing/trust cleanup", result.stderr)
+
+    def test_agent_uninstall_smoke_applies_explicit_proxy_cleanup_with_confirmation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            bin_dir.mkdir()
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
+
+            install_dir = temp_path / "install"
+            dam_bin = install_dir / "DAM.app" / "Contents" / "MacOS" / "dam"
+            dam_bin.parent.mkdir(parents=True)
+            argv_path = temp_path / "argv.txt"
+            dam_bin.write_text(
+                textwrap.dedent(
+                    f"""
+                    #!/usr/bin/env sh
+                    printf '%s\\n' "$*" >> {str(argv_path)!r}
+                    if [ "$1" = "setup" ] && [ "$2" = "status" ]; then
+                      printf '{{"state":"needs_action","message":"synthetic cleanup complete"}}\\n'
+                      exit 1
+                    fi
+                    exit 0
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            dam_bin.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                    "DAM_INSTALL_DIR": str(install_dir),
+                    "DAM_AGENT_NETWORK_MODE": "explicit_proxy",
+                    "DAM_AGENT_TRUST_MODE": "disabled",
+                    "DAM_AGENT_STATE_DIR": str(temp_path / "fixture-state"),
+                }
+            )
+
+            result = subprocess.run(
+                [str(BUILD_SCRIPT), "agent-uninstall-smoke", "--confirm-mutation"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            self.assertIn("cleanup_network_apply: explicit_proxy_no_system_route", result.stdout)
+            self.assertIn("cleanup_trust_apply: disabled_no_local_ca", result.stdout)
+            self.assertIn("cleanup_status_state: needs_action", result.stdout)
+            self.assertEqual(
+                argv_path.read_text(encoding="utf-8").splitlines(),
+                [
+                    "disconnect --stop --json",
+                    f"setup status --network-mode explicit_proxy --trust-mode disabled --state-dir {temp_path / 'fixture-state'} --json",
+                ],
+            )
+
+    def test_agent_uninstall_smoke_scopes_mutating_cleanup_to_state_dir_env(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            bin_dir.mkdir()
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
+
+            install_dir = temp_path / "install"
+            dam_bin = install_dir / "DAM.app" / "Contents" / "MacOS" / "dam"
+            dam_bin.parent.mkdir(parents=True)
+            argv_path = temp_path / "argv.txt"
+            dam_bin.write_text(
+                textwrap.dedent(
+                    f"""
+                    #!/usr/bin/env sh
+                    printf '%s :: %s\\n' "${{DAM_STATE_DIR:-<unset>}}" "$*" >> {str(argv_path)!r}
+                    if [ "$1" = "setup" ] && [ "$2" = "status" ]; then
+                      printf '{{"state":"ready"}}\\n'
+                    fi
+                    exit 0
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            dam_bin.chmod(0o755)
+            state_dir = temp_path / "fixture-state"
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                    "DAM_INSTALL_DIR": str(install_dir),
+                    "DAM_AGENT_NETWORK_MODE": "tun",
+                    "DAM_AGENT_TRUST_MODE": "local_ca",
+                    "DAM_AGENT_STATE_DIR": str(state_dir),
+                }
+            )
+
+            subprocess.run(
+                [str(BUILD_SCRIPT), "agent-uninstall-smoke", "--confirm-mutation"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            self.assertEqual(
+                argv_path.read_text(encoding="utf-8").splitlines(),
+                [
+                    f"{state_dir} :: disconnect --stop --json",
+                    f"{state_dir} :: network remove-network-extension --yes --json",
+                    f"{state_dir} :: trust remove-local-ca --yes --json",
+                    f"<unset> :: setup status --network-mode tun --trust-mode local_ca --state-dir {state_dir} --json",
+                ],
+            )
+
+    def test_agent_uninstall_smoke_rejects_blocked_cleanup_status_even_on_zero_exit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            bin_dir.mkdir()
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
+
+            install_dir = temp_path / "install"
+            dam_bin = install_dir / "DAM.app" / "Contents" / "MacOS" / "dam"
+            dam_bin.parent.mkdir(parents=True)
+            dam_bin.write_text(
+                textwrap.dedent(
+                    """
+                    #!/usr/bin/env sh
+                    if [ "$1" = "setup" ] && [ "$2" = "status" ]; then
+                      printf '{"state":"blocked","message":"synthetic cleanup blocker"}\n'
+                    fi
+                    exit 0
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            dam_bin.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                    "DAM_INSTALL_DIR": str(install_dir),
+                    "DAM_AGENT_NETWORK_MODE": "explicit_proxy",
+                    "DAM_AGENT_TRUST_MODE": "disabled",
+                }
+            )
+
+            result = subprocess.run(
+                [str(BUILD_SCRIPT), "agent-uninstall-smoke", "--confirm-mutation"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            self.assertIn("cleanup_status_json: valid", result.stdout)
+            self.assertIn("cleanup_status_exit_status: 0", result.stdout)
+            self.assertIn("cleanup_status_state: blocked", result.stdout)
+            self.assertIn("cleanup_status_state_allowed: rejected", result.stdout)
 
     def test_agent_mvp_readiness_rejects_invalid_setup_mode_before_subchecks(self):
         env = os.environ.copy()
