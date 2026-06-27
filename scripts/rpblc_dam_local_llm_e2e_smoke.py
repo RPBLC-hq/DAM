@@ -44,6 +44,30 @@ DEFAULT_ROUTE_CASES = (
     SmokeRouteCase("openai-api", "openai", "openai-compatible", "OpenAI API HTTP route"),
     SmokeRouteCase("anthropic-api", "anthropic", "anthropic", "Anthropic API HTTP route"),
     SmokeRouteCase("claude-web", "claude-web", "generic-http", "Claude web-profile HTTP route"),
+    SmokeRouteCase(
+        "anthropic-console",
+        "anthropic-console",
+        "generic-http",
+        "Anthropic Console HTTP route",
+    ),
+    SmokeRouteCase(
+        "claude-mcp-proxy",
+        "claude-mcp-proxy",
+        "generic-http",
+        "Claude MCP proxy HTTP route",
+    ),
+    SmokeRouteCase(
+        "claude-platform",
+        "claude-platform",
+        "generic-http",
+        "Claude Platform HTTP route",
+    ),
+    SmokeRouteCase(
+        "openai-platform",
+        "openai-platform",
+        "generic-http",
+        "OpenAI Platform HTTP route",
+    ),
 )
 
 

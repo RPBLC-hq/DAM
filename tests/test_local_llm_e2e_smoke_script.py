@@ -56,6 +56,10 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
             "openai-api": "openai",
             "anthropic-api": "anthropic",
             "claude-web": "claude-web",
+            "anthropic-console": "anthropic-console",
+            "claude-mcp-proxy": "claude-mcp-proxy",
+            "claude-platform": "claude-platform",
+            "openai-platform": "openai-platform",
         }
         for route_case in smoke.DEFAULT_ROUTE_CASES:
             with self.subTest(route_id=route_case.route_id):
@@ -73,7 +77,15 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
 
         self.assertEqual(
             [route.route_id for route in smoke.DEFAULT_ROUTE_CASES],
-            ["openai-api", "anthropic-api", "claude-web"],
+            [
+                "openai-api",
+                "anthropic-api",
+                "claude-web",
+                "anthropic-console",
+                "claude-mcp-proxy",
+                "claude-platform",
+                "openai-platform",
+            ],
         )
 
     def test_prompts_are_deterministic_and_contain_synthetic_values_only(self):
@@ -274,7 +286,15 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
 
         self.assertEqual(
             [route.route_id for route in smoke.selected_route_cases(None)],
-            ["openai-api", "anthropic-api", "claude-web"],
+            [
+                "openai-api",
+                "anthropic-api",
+                "claude-web",
+                "anthropic-console",
+                "claude-mcp-proxy",
+                "claude-platform",
+                "openai-platform",
+            ],
         )
         self.assertEqual(
             [route.route_id for route in smoke.selected_route_cases(["anthropic-api"])],
