@@ -831,6 +831,10 @@ class DamBuildScriptTests(unittest.TestCase):
             cargo.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
             cargo.chmod(0o755)
 
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Linux\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
+
             node = bin_dir / "node"
             node.write_text(
                 textwrap.dedent(
@@ -1174,6 +1178,10 @@ JSON
             cargo.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
             cargo.chmod(0o755)
 
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Linux\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
+
             node = bin_dir / "node"
             node.write_text(
                 textwrap.dedent(
@@ -1308,6 +1316,10 @@ JSON
                 encoding="utf-8",
             )
             cargo.chmod(0o755)
+
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Linux\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
 
             node = bin_dir / "node"
             node.write_text(
@@ -1597,6 +1609,10 @@ JSON
                 encoding="utf-8",
             )
             cargo.chmod(0o755)
+
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Linux\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
 
             node = bin_dir / "node"
             node.write_text(
