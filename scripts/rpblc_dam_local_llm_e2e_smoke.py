@@ -208,7 +208,9 @@ def assert_transformed_token_only(text: str) -> None:
     compact_text = "".join(text.split())
     leaks = [value for value in raw_synthetic_values() if value in compact_text]
     if leaks:
-        raise AssertionError(f"transformed-token response leaked raw synthetic values {leaks}: {text!r}")
+        raise AssertionError(
+            f"transformed-token response leaked {leak_summary(leaks)}; response redacted"
+        )
     compact_lower = compact_text.lower()
     if "[email:" not in compact_lower and "[ssn:" not in compact_lower:
         raise AssertionError(f"model did not appear to transform a DAM token: {text!r}")
@@ -448,6 +450,20 @@ def detector_kind_action_counts(log_db: Path) -> dict[str, int]:
     return {f"{row[0]}:{row[1]}": int(row[2]) for row in rows}
 
 
+def assert_agent_session_detector_kinds_observed(counts: dict[str, int]) -> dict[str, str]:
+    """Require detector evidence for the mixed agent-session fixture without raw values."""
+
+    expected_kinds = ("email", "phone", "ssn", "api_key")
+    observed_kinds = {key.split(":", 1)[0] for key, count in counts.items() if count > 0}
+    missing = [kind for kind in expected_kinds if kind not in observed_kinds]
+    if missing:
+        raise AssertionError(
+            "agent-session detector log did not contain expected protected kinds: "
+            f"missing={missing}; observed={sorted(observed_kinds)}"
+        )
+    return {kind: "detector_log_observed" for kind in expected_kinds}
+
+
 def assert_provider_forward_route_matches(
     log_db: Path,
     route_case: SmokeRouteCase,
@@ -577,15 +593,24 @@ def run_route_smoke(
             route_case,
             expected_count=3,
         )
+        detector_counts = detector_kind_action_counts(log_db)
+        agent_session_detector_kinds = assert_agent_session_detector_kinds_observed(detector_counts)
         transcript = route_scoped_transcript(
             upstream,
             baseline_transcript_count,
             timeout=args.http_timeout,
         )
         transcript_paths = assert_upstream_transcript_protected(transcript)
-        agent_session_kinds = (
-            assert_agent_session_transcript_protected(transcript) if transcript is not None else {}
-        )
+        if transcript is not None:
+            agent_session_kinds = assert_agent_session_transcript_protected(transcript)
+        else:
+            # Normal local OpenAI-compatible upstreams do not expose /__dam/transcript.
+            # The detector-log assertion above is mandatory for every route, so the
+            # no-transcript path still proves the mixed fixture kinds were protected.
+            agent_session_kinds = {
+                kind: "not_checked_no_transcript_endpoint"
+                for kind in agent_session_detector_kinds
+            }
 
         return {
             "fixture": AGENT_SESSION_FIXTURE_NAME,
@@ -601,7 +626,8 @@ def run_route_smoke(
             "log_rows": count_log_rows(log_db),
             "raw_synthetic_values_in_local_activity_log": raw_in_log,
             "raw_leak_scan": "passed",
-            "detector_kind_action_counts": detector_kind_action_counts(log_db),
+            "detector_kind_action_counts": detector_counts,
+            "agent_session_detector_kinds_observed": agent_session_detector_kinds,
             "agent_session_kinds_observed": agent_session_kinds,
             "provider_forward_route_messages": provider_forward_route_messages,
             "upstream_transcript_paths": transcript_paths,
