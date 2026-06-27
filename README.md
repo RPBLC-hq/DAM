@@ -62,14 +62,21 @@ are still landing in slices. On those platforms, use source builds and explicit 
 experiments only; macOS-specific network mutation commands report `unsupported_platform`
 with fallback guidance instead of changing host networking.
 
-```bash
-npm install -g @rpblc/dam
-```
+The npm package name is reserved as `@rpblc/dam`, but the repository may be ahead of the
+published registry version. Use the source checkout for current development builds until
+the release issue confirms the npm package has been published from the current manifest
+version.
 
 From a source checkout:
 
 ```bash
 cargo build -p dam -p dam-web -p dam-tray
+```
+
+After a release is published, the global npm install path is:
+
+```bash
+npm install -g @rpblc/dam
 ```
 
 Per-platform native packages are staged — see [docs/build-release.md](docs/build-release.md).
