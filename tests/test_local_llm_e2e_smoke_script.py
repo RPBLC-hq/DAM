@@ -352,23 +352,32 @@ class LocalLlmE2eSmokeScriptTests(unittest.TestCase):
             db_path = Path(temp_dir) / "activity.sqlite"
             with sqlite3.connect(db_path) as connection:
                 connection.execute(
-                    "create table log_events (id integer primary key, kind text, action text)"
+                    "create table log_events (id integer primary key, event_type text, kind text, action text)"
                 )
                 connection.executemany(
-                    "insert into log_events (kind, action) values (?, ?)",
+                    "insert into log_events (event_type, kind, action) values (?, ?, ?)",
                     [
-                        ("email", "tokenize"),
-                        ("ssn", "tokenize"),
-                        ("phone", "tokenize"),
-                        ("api_key", "tokenize"),
+                        ("redaction", "email", "tokenized"),
+                        ("redaction", "ssn", "tokenized"),
+                        ("redaction", "phone", "tokenized"),
+                        ("redaction", "api_key", "tokenized"),
+                        ("proxy_forward", None, "provider_forward_start"),
+                        ("redaction", "email", "tokenized"),
                     ],
                 )
                 baseline = 2
 
-            self.assertEqual(smoke.max_log_event_id(db_path), 4)
+            self.assertEqual(smoke.max_log_event_id(db_path), 6)
+            self.assertEqual(smoke.first_provider_forward_id_after(db_path, baseline), 5)
             self.assertEqual(
-                smoke.detector_kind_action_counts(db_path, after_id=baseline),
-                {"api_key:tokenize": 1, "phone:tokenize": 1},
+                smoke.detector_kind_action_counts(
+                    db_path,
+                    after_id=baseline,
+                    before_id=5,
+                    event_type="redaction",
+                    action="tokenized",
+                ),
+                {"api_key:tokenized": 1, "phone:tokenized": 1},
             )
 
     def test_agent_session_detector_kind_assertion_requires_all_mixed_fixture_kinds(self):

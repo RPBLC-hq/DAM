@@ -441,35 +441,67 @@ def provider_forward_messages(log_db: Path) -> list[str]:
     return [str(row[0]) for row in rows]
 
 
-def detector_kind_action_counts(log_db: Path, *, after_id: int | None = None) -> dict[str, int]:
+def detector_kind_action_counts(
+    log_db: Path,
+    *,
+    after_id: int | None = None,
+    before_id: int | None = None,
+    event_type: str | None = None,
+    action: str | None = None,
+) -> dict[str, int]:
     if not log_db.exists():
         return {}
+
+    clauses = ["kind is not null", "action is not null"]
+    params: list[Any] = []
+    if after_id is not None:
+        clauses.append("id > ?")
+        params.append(after_id)
+    if before_id is not None:
+        clauses.append("id < ?")
+        params.append(before_id)
+    if event_type is not None:
+        clauses.append("event_type = ?")
+        params.append(event_type)
+    if action is not None:
+        clauses.append("action = ?")
+        params.append(action)
+
+    query = f"""
+        select kind, action, count(*)
+        from log_events
+        where {' and '.join(clauses)}
+        group by kind, action
+        order by kind, action
+    """
     with sqlite3.connect(log_db) as connection:
         try:
-            if after_id is None:
-                rows = connection.execute(
-                    """
-                    select kind, action, count(*)
-                    from log_events
-                    where kind is not null and action is not null
-                    group by kind, action
-                    order by kind, action
-                    """
-                ).fetchall()
-            else:
-                rows = connection.execute(
-                    """
-                    select kind, action, count(*)
-                    from log_events
-                    where id > ? and kind is not null and action is not null
-                    group by kind, action
-                    order by kind, action
-                    """,
-                    (after_id,),
-                ).fetchall()
+            rows = connection.execute(query, tuple(params)).fetchall()
         except sqlite3.DatabaseError:
             return {}
     return {f"{row[0]}:{row[1]}": int(row[2]) for row in rows}
+
+
+def first_provider_forward_id_after(log_db: Path, after_id: int) -> int:
+    if not log_db.exists():
+        raise AssertionError("activity log did not record provider_forward_start for agent-session request")
+    with sqlite3.connect(log_db) as connection:
+        try:
+            row = connection.execute(
+                """
+                select id
+                from log_events
+                where id > ? and action = ?
+                order by id
+                limit 1
+                """,
+                (after_id, "provider_forward_start"),
+            ).fetchone()
+        except sqlite3.DatabaseError as error:
+            raise AssertionError(f"activity log unreadable: {error}") from error
+    if row is None:
+        raise AssertionError("activity log did not record provider_forward_start for agent-session request")
+    return int(row[0])
 
 
 def assert_agent_session_detector_kinds_observed(counts: dict[str, int]) -> dict[str, str]:
@@ -617,9 +649,16 @@ def run_route_smoke(
             expected_count=3,
         )
         detector_counts = detector_kind_action_counts(log_db)
+        agent_session_forward_id = first_provider_forward_id_after(
+            log_db,
+            agent_session_log_baseline,
+        )
         agent_session_detector_counts = detector_kind_action_counts(
             log_db,
             after_id=agent_session_log_baseline,
+            before_id=agent_session_forward_id,
+            event_type="redaction",
+            action="tokenized",
         )
         agent_session_detector_kinds = assert_agent_session_detector_kinds_observed(
             agent_session_detector_counts
@@ -657,6 +696,7 @@ def run_route_smoke(
             "raw_leak_scan": "passed",
             "detector_kind_action_counts": detector_counts,
             "agent_session_detector_kind_action_counts": agent_session_detector_counts,
+            "agent_session_provider_forward_event_id": agent_session_forward_id,
             "agent_session_detector_kinds_observed": agent_session_detector_kinds,
             "agent_session_kinds_observed": agent_session_kinds,
             "provider_forward_route_messages": provider_forward_route_messages,
