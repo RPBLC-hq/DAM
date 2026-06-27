@@ -130,6 +130,14 @@ run() {
   "$@"
 }
 
+run_with_agent_state_env() {
+  if [[ -n "$AGENT_STATE_DIR" ]]; then
+    run env DAM_STATE_DIR="$AGENT_STATE_DIR" "$@"
+  else
+    run "$@"
+  fi
+}
+
 allocate_loopback_addr() {
   python3 - <<'PY'
 import socket
@@ -983,10 +991,10 @@ cmd_agent_cleanup_smoke() {
 
   case "$AGENT_NETWORK_MODE" in
     tun)
-      run "$dam_bin" network remove-network-extension --json
+      run_with_agent_state_env "$dam_bin" network remove-network-extension --json
       ;;
     system_proxy)
-      run "$dam_bin" network remove-system-proxy --json
+      run_with_agent_state_env "$dam_bin" network remove-system-proxy --json
       ;;
     explicit_proxy)
       printf 'cleanup_network_preview: explicit_proxy_no_system_route\n'
@@ -995,7 +1003,7 @@ cmd_agent_cleanup_smoke() {
 
   case "$AGENT_TRUST_MODE" in
     local_ca)
-      run "$dam_bin" trust remove-local-ca --json
+      run_with_agent_state_env "$dam_bin" trust remove-local-ca --json
       ;;
     disabled)
       printf 'cleanup_trust_preview: disabled_no_local_ca\n'
@@ -1014,13 +1022,13 @@ cmd_agent_uninstall_smoke() {
   print_agent_setup_probe_header "agent uninstall smoke"
   dam_bin="$(installed_dam_binary)"
 
-  run "$dam_bin" disconnect --stop --json
+  run_with_agent_state_env "$dam_bin" disconnect --stop --json
   case "$AGENT_NETWORK_MODE" in
     tun)
-      run "$dam_bin" network remove-network-extension --yes --json
+      run_with_agent_state_env "$dam_bin" network remove-network-extension --yes --json
       ;;
     system_proxy)
-      run "$dam_bin" network remove-system-proxy --yes --json
+      run_with_agent_state_env "$dam_bin" network remove-system-proxy --yes --json
       ;;
     explicit_proxy)
       printf 'cleanup_network_apply: explicit_proxy_no_system_route\n'
@@ -1029,7 +1037,7 @@ cmd_agent_uninstall_smoke() {
 
   case "$AGENT_TRUST_MODE" in
     local_ca)
-      run "$dam_bin" trust remove-local-ca --yes --json
+      run_with_agent_state_env "$dam_bin" trust remove-local-ca --yes --json
       ;;
     disabled)
       printf 'cleanup_trust_apply: disabled_no_local_ca\n'

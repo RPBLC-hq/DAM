@@ -1834,6 +1834,63 @@ JSON
                 ],
             )
 
+    def test_agent_uninstall_smoke_scopes_mutating_cleanup_to_state_dir_env(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            bin_dir.mkdir()
+            uname = bin_dir / "uname"
+            uname.write_text("#!/usr/bin/env sh\nprintf 'Darwin\\n'\n", encoding="utf-8")
+            uname.chmod(0o755)
+
+            install_dir = temp_path / "install"
+            dam_bin = install_dir / "DAM.app" / "Contents" / "MacOS" / "dam"
+            dam_bin.parent.mkdir(parents=True)
+            argv_path = temp_path / "argv.txt"
+            dam_bin.write_text(
+                textwrap.dedent(
+                    f"""
+                    #!/usr/bin/env sh
+                    printf '%s :: %s\\n' "${{DAM_STATE_DIR:-<unset>}}" "$*" >> {str(argv_path)!r}
+                    exit 0
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            dam_bin.chmod(0o755)
+            state_dir = temp_path / "fixture-state"
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                    "DAM_INSTALL_DIR": str(install_dir),
+                    "DAM_AGENT_NETWORK_MODE": "tun",
+                    "DAM_AGENT_TRUST_MODE": "local_ca",
+                    "DAM_AGENT_STATE_DIR": str(state_dir),
+                }
+            )
+
+            subprocess.run(
+                [str(BUILD_SCRIPT), "agent-uninstall-smoke", "--confirm-mutation"],
+                cwd=ROOT,
+                env=env,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=True,
+            )
+
+            self.assertEqual(
+                argv_path.read_text(encoding="utf-8").splitlines(),
+                [
+                    f"{state_dir} :: disconnect --stop --json",
+                    f"{state_dir} :: network remove-network-extension --yes --json",
+                    f"{state_dir} :: trust remove-local-ca --yes --json",
+                    f"<unset> :: setup status --network-mode tun --trust-mode local_ca --state-dir {state_dir} --json",
+                ],
+            )
+
     def test_agent_mvp_readiness_rejects_invalid_setup_mode_before_subchecks(self):
         env = os.environ.copy()
         env["DAM_AGENT_MVP_SETUP_MODE"] = "mutating"
