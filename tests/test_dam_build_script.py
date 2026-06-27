@@ -1172,6 +1172,210 @@ JSON
             self.assertIn("protection_proof_result: pass", result.stdout)
             self.assertIn("readiness_result: pass", result.stdout)
 
+    def test_agent_mvp_readiness_fails_closed_when_package_build_fails_with_stale_binaries(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            bin_dir.mkdir()
+
+            real_node = shutil.which("node")
+            self.assertIsNotNone(real_node)
+
+            release_dir = ROOT / "target" / "release"
+            release_dir.mkdir(parents=True, exist_ok=True)
+            created_release_files = []
+            for name in ["dam", "damctl", "dam-web", "dam-proxy", "dam-mcp", "dam-tray"]:
+                binary = release_dir / name
+                if not binary.exists():
+                    binary.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
+                    binary.chmod(0o755)
+                    created_release_files.append(binary)
+
+            cargo = bin_dir / "cargo"
+            cargo.write_text(
+                textwrap.dedent(
+                    """
+                    #!/usr/bin/env sh
+                    if [ "$1" = "build" ]; then
+                      printf 'synthetic build failure\n' >&2
+                      exit 42
+                    fi
+                    if [ "$1" = "run" ]; then
+                      printf '{"state":"ready"}\n'
+                      exit 0
+                    fi
+                    exit 1
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            cargo.chmod(0o755)
+
+            node = bin_dir / "node"
+            node.write_text(f"#!/usr/bin/env sh\nexec {real_node} \"$@\"\n", encoding="utf-8")
+            node.chmod(0o755)
+
+            npm = bin_dir / "npm"
+            npm.write_text("#!/usr/bin/env sh\nprintf 'unexpected npm invocation: %s\\n' \"$*\" >&2\nexit 1\n", encoding="utf-8")
+            npm.chmod(0o755)
+
+            smoke_stub = temp_path / "smoke_stub.py"
+            smoke_stub.write_text("raise SystemExit(0)\n", encoding="utf-8")
+            staged_dir = ROOT / "npm" / "native" / "linux-x64"
+            if staged_dir.exists():
+                shutil.rmtree(staged_dir)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                    "DAM_AGENT_E2E_SMOKE_SCRIPT": str(smoke_stub),
+                    "DAM_AGENT_NETWORK_MODE": "explicit_proxy",
+                    "DAM_AGENT_TRUST_MODE": "disabled",
+                }
+            )
+
+            try:
+                result = subprocess.run(
+                    [str(BUILD_SCRIPT), "agent-mvp-readiness"],
+                    cwd=ROOT,
+                    env=env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+            finally:
+                if staged_dir.exists():
+                    shutil.rmtree(staged_dir)
+                for binary in created_release_files:
+                    if binary.exists():
+                        binary.unlink()
+
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            self.assertIn("package_installability_result: fail", result.stdout)
+            self.assertIn("package_installability_exit_status: 42", result.stdout)
+            self.assertIn("readiness_result: fail", result.stdout)
+
+    def test_agent_mvp_readiness_rejects_blocked_setup_status(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            bin_dir = temp_path / "bin"
+            bin_dir.mkdir()
+
+            real_node = shutil.which("node")
+            self.assertIsNotNone(real_node)
+
+            release_dir = ROOT / "target" / "release"
+            release_dir.mkdir(parents=True, exist_ok=True)
+            created_release_files = []
+            for name in ["dam", "damctl", "dam-web", "dam-proxy", "dam-mcp", "dam-tray"]:
+                binary = release_dir / name
+                if not binary.exists():
+                    binary.write_text("#!/usr/bin/env sh\nexit 0\n", encoding="utf-8")
+                    binary.chmod(0o755)
+                    created_release_files.append(binary)
+
+            cargo = bin_dir / "cargo"
+            cargo.write_text(
+                textwrap.dedent(
+                    """
+                    #!/usr/bin/env sh
+                    if [ "$1" = "build" ]; then
+                      exit 0
+                    fi
+                    if [ "$1" = "run" ]; then
+                      if printf '%s\n' "$@" | grep -q 'setup'; then
+                        printf '{"state":"blocked","message":"synthetic setup blocker"}\n'
+                        exit 1
+                      fi
+                      printf '{"state":"ready"}\n'
+                      exit 0
+                    fi
+                    exit 1
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            cargo.chmod(0o755)
+
+            node = bin_dir / "node"
+            node.write_text(
+                textwrap.dedent(
+                    f"""
+                    #!/usr/bin/env sh
+                    if [ "$1" = "-p" ] && [ "$2" = "process.platform + '-' + process.arch" ]; then
+                      printf 'linux-x64\\n'
+                      exit 0
+                    fi
+                    if [ "$1" = "npm/bin/dam.js" ] && [ "$2" = "package-doctor" ] && [ "$3" = "--json" ]; then
+                      printf '{{"state":"ready"}}\\n'
+                      exit 0
+                    fi
+                    exec {real_node} "$@"
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            node.chmod(0o755)
+
+            npm = bin_dir / "npm"
+            npm.write_text(
+                textwrap.dedent(
+                    """
+                    #!/usr/bin/env sh
+                    if [ "$1" = "config" ]; then printf 'https://registry.npmjs.org/\n'; exit 0; fi
+                    if [ "$1" = "view" ]; then printf '"0.0.1"\n'; exit 0; fi
+                    if [ "$1" = "owner" ]; then printf 'rpblc-alexy <contact@rpblc.com>\n'; exit 0; fi
+                    if [ "$1" = "whoami" ]; then printf 'rpblc-alexy\n'; exit 0; fi
+                    if [ "$1" = "pack" ]; then
+                      cat <<'JSON'
+[{"id":"@rpblc/dam@0.3.2","name":"@rpblc/dam","version":"0.3.2","filename":"rpblc-dam-0.3.2.tgz","files":[{"path":"npm/native/linux-x64/dam"},{"path":"npm/native/linux-x64/damctl"},{"path":"npm/native/linux-x64/dam-web"},{"path":"npm/native/linux-x64/dam-proxy"},{"path":"npm/native/linux-x64/dam-mcp"},{"path":"npm/native/linux-x64/dam-tray"}]}]
+JSON
+                      exit 0
+                    fi
+                    exit 1
+                    """
+                ).lstrip(),
+                encoding="utf-8",
+            )
+            npm.chmod(0o755)
+
+            smoke_stub = temp_path / "smoke_stub.py"
+            smoke_stub.write_text("raise SystemExit(0)\n", encoding="utf-8")
+            staged_dir = ROOT / "npm" / "native" / "linux-x64"
+            if staged_dir.exists():
+                shutil.rmtree(staged_dir)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                    "DAM_AGENT_E2E_SMOKE_SCRIPT": str(smoke_stub),
+                    "DAM_AGENT_NETWORK_MODE": "explicit_proxy",
+                    "DAM_AGENT_TRUST_MODE": "disabled",
+                }
+            )
+
+            try:
+                result = subprocess.run(
+                    [str(BUILD_SCRIPT), "agent-mvp-readiness"],
+                    cwd=ROOT,
+                    env=env,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+            finally:
+                if staged_dir.exists():
+                    shutil.rmtree(staged_dir)
+                for binary in created_release_files:
+                    if binary.exists():
+                        binary.unlink()
+
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+            self.assertIn("setup_status_state: blocked", result.stdout)
+            self.assertIn("setup_status_needs_action: rejected", result.stdout)
+            self.assertIn("setup_doctor_readiness_result: fail", result.stdout)
+            self.assertIn("readiness_result: fail", result.stdout)
+
     def test_agent_mvp_readiness_rejects_invalid_setup_mode_before_subchecks(self):
         env = os.environ.copy()
         env["DAM_AGENT_MVP_SETUP_MODE"] = "mutating"

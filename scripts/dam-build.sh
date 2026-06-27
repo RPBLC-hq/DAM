@@ -440,9 +440,11 @@ agent_mvp_section() {
   shift
   printf '\n== %s ==\n' "$name"
   set +e
-  "$@"
+  (
+    set -euo pipefail
+    "$@"
+  )
   local status=$?
-  set -e
   if [[ "$status" == "0" ]]; then
     printf '%s_result: pass\n' "$name"
   else
@@ -452,11 +454,19 @@ agent_mvp_section() {
   return "$status"
 }
 
+agent_mvp_run_section() {
+  local status
+  set +e
+  agent_mvp_section "$@"
+  status=$?
+  return "$status"
+}
+
 agent_mvp_json_probe() {
   local name="$1"
   local allow_needs_action="$2"
   shift 2
-  local output status
+  local output status setup_state
   printf '+'
   printf ' %q' "$@"
   printf '\n'
@@ -471,7 +481,16 @@ agent_mvp_json_probe() {
   fi
   printf '%s_json: valid\n' "$name"
   printf '%s_exit_status: %s\n' "$name" "$status"
+  setup_state="$(printf '%s' "$output" | python3 -c 'import json, sys
+payload = json.load(sys.stdin)
+state = payload.get("state") if isinstance(payload, dict) else None
+print(state or "unknown")')"
+  printf '%s_state: %s\n' "$name" "$setup_state"
   if [[ "$status" != "0" && "$allow_needs_action" != "1" ]]; then
+    return "$status"
+  fi
+  if [[ "$status" != "0" && "$allow_needs_action" == "1" && "$setup_state" != "needs_action" ]]; then
+    printf '%s_needs_action: rejected\n' "$name"
     return "$status"
   fi
   return 0
@@ -509,14 +528,29 @@ cmd_agent_mvp_setup_readiness() {
 }
 
 cmd_agent_mvp_readiness() {
-  local failures=0
+  local failures=0 section_status
   printf 'DAM agent MVP release readiness\n'
   printf 'safety_boundary: read-only; synthetic protection traffic only; no publish, provider calls, host routing, trust, or deploy mutation\n'
   printf 'setup_probe_mode: %s\n' "$AGENT_MVP_SETUP_MODE"
 
-  agent_mvp_section package_installability cmd_agent_npm_readiness || failures=$((failures + 1))
-  agent_mvp_section setup_doctor_readiness cmd_agent_mvp_setup_readiness || failures=$((failures + 1))
-  agent_mvp_section protection_proof cmd_agent_protection_smoke || failures=$((failures + 1))
+  agent_mvp_run_section package_installability cmd_agent_npm_readiness
+  section_status=$?
+  set -e
+  if [[ "$section_status" != "0" ]]; then
+    failures=$((failures + 1))
+  fi
+  agent_mvp_run_section setup_doctor_readiness cmd_agent_mvp_setup_readiness
+  section_status=$?
+  set -e
+  if [[ "$section_status" != "0" ]]; then
+    failures=$((failures + 1))
+  fi
+  agent_mvp_run_section protection_proof cmd_agent_protection_smoke
+  section_status=$?
+  set -e
+  if [[ "$section_status" != "0" ]]; then
+    failures=$((failures + 1))
+  fi
 
   printf '\nreadiness_failures: %s\n' "$failures"
   if [[ "$failures" == "0" ]]; then
