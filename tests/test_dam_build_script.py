@@ -927,6 +927,10 @@ JSON
             self.assertIn("macos_app_artifact_check: skipped_non_macos", result.stdout)
             self.assertIn("macos_app_artifact_blocker: notarized installed-app validation requires macOS", result.stdout)
             self.assertIn(
+                "notarized installed-app validation requires macOS; run the macOS release-path validation before production release",
+                result.stdout,
+            )
+            self.assertIn(
                 "local package version 0.3.2 is not greater than published npm version 0.3.3",
                 result.stdout,
             )
@@ -1037,9 +1041,13 @@ JSON
                     if binary.exists():
                         binary.unlink()
 
-            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
             self.assertIn("pack_native_files_present: yes", result.stdout)
             self.assertIn("release_artifacts_consistent: yes", result.stdout)
+            self.assertIn(
+                "notarized installed-app validation requires macOS; run the macOS release-path validation before production release",
+                result.stdout,
+            )
             self.assertNotIn("missing staged native package files", result.stderr)
 
     def test_agent_npm_readiness_fails_when_staged_native_binary_differs_from_release_artifact(self):
@@ -1390,14 +1398,19 @@ JSON
                     if binary.exists():
                         binary.unlink()
 
-            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(1, result.returncode, result.stdout + result.stderr)
             self.assertIn("DAM agent MVP release readiness", result.stdout)
-            self.assertIn("package_installability_result: pass", result.stdout)
+            self.assertIn("package_installability_result: fail", result.stdout)
+            self.assertIn(
+                "notarized installed-app validation requires macOS; run the macOS release-path validation before production release",
+                result.stdout,
+            )
             self.assertIn("setup_doctor_readiness_result: pass", result.stdout)
             self.assertIn("setup_status_exit_status: 1", result.stdout)
             self.assertIn("setup_next_action_exit_status: 1", result.stdout)
             self.assertIn("protection_proof_result: pass", result.stdout)
-            self.assertIn("readiness_result: pass", result.stdout)
+            self.assertIn("readiness_failures: 1", result.stdout)
+            self.assertIn("readiness_result: fail", result.stdout)
             self.assertFalse(staged_existed_after_run)
 
     def test_agent_mvp_readiness_rejects_external_protection_upstream(self):

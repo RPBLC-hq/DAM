@@ -426,6 +426,9 @@ cmd_agent_npm_readiness() {
   if ! artifact_output="$(verify_npm_native_release_artifacts "$platform_dir" 2>&1)"; then
     blockers+=("staged npm native binaries do not match the release artifacts under target/release")
   fi
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    blockers+=("notarized installed-app validation requires macOS; run the macOS release-path validation before production release")
+  fi
 
   if ! doctor_output="$(node "$ROOT/npm/bin/dam.js" package-doctor --json)"; then
     printf '%s\n' "$doctor_output"
