@@ -583,7 +583,9 @@ def run_route_smoke(
             timeout=args.http_timeout,
         )
         transcript_paths = assert_upstream_transcript_protected(transcript)
-        agent_session_kinds = assert_agent_session_transcript_protected(transcript)
+        agent_session_kinds = (
+            assert_agent_session_transcript_protected(transcript) if transcript is not None else {}
+        )
 
         return {
             "fixture": AGENT_SESSION_FIXTURE_NAME,
