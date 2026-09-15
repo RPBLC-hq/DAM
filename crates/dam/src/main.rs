@@ -421,6 +421,7 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
     let mut config = dam_daemon::proxy_config(&args.proxy)?;
     let mut applied_profiles = Vec::new();
     let mut restarted = false;
+    let mut resumed_after_pause = false;
 
     match dam_daemon::daemon_status().map_err(|error| error.to_string())? {
         dam_daemon::DaemonStatus::Connected(state) => {
@@ -457,61 +458,107 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
                         ensure_connect_capture_mode_exclusive(state.network_mode, &state_dir)?;
                         dam_daemon::set_protection_enabled(true)
                             .map_err(|error| error.to_string())?;
-                        for profile_id in &args.apply_profile_ids {
-                            let outcome = apply_connect_profile(profile_id, &state.proxy_url)?;
-                            if !args.json {
-                                print!("{}", render_connect_apply_outcome(&outcome));
+                        match wait_for_existing_daemon_protected(
+                            &state.proxy_url,
+                            Duration::from_secs(2),
+                        )
+                        .await
+                        {
+                            Ok(()) => {
+                                for profile_id in &args.apply_profile_ids {
+                                    let outcome =
+                                        apply_connect_profile(profile_id, &state.proxy_url)?;
+                                    if !args.json {
+                                        print!("{}", render_connect_apply_outcome(&outcome));
+                                    }
+                                    applied_profiles.push(connect_apply_view(&outcome));
+                                }
+                                return finish_connect(
+                                    &args,
+                                    ConnectResultView {
+                                        state: "connected",
+                                        message: format!(
+                                            "DAM protection enabled at {} using existing network mode {} and trust mode {}",
+                                            state.proxy_url, state.network_mode, state.trust.mode
+                                        ),
+                                        proxy_url: Some(state.proxy_url),
+                                        network_mode: state.network_mode,
+                                        trust_mode: state.trust.mode,
+                                        protection_enabled: true,
+                                        restarted: false,
+                                        target: state.target_name,
+                                        upstream: state.upstream,
+                                        applied_profiles,
+                                    },
+                                );
                             }
-                            applied_profiles.push(connect_apply_view(&outcome));
+                            Err(error) => {
+                                if !args.json {
+                                    println!(
+                                        "DAM proxy did not respond after resume ({error}); restarting daemon"
+                                    );
+                                }
+                                args.proxy = proxy_options_for_existing_daemon(&state, &args.proxy);
+                                config = dam_daemon::proxy_config(&args.proxy)?;
+                                restarted = true;
+                                resumed_after_pause = true;
+                                stop_connected_daemon(&state).await?;
+                            }
                         }
-                        return finish_connect(
-                            &args,
-                            ConnectResultView {
-                                state: "connected",
-                                message: format!(
-                                    "DAM protection enabled at {} using existing network mode {} and trust mode {}",
-                                    state.proxy_url, state.network_mode, state.trust.mode
-                                ),
-                                proxy_url: Some(state.proxy_url),
-                                network_mode: state.network_mode,
-                                trust_mode: state.trust.mode,
-                                protection_enabled: true,
-                                restarted: false,
-                                target: state.target_name,
-                                upstream: state.upstream,
-                                applied_profiles,
-                            },
-                        );
+                    } else {
+                        return Err(format!(
+                            "DAM is already connected with network mode {} and trust mode {}; run `dam disconnect --stop` before changing setup",
+                            state.network_mode, state.trust.mode
+                        ));
                     }
-                    return Err(format!(
-                        "DAM is already connected with network mode {} and trust mode {}; run `dam disconnect --stop` before changing setup",
-                        state.network_mode, state.trust.mode
-                    ));
-                }
-                ensure_connect_capture_mode_exclusive(state.network_mode, &state_dir)?;
-                dam_daemon::set_protection_enabled(true).map_err(|error| error.to_string())?;
-                for profile_id in &args.apply_profile_ids {
-                    let outcome = apply_connect_profile(profile_id, &state.proxy_url)?;
-                    if !args.json {
-                        print!("{}", render_connect_apply_outcome(&outcome));
+                } else {
+                    ensure_connect_capture_mode_exclusive(state.network_mode, &state_dir)?;
+                    dam_daemon::set_protection_enabled(true).map_err(|error| error.to_string())?;
+                    match wait_for_existing_daemon_protected(
+                        &state.proxy_url,
+                        Duration::from_secs(2),
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            for profile_id in &args.apply_profile_ids {
+                                let outcome = apply_connect_profile(profile_id, &state.proxy_url)?;
+                                if !args.json {
+                                    print!("{}", render_connect_apply_outcome(&outcome));
+                                }
+                                applied_profiles.push(connect_apply_view(&outcome));
+                            }
+                            return finish_connect(
+                                &args,
+                                ConnectResultView {
+                                    state: "connected",
+                                    message: format!(
+                                        "DAM protection enabled at {}",
+                                        state.proxy_url
+                                    ),
+                                    proxy_url: Some(state.proxy_url),
+                                    network_mode: state.network_mode,
+                                    trust_mode: state.trust.mode,
+                                    protection_enabled: true,
+                                    restarted: false,
+                                    target: state.target_name,
+                                    upstream: state.upstream,
+                                    applied_profiles,
+                                },
+                            );
+                        }
+                        Err(error) => {
+                            if !args.json {
+                                println!(
+                                    "DAM proxy did not respond after resume ({error}); restarting daemon"
+                                );
+                            }
+                            restarted = true;
+                            resumed_after_pause = true;
+                            stop_connected_daemon(&state).await?;
+                        }
                     }
-                    applied_profiles.push(connect_apply_view(&outcome));
                 }
-                return finish_connect(
-                    &args,
-                    ConnectResultView {
-                        state: "connected",
-                        message: format!("DAM protection enabled at {}", state.proxy_url),
-                        proxy_url: Some(state.proxy_url),
-                        network_mode: state.network_mode,
-                        trust_mode: state.trust.mode,
-                        protection_enabled: true,
-                        restarted: false,
-                        target: state.target_name,
-                        upstream: state.upstream,
-                        applied_profiles,
-                    },
-                );
             }
         }
         dam_daemon::DaemonStatus::Stale(state) => {
@@ -552,7 +599,11 @@ async fn connect(mut args: ConnectArgs) -> Result<i32, String> {
         &args,
         ConnectResultView {
             state: "connected",
-            message: format!("DAM connected at {}", state.proxy_url),
+            message: if resumed_after_pause {
+                format!("DAM protection enabled at {}", state.proxy_url)
+            } else {
+                format!("DAM connected at {}", state.proxy_url)
+            },
             proxy_url: Some(state.proxy_url),
             network_mode: state.network_mode,
             trust_mode: state.trust.mode,
@@ -1036,7 +1087,11 @@ fn connect_setup_change_requested(
 }
 
 async fn stop_connected_daemon(state: &dam_daemon::DaemonState) -> Result<(), String> {
-    dam_daemon::terminate_process(state.pid).map_err(|error| error.to_string())?;
+    if let Err(error) = dam_daemon::terminate_process(state.pid)
+        && dam_daemon::process_is_running(state.pid)
+    {
+        return Err(error.to_string());
+    }
     wait_for_daemon_stop(state.pid, Duration::from_secs(5)).await;
     dam_daemon::remove_state_if_pid(state.pid).map_err(|error| error.to_string())?;
     Ok(())
@@ -2997,6 +3052,29 @@ async fn wait_for_daemon_ready(timeout: Duration) -> Result<dam_daemon::DaemonSt
         Some(error) => format!("DAM daemon did not become ready: {error}"),
         None => "DAM daemon did not become ready".to_string(),
     })
+}
+
+async fn wait_for_existing_daemon_protected(
+    proxy_url: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    loop {
+        let error = match fetch_proxy_report(proxy_url).await {
+            Ok(report) if report.state == dam_api::ProxyState::Protected => return Ok(()),
+            Ok(report) => format!(
+                "proxy reported {}: {}",
+                proxy_state_tag(report.state),
+                report.message
+            ),
+            Err(error) => error,
+        };
+
+        if started.elapsed() >= timeout {
+            return Err(error);
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 async fn wait_for_daemon_stop(pid: u32, timeout: Duration) {

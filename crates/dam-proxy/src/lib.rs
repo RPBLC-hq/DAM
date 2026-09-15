@@ -1525,6 +1525,7 @@ struct WebSocketProtection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WebSocketInboundResolveMode {
     JsonTextDelta,
+    JsonStringValues,
     RawText,
 }
 
@@ -1532,6 +1533,7 @@ enum WebSocketInboundResolveMode {
 struct WebSocketInboundResolveBuffer {
     mode: Option<WebSocketInboundResolveMode>,
     pending: Vec<websocket::WebSocketFrame>,
+    json_reference_pointer: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -1583,6 +1585,12 @@ enum WebSocketTextDeltaPath {
 struct WebSocketTextDelta {
     value: serde_json::Value,
     path: WebSocketTextDeltaPath,
+    text: String,
+}
+
+#[derive(Debug, Clone)]
+struct WebSocketJsonStringValue {
+    pointer: String,
     text: String,
 }
 
@@ -1686,7 +1694,7 @@ impl WebSocketOutboundProtectBuffer {
         related_domains: &Arc<RwLock<Vec<String>>>,
         protection: &WebSocketProtection,
     ) -> Result<WebSocketOutboundFrameProtection, String> {
-        let mode = websocket_inbound_resolve_mode(&frame)?;
+        let mode = websocket_outbound_protect_mode(&frame)?;
         if self.pending.is_empty() {
             let text = websocket_frame_text_for_mode(&frame, mode)?;
             if has_possible_incomplete_sensitive_suffix(&text) {
@@ -1804,6 +1812,13 @@ fn protect_websocket_client_frames(
 ) -> Result<WebSocketOutboundFrameProtection, String> {
     match mode {
         WebSocketInboundResolveMode::JsonTextDelta => protect_websocket_client_json_text_frames(
+            frames,
+            state,
+            operation_id,
+            related_domains,
+            protection,
+        ),
+        WebSocketInboundResolveMode::JsonStringValues => protect_websocket_client_raw_text_frames(
             frames,
             state,
             operation_id,
@@ -2124,14 +2139,14 @@ impl WebSocketInboundResolveBuffer {
     ) -> Result<Vec<WebSocketInboundFrame>, String> {
         let mode = websocket_inbound_resolve_mode(&frame)?;
         if self.pending.is_empty() {
-            let text = websocket_frame_text_for_mode(&frame, mode)?;
-            if has_possible_incomplete_reference_suffix(&text) {
+            if let Some(pointer) = websocket_incomplete_reference_pointer(&frame, mode)? {
                 self.mode = Some(mode);
+                self.json_reference_pointer = pointer;
                 self.pending.push(frame);
                 return Ok(Vec::new());
             }
 
-            return resolve_websocket_inbound_frames(vec![frame], mode, state, operation_id);
+            return resolve_websocket_inbound_frames(vec![frame], mode, None, state, operation_id);
         }
 
         if self.mode != Some(mode) {
@@ -2153,7 +2168,14 @@ impl WebSocketInboundResolveBuffer {
             return Ok(Vec::new());
         };
         let frames = std::mem::take(&mut self.pending);
-        resolve_websocket_inbound_frames(frames, mode, state, operation_id)
+        let json_reference_pointer = self.json_reference_pointer.take();
+        resolve_websocket_inbound_frames(
+            frames,
+            mode,
+            json_reference_pointer.as_deref(),
+            state,
+            operation_id,
+        )
     }
 
     fn emit_ready(
@@ -2164,7 +2186,14 @@ impl WebSocketInboundResolveBuffer {
         let Some(mode) = self.mode else {
             return Ok(Vec::new());
         };
-        let combined = combined_websocket_frame_text(&self.pending, mode)?;
+        let combined = if mode == WebSocketInboundResolveMode::JsonStringValues {
+            match self.json_reference_pointer.as_deref() {
+                Some(pointer) => combined_websocket_json_pointer_text(&self.pending, pointer)?,
+                None => combined_websocket_frame_text(&self.pending, mode)?,
+            }
+        } else {
+            combined_websocket_frame_text(&self.pending, mode)?
+        };
         let pending_bytes = self
             .pending
             .iter()
@@ -2181,6 +2210,18 @@ impl WebSocketInboundResolveBuffer {
     }
 }
 
+fn websocket_outbound_protect_mode(
+    frame: &websocket::WebSocketFrame,
+) -> Result<WebSocketInboundResolveMode, String> {
+    std::str::from_utf8(&frame.payload)
+        .map_err(|_| "WebSocket request text frame is not utf-8".to_string())?;
+    if websocket_text_delta_from_frame(frame)?.is_some() {
+        Ok(WebSocketInboundResolveMode::JsonTextDelta)
+    } else {
+        Ok(WebSocketInboundResolveMode::RawText)
+    }
+}
+
 fn websocket_inbound_resolve_mode(
     frame: &websocket::WebSocketFrame,
 ) -> Result<WebSocketInboundResolveMode, String> {
@@ -2188,6 +2229,8 @@ fn websocket_inbound_resolve_mode(
         .map_err(|_| "WebSocket response text frame is not utf-8".to_string())?;
     if websocket_text_delta_from_frame(frame)?.is_some() {
         Ok(WebSocketInboundResolveMode::JsonTextDelta)
+    } else if websocket_json_string_values_from_frame(frame)?.is_some() {
+        Ok(WebSocketInboundResolveMode::JsonStringValues)
     } else {
         Ok(WebSocketInboundResolveMode::RawText)
     }
@@ -2201,10 +2244,44 @@ fn websocket_frame_text_for_mode(
         WebSocketInboundResolveMode::JsonTextDelta => websocket_text_delta_from_frame(frame)?
             .map(|delta| delta.text)
             .ok_or_else(|| "WebSocket text-delta frame could not be parsed".to_string()),
+        WebSocketInboundResolveMode::JsonStringValues => {
+            websocket_json_string_values_from_frame(frame)?
+                .map(|values| {
+                    values
+                        .into_iter()
+                        .map(|value| value.text)
+                        .collect::<String>()
+                })
+                .ok_or_else(|| "WebSocket JSON string frame could not be parsed".to_string())
+        }
         WebSocketInboundResolveMode::RawText => std::str::from_utf8(&frame.payload)
             .map(str::to_string)
             .map_err(|_| "WebSocket response text frame is not utf-8".to_string()),
     }
+}
+
+fn websocket_incomplete_reference_pointer(
+    frame: &websocket::WebSocketFrame,
+    mode: WebSocketInboundResolveMode,
+) -> Result<Option<Option<String>>, String> {
+    if mode == WebSocketInboundResolveMode::JsonStringValues {
+        return websocket_json_incomplete_reference_pointer(frame).map(|pointer| pointer.map(Some));
+    }
+
+    let text = websocket_frame_text_for_mode(frame, mode)?;
+    Ok(has_possible_incomplete_reference_suffix(&text).then_some(None))
+}
+
+fn websocket_json_incomplete_reference_pointer(
+    frame: &websocket::WebSocketFrame,
+) -> Result<Option<String>, String> {
+    let Some(values) = websocket_json_string_values_from_frame(frame)? else {
+        return Ok(None);
+    };
+    Ok(values
+        .into_iter()
+        .find(|value| has_possible_incomplete_reference_suffix(&value.text))
+        .map(|value| value.pointer))
 }
 
 fn combined_websocket_frame_text(
@@ -2218,15 +2295,39 @@ fn combined_websocket_frame_text(
     Ok(combined)
 }
 
+fn combined_websocket_json_pointer_text(
+    frames: &[websocket::WebSocketFrame],
+    pointer: &str,
+) -> Result<String, String> {
+    let mut combined = String::new();
+    for frame in frames {
+        let value = serde_json::from_slice::<serde_json::Value>(&frame.payload)
+            .map_err(|error| format!("failed to parse WebSocket JSON string frame: {error}"))?;
+        if let Some(text) = json_string_value_at_pointer(&value, pointer) {
+            combined.push_str(text);
+        }
+    }
+    Ok(combined)
+}
+
 fn resolve_websocket_inbound_frames(
     frames: Vec<websocket::WebSocketFrame>,
     mode: WebSocketInboundResolveMode,
+    json_reference_pointer: Option<&str>,
     state: &ProxyState,
     operation_id: &str,
 ) -> Result<Vec<WebSocketInboundFrame>, String> {
     match mode {
         WebSocketInboundResolveMode::JsonTextDelta => {
             resolve_websocket_json_text_delta_frames(frames, state, operation_id)
+        }
+        WebSocketInboundResolveMode::JsonStringValues => {
+            resolve_websocket_json_string_value_frames(
+                frames,
+                json_reference_pointer,
+                state,
+                operation_id,
+            )
         }
         WebSocketInboundResolveMode::RawText => {
             resolve_websocket_raw_text_frames(frames, state, operation_id)
@@ -2323,6 +2424,142 @@ fn resolve_websocket_raw_text_frames(
         .collect())
 }
 
+fn resolve_websocket_json_string_value_frames(
+    frames: Vec<websocket::WebSocketFrame>,
+    json_reference_pointer: Option<&str>,
+    state: &ProxyState,
+    operation_id: &str,
+) -> Result<Vec<WebSocketInboundFrame>, String> {
+    if let Some(pointer) = json_reference_pointer {
+        return resolve_websocket_json_pointer_frames(frames, pointer, state, operation_id);
+    }
+
+    let response_bytes = frames.iter().map(|frame| frame.payload.len()).sum();
+    let mut aggregate = dam_core::ResolvePlan::default();
+    let mut resolved_frames = Vec::with_capacity(frames.len());
+    for mut frame in frames {
+        let mut value = serde_json::from_slice::<serde_json::Value>(&frame.payload)
+            .map_err(|error| format!("failed to parse WebSocket JSON string frame: {error}"))?;
+        let skip_inbound_protection =
+            resolve_json_string_values(&mut value, state, operation_id, &mut aggregate);
+        if skip_inbound_protection {
+            frame.payload = serde_json::to_vec(&value).map_err(|error| {
+                format!("failed to serialize resolved WebSocket JSON string frame: {error}")
+            })?;
+        }
+        resolved_frames.push(WebSocketInboundFrame {
+            frame,
+            skip_inbound_protection,
+        });
+    }
+
+    record_websocket_resolve_attempt(state, operation_id, &aggregate, response_bytes);
+    Ok(resolved_frames)
+}
+
+fn resolve_websocket_json_pointer_frames(
+    mut frames: Vec<websocket::WebSocketFrame>,
+    pointer: &str,
+    state: &ProxyState,
+    operation_id: &str,
+) -> Result<Vec<WebSocketInboundFrame>, String> {
+    let response_bytes = frames.iter().map(|frame| frame.payload.len()).sum();
+    let mut values = Vec::with_capacity(frames.len());
+    let mut combined = String::new();
+    for frame in &frames {
+        let value = serde_json::from_slice::<serde_json::Value>(&frame.payload)
+            .map_err(|error| format!("failed to parse WebSocket JSON string frame: {error}"))?;
+        if let Some(text) = json_string_value_at_pointer(&value, pointer) {
+            combined.push_str(text);
+        }
+        values.push(value);
+    }
+
+    let result = dam_pipeline::resolve_text(
+        &combined,
+        operation_id,
+        state.vault.as_ref(),
+        state.log_sink.as_deref(),
+    );
+    record_websocket_resolve_attempt(state, operation_id, &result.plan, response_bytes);
+    let Some(output) = result.output else {
+        return Ok(frames
+            .into_iter()
+            .map(|frame| WebSocketInboundFrame {
+                frame,
+                skip_inbound_protection: false,
+            })
+            .collect());
+    };
+
+    let mut resolved_frames = Vec::with_capacity(frames.len());
+    for (index, (frame, value)) in frames.iter_mut().zip(values.iter_mut()).enumerate() {
+        let replacement = if index == 0 { output.as_str() } else { "" };
+        let skip_inbound_protection = set_json_string_value_at_pointer(value, pointer, replacement);
+        if skip_inbound_protection {
+            frame.payload = serde_json::to_vec(value).map_err(|error| {
+                format!("failed to serialize resolved WebSocket JSON string frame: {error}")
+            })?;
+        }
+        resolved_frames.push(WebSocketInboundFrame {
+            frame: frame.clone(),
+            skip_inbound_protection,
+        });
+    }
+
+    Ok(resolved_frames)
+}
+
+fn resolve_json_string_values(
+    value: &mut serde_json::Value,
+    state: &ProxyState,
+    operation_id: &str,
+    aggregate: &mut dam_core::ResolvePlan,
+) -> bool {
+    match value {
+        serde_json::Value::String(text) => {
+            let original = text.clone();
+            let result = dam_pipeline::resolve_text(
+                &original,
+                operation_id,
+                state.vault.as_ref(),
+                state.log_sink.as_deref(),
+            );
+            let output = result.output;
+            extend_resolve_plan(aggregate, result.plan);
+            let Some(output) = output else {
+                return false;
+            };
+            if output != original {
+                *text = output;
+            }
+            true
+        }
+        serde_json::Value::Array(values) => {
+            let mut resolved = false;
+            for value in values {
+                resolved |= resolve_json_string_values(value, state, operation_id, aggregate);
+            }
+            resolved
+        }
+        serde_json::Value::Object(values) => {
+            let mut resolved = false;
+            for value in values.values_mut() {
+                resolved |= resolve_json_string_values(value, state, operation_id, aggregate);
+            }
+            resolved
+        }
+        _ => false,
+    }
+}
+
+fn extend_resolve_plan(target: &mut dam_core::ResolvePlan, source: dam_core::ResolvePlan) {
+    target.references.extend(source.references);
+    target.replacements.extend(source.replacements);
+    target.missing.extend(source.missing);
+    target.read_failures.extend(source.read_failures);
+}
+
 fn record_websocket_resolve_attempt(
     state: &ProxyState,
     operation_id: &str,
@@ -2359,6 +2596,77 @@ fn websocket_text_delta_from_frame(
     let text = text.to_string();
 
     Ok(Some(WebSocketTextDelta { value, path, text }))
+}
+
+fn websocket_json_string_values_from_frame(
+    frame: &websocket::WebSocketFrame,
+) -> Result<Option<Vec<WebSocketJsonStringValue>>, String> {
+    let text = std::str::from_utf8(&frame.payload)
+        .map_err(|_| "WebSocket response text frame is not utf-8".to_string())?;
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Ok(None);
+    };
+    let mut values = Vec::new();
+    collect_json_string_values(&value, String::new(), &mut values);
+    if values.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(values))
+    }
+}
+
+fn collect_json_string_values(
+    value: &serde_json::Value,
+    pointer: String,
+    values: &mut Vec<WebSocketJsonStringValue>,
+) {
+    match value {
+        serde_json::Value::String(text) => values.push(WebSocketJsonStringValue {
+            pointer,
+            text: text.clone(),
+        }),
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                collect_json_string_values(item, format!("{pointer}/{index}"), values);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for (key, item) in map {
+                collect_json_string_values(
+                    item,
+                    format!("{pointer}/{}", escape_json_pointer_segment(key)),
+                    values,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+fn escape_json_pointer_segment(segment: &str) -> String {
+    segment.replace('~', "~0").replace('/', "~1")
+}
+
+fn json_string_value_at_pointer<'a>(
+    value: &'a serde_json::Value,
+    pointer: &str,
+) -> Option<&'a str> {
+    value.pointer(pointer)?.as_str()
+}
+
+fn set_json_string_value_at_pointer(
+    value: &mut serde_json::Value,
+    pointer: &str,
+    replacement: &str,
+) -> bool {
+    let Some(target) = value.pointer_mut(pointer) else {
+        return false;
+    };
+    if !target.is_string() {
+        return false;
+    }
+    *target = serde_json::Value::String(replacement.to_string());
+    true
 }
 
 fn websocket_text_delta(value: &serde_json::Value) -> Option<(WebSocketTextDeltaPath, &str)> {

@@ -647,6 +647,97 @@ async fn websocket_response_resolves_references_split_across_text_delta_frames()
 }
 
 #[tokio::test]
+async fn websocket_response_resolves_reference_split_across_unknown_json_string_fields() {
+    let config = proxy_config("https://chatgpt.com".to_string());
+    let vault_path = config.vault.sqlite_path.clone();
+    let log_path = config.log.sqlite_path.clone();
+    let reference = dam_core::Reference::generate(dam_core::SensitiveType::Email);
+    let stored = "scrabb@jnjjj.com";
+    dam_vault::Vault::open(&vault_path)
+        .unwrap()
+        .put(&reference.key(), stored)
+        .unwrap();
+    let state = build_state(config, None).unwrap();
+    let display = reference.display();
+    let split_at = display.len() - 8;
+    let first = &display[..split_at];
+    let second = format!("{} can you see this email?", &display[split_at..]);
+    let mut upstream = Vec::new();
+    websocket::write_unmasked_frame(
+        &mut upstream,
+        &websocket::WebSocketFrame {
+            fin: true,
+            opcode: websocket::OPCODE_TEXT,
+            payload: format!(r#"{{"type":"codex.patch","value":"{first}"}}"#).into_bytes(),
+        },
+    )
+    .await
+    .unwrap();
+    websocket::write_unmasked_frame(
+        &mut upstream,
+        &websocket::WebSocketFrame {
+            fin: true,
+            opcode: websocket::OPCODE_TEXT,
+            payload: format!(r#"{{"type":"codex.patch","value":"{second}"}}"#).into_bytes(),
+        },
+    )
+    .await
+    .unwrap();
+    websocket::write_unmasked_frame(&mut upstream, &websocket::WebSocketFrame::close(1000, ""))
+        .await
+        .unwrap();
+    let mut client = Vec::new();
+
+    proxy_websocket_upstream_frames(
+        state,
+        "websocket-split-json-string-resolve-test".to_string(),
+        &mut upstream.as_slice(),
+        &mut client,
+        Arc::new(RwLock::new(Vec::new())),
+        websocket_protection(true, inbound_plan(true, false)),
+    )
+    .await
+    .unwrap();
+
+    let mut client_frames = client.as_slice();
+    let first_frame = websocket::read_frame(&mut client_frames)
+        .await
+        .unwrap()
+        .unwrap();
+    let second_frame = websocket::read_frame(&mut client_frames)
+        .await
+        .unwrap()
+        .unwrap();
+    let first_json: serde_json::Value = serde_json::from_slice(&first_frame.payload).unwrap();
+    let second_json: serde_json::Value = serde_json::from_slice(&second_frame.payload).unwrap();
+    assert_eq!(
+        first_json
+            .pointer("/value")
+            .and_then(serde_json::Value::as_str)
+            .unwrap(),
+        format!("{stored} can you see this email?")
+    );
+    assert_eq!(
+        second_json
+            .pointer("/value")
+            .and_then(serde_json::Value::as_str)
+            .unwrap(),
+        ""
+    );
+    assert!(!String::from_utf8_lossy(&client).contains(&display));
+
+    let logs = dam_log::LogStore::open(log_path).unwrap().list().unwrap();
+    assert!(logs.iter().any(|entry| {
+        entry.event_type == "resolve"
+            && entry.action.as_deref() == Some("resolve_attempt")
+            && entry.message.contains("references=1 resolved=1")
+    }));
+    assert!(logs.iter().any(|entry| {
+        entry.event_type == "vault_read" && entry.action.as_deref() == Some("vault_read_succeeded")
+    }));
+}
+
+#[tokio::test]
 async fn websocket_response_does_not_redact_after_reference_resolution() {
     let config = proxy_config("https://chatgpt.com".to_string());
     let vault_path = config.vault.sqlite_path.clone();

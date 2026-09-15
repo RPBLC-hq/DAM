@@ -214,7 +214,7 @@ pub async fn detail(
     if let Some(value) = &entry.value {
         items.push(EvidenceItem {
             label: "value".into(),
-            value: value.clone(),
+            value: activity_display_value(value),
         });
     } else if let Some(value) = value_for_reference(&state, entry.reference.as_deref()) {
         items.push(EvidenceItem {
@@ -276,7 +276,7 @@ fn activity_value_for_entry(
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
-        return Some(value.to_string());
+        return Some(activity_display_value(value));
     }
 
     let reference = entry.reference.as_deref()?.trim();
@@ -295,7 +295,26 @@ fn activity_value_for_entry(
 
 fn value_for_reference(state: &AppState, reference: Option<&str>) -> Option<String> {
     let reference = Reference::parse_key(reference?)?;
-    state.vault.get(&reference.key()).ok().flatten()
+    state
+        .vault
+        .get(&reference.key())
+        .ok()
+        .flatten()
+        .map(|value| activity_display_value(&value))
+}
+
+fn activity_display_value(value: &str) -> String {
+    Reference::parse_display(value.trim())
+        .map(|reference| dam_core::redacted_placeholder(reference.kind))
+        .unwrap_or_else(|| activity_value_preview(value))
+}
+
+fn activity_value_preview(value: &str) -> String {
+    let mut preview = value.chars().take(4).collect::<String>();
+    if value.chars().count() > 4 {
+        preview.push_str("...");
+    }
+    preview
 }
 
 fn profile_labels_by_target(state: &AppState) -> HashMap<String, String> {

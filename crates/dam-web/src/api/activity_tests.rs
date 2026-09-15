@@ -10,6 +10,7 @@ async fn activity_resolves_profile_label_without_wallet_lookup() {
     let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
     let (profile_label, target_label) = catalog_profile_fixture();
     let reference = Reference::generate(SensitiveType::Email);
+    let activity_value = format!("{}@{}", "ada", "example.test");
     logs.record(
         &LogEvent::new(
             "op-1",
@@ -28,7 +29,7 @@ async fn activity_resolves_profile_label_without_wallet_lookup() {
             "replacement applied with tokenized reference",
         )
         .with_kind(SensitiveType::Email)
-        .with_value("ada@example.test")
+        .with_value(activity_value.clone())
         .with_reference(reference.clone())
         .with_action("tokenized"),
     )
@@ -44,7 +45,7 @@ async fn activity_resolves_profile_label_without_wallet_lookup() {
     assert_eq!(event.profile, profile_label);
     assert_ne!(event.profile, target_label);
     assert_eq!(event.kind, "email");
-    assert_eq!(event.value.as_deref(), Some("ada@example.test"));
+    assert_eq!(event.value.as_deref(), Some("ada@..."));
     assert_eq!(event.reference.as_deref(), Some(reference.key().as_str()));
     assert!(matches!(event.decision, Decision::Sealed));
 }
@@ -103,6 +104,7 @@ async fn activity_defaults_to_last_hour_and_since_zero_shows_all() {
 async fn activity_uses_redaction_event_for_sealed_activity_without_policy_duplicate() {
     let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
     let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    let activity_value = format!("{}@{}", "ada", "example.test");
     logs.record(
         &LogEvent::new(
             "op-1",
@@ -122,7 +124,7 @@ async fn activity_uses_redaction_event_for_sealed_activity_without_policy_duplic
             "replacement applied with policy redaction",
         )
         .with_kind(SensitiveType::Email)
-        .with_value("ada@example.test")
+        .with_value(activity_value.clone())
         .with_action("redacted"),
     )
     .unwrap();
@@ -140,10 +142,7 @@ async fn activity_uses_redaction_event_for_sealed_activity_without_policy_duplic
     assert_eq!(response.data.events.len(), 1);
     assert_eq!(response.data.events[0].id, 2);
     assert_eq!(response.data.events[0].kind, "email");
-    assert_eq!(
-        response.data.events[0].value.as_deref(),
-        Some("ada@example.test")
-    );
+    assert_eq!(response.data.events[0].value.as_deref(), Some("ada@..."));
     assert_eq!(response.data.summary.total, 1);
 }
 
@@ -152,9 +151,8 @@ async fn activity_resolves_tokenized_reference_value_from_vault() {
     let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
     let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
     let reference = Reference::generate(SensitiveType::Email);
-    vault
-        .put(&reference.key(), "tokenized@example.test")
-        .unwrap();
+    let stored_value = format!("{}@{}", "alice", "example.test");
+    vault.put(&reference.key(), &stored_value).unwrap();
     logs.record(
         &LogEvent::new(
             "op-1",
@@ -172,7 +170,7 @@ async fn activity_resolves_tokenized_reference_value_from_vault() {
         State(test_state(vault, logs)),
         Query(ActivityQuery {
             since: Some(0),
-            q: Some("tokenized@example.test".to_string()),
+            q: Some("alic...".to_string()),
             ..ActivityQuery::default()
         }),
     )
@@ -182,9 +180,46 @@ async fn activity_resolves_tokenized_reference_value_from_vault() {
     assert_eq!(response.data.events.len(), 1);
     let event = &response.data.events[0];
     assert_eq!(event.kind, "email");
-    assert_eq!(event.value.as_deref(), Some("tokenized@example.test"));
+    assert_eq!(event.value.as_deref(), Some("alic..."));
     assert_eq!(event.reference.as_deref(), Some(reference.key().as_str()));
     assert!(matches!(event.decision, Decision::Sealed));
+}
+
+#[tokio::test]
+async fn activity_collapses_nested_reference_values_from_vault() {
+    let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
+    let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    let reference = Reference::generate(SensitiveType::Email);
+    let nested_reference = Reference::generate(SensitiveType::Email).display();
+    vault.put(&reference.key(), &nested_reference).unwrap();
+    logs.record(
+        &LogEvent::new(
+            "op-1",
+            LogLevel::Info,
+            LogEventType::Redaction,
+            "replacement applied with tokenized reference",
+        )
+        .with_kind(SensitiveType::Email)
+        .with_reference(reference.clone())
+        .with_action("tokenized"),
+    )
+    .unwrap();
+
+    let response = list(
+        State(test_state(vault, logs)),
+        Query(ActivityQuery {
+            since: Some(0),
+            ..ActivityQuery::default()
+        }),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(response.data.events.len(), 1);
+    let event = &response.data.events[0];
+    assert_eq!(event.kind, "email");
+    assert_eq!(event.value.as_deref(), Some("[email]"));
+    assert_ne!(event.value.as_deref(), Some(nested_reference.as_str()));
 }
 
 #[tokio::test]
@@ -192,9 +227,8 @@ async fn activity_detail_resolves_tokenized_reference_value_from_vault() {
     let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
     let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
     let reference = Reference::generate(SensitiveType::Email);
-    vault
-        .put(&reference.key(), "detail-token@example.test")
-        .unwrap();
+    let stored_value = format!("{}@{}", "alice", "example.test");
+    vault.put(&reference.key(), &stored_value).unwrap();
     logs.record(
         &LogEvent::new(
             "op-1",
@@ -217,7 +251,7 @@ async fn activity_detail_resolves_tokenized_reference_value_from_vault() {
             .data
             .items
             .iter()
-            .any(|item| { item.label == "value" && item.value == "detail-token@example.test" })
+            .any(|item| { item.label == "value" && item.value == "alic..." })
     );
 }
 
@@ -225,6 +259,7 @@ async fn activity_detail_resolves_tokenized_reference_value_from_vault() {
 async fn activity_shows_consent_outcome_without_wallet_lookup() {
     let vault = Arc::new(dam_vault::Vault::open_in_memory().unwrap());
     let logs = Arc::new(dam_log::LogStore::open_in_memory().unwrap());
+    let activity_value = format!("{}@{}", "ada", "example.test");
     logs.record(
         &LogEvent::new(
             "op-1",
@@ -233,7 +268,7 @@ async fn activity_shows_consent_outcome_without_wallet_lookup() {
             "policy decision applied",
         )
         .with_kind(SensitiveType::Email)
-        .with_value("ada@example.test")
+        .with_value(activity_value.clone())
         .with_action("allow"),
     )
     .unwrap();
@@ -245,7 +280,7 @@ async fn activity_shows_consent_outcome_without_wallet_lookup() {
             "replacement applied with policy redaction",
         )
         .with_kind(SensitiveType::Email)
-        .with_value("ada@example.test")
+        .with_value(activity_value.clone())
         .with_action("redacted"),
     )
     .unwrap();
@@ -275,13 +310,13 @@ async fn activity_shows_consent_outcome_without_wallet_lookup() {
     let sealed = &response.data.events[0];
     assert_eq!(sealed.id, 2);
     assert_eq!(sealed.kind, "email");
-    assert_eq!(sealed.value.as_deref(), Some("ada@example.test"));
+    assert_eq!(sealed.value.as_deref(), Some("ada@..."));
     assert!(matches!(sealed.decision, Decision::Sealed));
 
     let granted = &response.data.events[1];
     assert_eq!(granted.id, 1);
     assert_eq!(granted.kind, "email");
-    assert_eq!(granted.value.as_deref(), Some("ada@example.test"));
+    assert_eq!(granted.value.as_deref(), Some("ada@..."));
     assert!(matches!(granted.decision, Decision::Granted));
     assert_eq!(response.data.summary.total, 2);
 }
